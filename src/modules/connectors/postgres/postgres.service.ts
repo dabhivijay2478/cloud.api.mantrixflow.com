@@ -304,20 +304,40 @@ export class PostgresService {
     orgId: string,
     updates: Partial<PostgresConnectionConfig> & Record<string, unknown>, // Accept UpdateConnectionDto or PostgresConnectionConfig
   ): Promise<PostgresConnection> {
+    // Normalize updates to handle DTO types (e.g., SSLConfigDto with optional enabled)
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.ssl && typeof normalizedUpdates.ssl === 'object') {
+      const ssl = normalizedUpdates.ssl as {
+        enabled?: boolean;
+        caCert?: string;
+        rejectUnauthorized?: boolean;
+      };
+      if (ssl.enabled === undefined) {
+        // If enabled is not provided, remove ssl from updates
+        delete normalizedUpdates.ssl;
+      } else {
+        // Ensure enabled is a boolean
+        normalizedUpdates.ssl = {
+          enabled: ssl.enabled,
+          caCert: ssl.caCert,
+          rejectUnauthorized: ssl.rejectUnauthorized,
+        } as PostgresConnectionConfig['ssl'];
+      }
+    }
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     const connection = await this.getConnection(validConnectionId, validOrgId);
 
     // If credentials changed, test connection
+    const updatesRecord = normalizedUpdates as Record<string, unknown>;
     if (
-      (updates as Record<string, unknown>).host ||
-      (updates as Record<string, unknown>).port ||
-      (updates as Record<string, unknown>).database ||
-      (updates as Record<string, unknown>).username ||
-      (updates as Record<string, unknown>).password
+      updatesRecord.host ||
+      updatesRecord.port ||
+      updatesRecord.database ||
+      updatesRecord.username ||
+      updatesRecord.password
     ) {
-      const updatesRecord = updates as Record<string, unknown>;
       const testConfig: PostgresConnectionConfig = {
         host: (updatesRecord.host as string | undefined) || connection.host,
         port: (updatesRecord.port as number | undefined) || connection.port,
@@ -327,9 +347,8 @@ export class PostgresService {
           (updatesRecord.username as string | undefined) || connection.username,
         password:
           (updatesRecord.password as string | undefined) || connection.password,
-        ssl: updatesRecord.ssl as PostgresConnectionConfig['ssl'],
-        sshTunnel:
-          updatesRecord.sshTunnel as PostgresConnectionConfig['sshTunnel'],
+        ssl: normalizedUpdates.ssl,
+        sshTunnel: normalizedUpdates.sshTunnel,
       };
 
       // Decrypt existing values if needed
@@ -354,7 +373,6 @@ export class PostgresService {
     };
 
     // Map plain text credentials from PostgresConnectionConfig to encrypted format
-    const updatesRecord = updates as Record<string, unknown>;
     if (updatesRecord.host !== undefined) {
       updateData.host = updatesRecord.host as string; // Will be encrypted in repository
     }
@@ -418,7 +436,6 @@ export class PostgresService {
     );
 
     // Recreate pool if credentials changed
-    const updatesRecord = updates as Record<string, unknown>;
     if (
       updatesRecord.host ||
       updatesRecord.port ||

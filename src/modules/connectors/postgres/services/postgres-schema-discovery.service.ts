@@ -84,11 +84,8 @@ export class PostgresSchemaDiscoveryService {
 
       return result.rows.map((row: Record<string, unknown>) => ({
         name: row.name as string,
-
-        size: row.size as number,
-
+        size: String(row.size as number),
         encoding: row.encoding as string,
-
         collation: row.collation as string,
       }));
     } catch (error) {

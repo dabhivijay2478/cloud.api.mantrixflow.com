@@ -429,7 +429,7 @@ export class PostgresController {
       const updated = await this.postgresService.updateConnection(
         id,
         finalOrgId,
-        updates,
+        updates as Partial<PostgresConnectionConfig> & Record<string, unknown>,
       );
       return createSuccessResponse(
         updated,

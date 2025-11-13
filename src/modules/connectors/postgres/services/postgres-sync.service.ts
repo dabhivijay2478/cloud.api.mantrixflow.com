@@ -7,7 +7,7 @@ import { Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 import { PostgresSyncJobRepository } from '../repositories/postgres-sync-job.repository';
-import { SyncMode, SyncJobStatus } from '../postgres.types';
+import { SyncMode, SyncJobStatus, SyncProgress } from '../postgres.types';
 import { SYNC_CONFIG } from '../constants/postgres.constants';
 
 @Injectable()

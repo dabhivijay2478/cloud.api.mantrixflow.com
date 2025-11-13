@@ -359,11 +359,15 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
                 localPort = address.port as number;
 
                 (
-                  ssh as { config: { localPort?: number; server?: unknown } }
+                  ssh as unknown as {
+                    config: { localPort?: number; server?: unknown };
+                  }
                 ).config.localPort = localPort;
 
                 (
-                  ssh as { config: { localPort?: number; server?: unknown } }
+                  ssh as unknown as {
+                    config: { localPort?: number; server?: unknown };
+                  }
                 ).config.server = server;
                 resolve(ssh);
               } else {
