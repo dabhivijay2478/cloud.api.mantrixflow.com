@@ -1,0 +1,15 @@
+meta {
+  name: GET /api/connectors/postgres/connections/{id}/sync-jobs/{jobId}
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

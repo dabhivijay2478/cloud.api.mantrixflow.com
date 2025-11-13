@@ -1,0 +1,61 @@
+meta {
+  name: Get connection by ID
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{id}
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}
+
+docs {
+  Retrieve a specific PostgreSQL connection by its ID.
+}
+
+example {
+  name: 200 Connection details
+  
+  request: {
+    url: {{baseUrl}}/api/connectors/postgres/connections/{id}
+    method: GET
+    mode: none
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: 200
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "id": "123e4567-e89b-12d3-a456-426614174000",
+          "orgId": "123e4567-e89b-12d3-a456-426614174000",
+          "userId": "123e4567-e89b-12d3-a456-426614174000",
+          "name": "Production Database",
+          "status": "active",
+          "port": 5432,
+          "sslEnabled": false,
+          "sshTunnelEnabled": false,
+          "connectionPoolSize": 5,
+          "queryTimeoutSeconds": 60,
+          "lastConnectedAt": "string",
+          "createdAt": "string",
+          "updatedAt": "string"
+        }
+      '''
+    }
+  }
+}

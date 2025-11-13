@@ -1,0 +1,884 @@
+{
+  "info": {
+    "name": "MantrixFlow PostgreSQL Connector API",
+    "description": "REST API for managing PostgreSQL connections, schema discovery, query execution, and data synchronization.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "mantrixflow-postgres-connector"
+  },
+  "item": [
+    {
+      "name": "App",
+      "item": [
+        {
+          "name": "GET /",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "postgres",
+      "item": [
+        {
+          "name": "Test PostgreSQL connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/test-connection",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "test-connection"
+              ],
+              "query": []
+            },
+            "description": "Test a PostgreSQL connection without saving it. Validates credentials and connectivity.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5433,\n  \"database\": \"postgres\",\n  \"username\": \"postgres\",\n  \"password\": \"mysecretpassword\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 Connection test successful",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/test-connection",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "test-connection"
+                  ],
+                  "query": []
+                },
+                "description": "Test a PostgreSQL connection without saving it. Validates credentials and connectivity.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5433,\n  \"database\": \"postgres\",\n  \"username\": \"postgres\",\n  \"password\": \"mysecretpassword\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "200",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"error\": \"string\",\n  \"version\": \"PostgreSQL 14.5\",\n  \"responseTimeMs\": 45\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create PostgreSQL connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections"
+              ],
+              "query": []
+            },
+            "description": "Create a new PostgreSQL connection with encrypted credentials.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Local PostgreSQL Database\",\n  \"config\": {\n    \"host\": \"localhost\",\n    \"port\": 5433,\n    \"database\": \"postgres\",\n    \"username\": \"postgres\",\n    \"password\": \"mysecretpassword\",\n    \"ssl\": null,\n    \"sshTunnel\": null,\n    \"connectionTimeout\": 30000,\n    \"queryTimeout\": 60000,\n    \"poolSize\": 5\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "201 Connection created successfully",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections"
+                  ],
+                  "query": []
+                },
+                "description": "Create a new PostgreSQL connection with encrypted credentials.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Local PostgreSQL Database\",\n  \"config\": {\n    \"host\": \"localhost\",\n    \"port\": 5433,\n    \"database\": \"postgres\",\n    \"username\": \"postgres\",\n    \"password\": \"mysecretpassword\",\n    \"ssl\": null,\n    \"sshTunnel\": null,\n    \"connectionTimeout\": 30000,\n    \"queryTimeout\": 60000,\n    \"poolSize\": 5\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "201",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"name\": \"Production Database\",\n  \"status\": \"active\",\n  \"port\": 5432,\n  \"sslEnabled\": false,\n  \"sshTunnelEnabled\": false,\n  \"connectionPoolSize\": 5,\n  \"queryTimeoutSeconds\": 60,\n  \"lastConnectedAt\": \"string\",\n  \"createdAt\": \"string\",\n  \"updatedAt\": \"string\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List all connections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections"
+              ],
+              "query": []
+            },
+            "description": "Get all PostgreSQL connections for the current organization."
+          },
+          "response": [
+            {
+              "name": "200 List of connections",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections"
+                  ],
+                  "query": []
+                },
+                "description": "Get all PostgreSQL connections for the current organization."
+              },
+              "status": "200",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  null\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get connection by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id"
+              ],
+              "query": []
+            },
+            "description": "Retrieve a specific PostgreSQL connection by its ID."
+          },
+          "response": [
+            {
+              "name": "200 Connection details",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections",
+                    ":id"
+                  ],
+                  "query": []
+                },
+                "description": "Retrieve a specific PostgreSQL connection by its ID."
+              },
+              "status": "200",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"name\": \"Production Database\",\n  \"status\": \"active\",\n  \"port\": 5432,\n  \"sslEnabled\": false,\n  \"sshTunnelEnabled\": false,\n  \"connectionPoolSize\": 5,\n  \"queryTimeoutSeconds\": 60,\n  \"lastConnectedAt\": \"string\",\n  \"createdAt\": \"string\",\n  \"updatedAt\": \"string\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/connectors/postgres/connections/{id}",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/connectors/postgres/connections/{id}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Discover databases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/databases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "databases"
+              ],
+              "query": []
+            },
+            "description": "List all databases available in the PostgreSQL connection."
+          },
+          "response": []
+        },
+        {
+          "name": "Discover schemas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/schemas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "schemas"
+              ],
+              "query": []
+            },
+            "description": "List all schemas available in the PostgreSQL connection."
+          },
+          "response": []
+        },
+        {
+          "name": "Discover tables",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/tables",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "tables"
+              ],
+              "query": [
+                {
+                  "key": "schema",
+                  "value": "",
+                  "description": "Schema name"
+                }
+              ]
+            },
+            "description": "List all tables in a specific schema."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/connectors/postgres/connections/{id}/tables/{table}/schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/tables/{table}/schema",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "tables",
+                ":table",
+                "schema"
+              ],
+              "query": [
+                {
+                  "key": "schema",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/connectors/postgres/connections/{id}/refresh-schema",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/refresh-schema",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "refresh-schema"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Execute SQL query",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "query"
+              ],
+              "query": []
+            },
+            "description": "Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"SELECT * FROM users LIMIT 10\",\n  \"params\": [\n    \"value1\",\n    \"value2\"\n  ],\n  \"timeout\": 60000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 Query executed successfully",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections",
+                    ":id",
+                    "query"
+                  ],
+                  "query": []
+                },
+                "description": "Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"query\": \"SELECT * FROM users LIMIT 10\",\n  \"params\": [\n    \"value1\",\n    \"value2\"\n  ],\n  \"timeout\": 60000\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "200",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    {}\n  ],\n  \"rowCount\": 10,\n  \"columns\": [\n    {\n      \"name\": \"string\",\n      \"dataType\": \"string\"\n    }\n  ],\n  \"executionTimeMs\": 45,\n  \"queryPlan\": {}\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /api/connectors/postgres/connections/{id}/query/explain",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query/explain",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "query",
+                "explain"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Create sync job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "sync"
+              ],
+              "query": []
+            },
+            "description": "Create a new data synchronization job to sync PostgreSQL table data to Supabase.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tableName\": \"users\",\n  \"schema\": \"public\",\n  \"syncMode\": \"full\",\n  \"incrementalColumn\": \"updated_at\",\n  \"customWhereClause\": \"status = 'active'\",\n  \"syncFrequency\": \"manual\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "201 Sync job created successfully",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections",
+                    ":id",
+                    "sync"
+                  ],
+                  "query": []
+                },
+                "description": "Create a new data synchronization job to sync PostgreSQL table data to Supabase.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"tableName\": \"users\",\n  \"schema\": \"public\",\n  \"syncMode\": \"full\",\n  \"incrementalColumn\": \"updated_at\",\n  \"customWhereClause\": \"status = 'active'\",\n  \"syncFrequency\": \"manual\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "201",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"tableName\": \"users\",\n  \"syncMode\": \"full\",\n  \"status\": \"pending\",\n  \"rowsSynced\": 1000,\n  \"syncFrequency\": \"manual\",\n  \"startedAt\": \"string\",\n  \"completedAt\": \"string\",\n  \"errorMessage\": \"string\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/connectors/postgres/connections/{id}/sync-jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "sync-jobs"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/connectors/postgres/connections/{id}/sync-jobs/{jobId}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "sync-jobs",
+                ":jobId"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/connectors/postgres/connections/{id}/sync-jobs/{jobId}/cancel",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "sync-jobs",
+                ":jobId",
+                "cancel"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /api/connectors/postgres/connections/{id}/sync-jobs/{jobId}/schedule",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "sync-jobs",
+                ":jobId",
+                "schedule"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/connectors/postgres/connections/{id}/health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "health"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/connectors/postgres/connections/{id}/query-logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query-logs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "query-logs"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "",
+                  "description": ""
+                },
+                {
+                  "key": "offset",
+                  "value": "",
+                  "description": ""
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/connectors/postgres/connections/{id}/metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "postgres",
+                "connections",
+                ":id",
+                "metrics"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "baseUrl1",
+      "value": "https://api.mantrixflow.com",
+      "type": "string"
+    }
+  ]
+}

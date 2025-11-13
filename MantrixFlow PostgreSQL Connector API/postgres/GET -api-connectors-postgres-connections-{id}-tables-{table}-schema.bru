@@ -1,0 +1,19 @@
+meta {
+  name: GET /api/connectors/postgres/connections/{id}/tables/{table}/schema
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{id}/tables/{table}/schema
+  body: none
+  auth: inherit
+}
+
+params:query {
+  schema: 
+}
+
+settings {
+  encodeUrl: true
+}

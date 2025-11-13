@@ -1,0 +1,15 @@
+meta {
+  name: POST /api/connectors/postgres/connections/{id}/query/explain
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{id}/query/explain
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

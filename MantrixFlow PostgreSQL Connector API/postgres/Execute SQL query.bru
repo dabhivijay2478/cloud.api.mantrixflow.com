@@ -1,0 +1,89 @@
+meta {
+  name: Execute SQL query
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{id}/query
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "SELECT * FROM users LIMIT 10",
+    "params": [
+      "value1",
+      "value2"
+    ],
+    "timeout": 60000
+  }
+}
+
+settings {
+  encodeUrl: true
+}
+
+docs {
+  Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.
+}
+
+example {
+  name: 200 Query executed successfully
+  
+  request: {
+    url: {{baseUrl}}/api/connectors/postgres/connections/{id}/query
+    method: POST
+    mode: json
+    headers: {
+      Content-Type: application/json
+    }
+  
+    body:json: {
+      {
+        "query": "SELECT * FROM users LIMIT 10",
+        "params": [
+          "value1",
+          "value2"
+        ],
+        "timeout": 60000
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: 200
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "rows": [
+            {}
+          ],
+          "rowCount": 10,
+          "columns": [
+            {
+              "name": "string",
+              "dataType": "string"
+            }
+          ],
+          "executionTimeMs": 45,
+          "queryPlan": {}
+        }
+      '''
+    }
+  }
+}

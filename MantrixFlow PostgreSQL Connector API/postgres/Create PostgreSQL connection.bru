@@ -1,0 +1,82 @@
+meta {
+  name: Create PostgreSQL connection
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/connectors/postgres/connections
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "Production Database",
+    "config": null
+  }
+}
+
+settings {
+  encodeUrl: true
+}
+
+docs {
+  Create a new PostgreSQL connection with encrypted credentials.
+}
+
+example {
+  name: 201 Connection created successfully
+  
+  request: {
+    url: {{baseUrl}}/api/connectors/postgres/connections
+    method: POST
+    mode: json
+    headers: {
+      Content-Type: application/json
+    }
+  
+    body:json: {
+      {
+        "name": "Production Database",
+        "config": null
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 201
+      text: 201
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "id": "123e4567-e89b-12d3-a456-426614174000",
+          "orgId": "123e4567-e89b-12d3-a456-426614174000",
+          "userId": "123e4567-e89b-12d3-a456-426614174000",
+          "name": "Production Database",
+          "status": "active",
+          "port": 5432,
+          "sslEnabled": false,
+          "sshTunnelEnabled": false,
+          "connectionPoolSize": 5,
+          "queryTimeoutSeconds": 60,
+          "lastConnectedAt": "string",
+          "createdAt": "string",
+          "updatedAt": "string"
+        }
+      '''
+    }
+  }
+}

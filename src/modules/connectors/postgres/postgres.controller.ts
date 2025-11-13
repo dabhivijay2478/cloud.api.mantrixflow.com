@@ -17,13 +17,28 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+  ApiBody,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
 import { PostgresService } from './postgres.service';
 import { PostgresConnectionConfig, ExecuteQuerySchema } from './postgres.types';
 import { createErrorResponse } from './utils/error-mapper.util';
+import { TestConnectionDto, TestConnectionResponseDto } from './dto/test-connection.dto';
+import { CreateConnectionDto, ConnectionResponseDto } from './dto/create-connection.dto';
+import { ExecuteQueryDto, QueryExecutionResponseDto } from './dto/execute-query.dto';
+import { CreateSyncJobDto, SyncJobResponseDto } from './dto/create-sync-job.dto';
 
 // TODO: Create and use actual auth guards
 // @UseGuards(JwtAuthGuard, OrgGuard)
 
+@ApiTags('postgres')
+@ApiBearerAuth('JWT-auth')
 @Controller('api/connectors/postgres')
 export class PostgresController {
   constructor(private readonly postgresService: PostgresService) {}
@@ -33,8 +48,46 @@ export class PostgresController {
    */
   @Post('test-connection')
   @HttpCode(HttpStatus.OK)
-  async testConnection(@Body() config: PostgresConnectionConfig) {
+  @ApiOperation({
+    summary: 'Test PostgreSQL connection',
+    description: 'Test a PostgreSQL connection without saving it. Validates credentials and connectivity.',
+  })
+  @ApiBody({ type: TestConnectionDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Connection test successful',
+    type: TestConnectionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid connection parameters' })
+  async testConnection(@Body() dto: TestConnectionDto) {
     try {
+      // Convert DTO to PostgresConnectionConfig
+      const config: PostgresConnectionConfig = {
+        host: dto.host,
+        port: dto.port || 5432,
+        database: dto.database,
+        username: dto.username,
+        password: dto.password,
+        ssl: dto.ssl?.enabled
+          ? {
+              enabled: dto.ssl.enabled,
+              caCert: dto.ssl.caCert,
+              rejectUnauthorized: dto.ssl.rejectUnauthorized,
+            }
+          : undefined,
+        sshTunnel: dto.sshTunnel?.enabled
+          ? {
+              enabled: dto.sshTunnel.enabled,
+              host: dto.sshTunnel.host,
+              port: dto.sshTunnel.port,
+              username: dto.sshTunnel.username,
+              privateKey: dto.sshTunnel.privateKey,
+            }
+          : undefined,
+        connectionTimeout: dto.connectionTimeout,
+        queryTimeout: dto.queryTimeout,
+        poolSize: dto.poolSize,
+      };
       return await this.postgresService.testConnection(config);
     } catch (error) {
       const errorResponse = createErrorResponse(error);
@@ -47,20 +100,55 @@ export class PostgresController {
    */
   @Post('connections')
   @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create PostgreSQL connection',
+    description: 'Create a new PostgreSQL connection with encrypted credentials.',
+  })
+  @ApiBody({ type: CreateConnectionDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Connection created successfully',
+    type: ConnectionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid connection data or connection test failed' })
+  @ApiResponse({ status: 403, description: 'Maximum connections exceeded' })
   async createConnection(
-    @Body() body: { name: string; config: PostgresConnectionConfig },
+    @Body() body: CreateConnectionDto,
     @Request() req: any, // TODO: Use proper request type with user/org
   ) {
     try {
       const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
       const userId = req.user?.id || 'default-user-id'; // TODO: Get from auth
 
-      return await this.postgresService.createConnection(
-        orgId,
-        userId,
-        body.name,
-        body.config,
-      );
+      // Convert DTO to PostgresConnectionConfig
+      const config: PostgresConnectionConfig = {
+        host: body.config.host,
+        port: body.config.port || 5432,
+        database: body.config.database,
+        username: body.config.username,
+        password: body.config.password,
+        ssl: body.config.ssl?.enabled
+          ? {
+              enabled: body.config.ssl.enabled,
+              caCert: body.config.ssl.caCert,
+              rejectUnauthorized: body.config.ssl.rejectUnauthorized,
+            }
+          : undefined,
+        sshTunnel: body.config.sshTunnel?.enabled
+          ? {
+              enabled: body.config.sshTunnel.enabled,
+              host: body.config.sshTunnel.host,
+              port: body.config.sshTunnel.port,
+              username: body.config.sshTunnel.username,
+              privateKey: body.config.sshTunnel.privateKey,
+            }
+          : undefined,
+        connectionTimeout: body.config.connectionTimeout,
+        queryTimeout: body.config.queryTimeout,
+        poolSize: body.config.poolSize,
+      };
+
+      return await this.postgresService.createConnection(orgId, userId, body.name, config);
     } catch (error) {
       const errorResponse = createErrorResponse(error);
       throw errorResponse;
@@ -71,6 +159,15 @@ export class PostgresController {
    * List connections
    */
   @Get('connections')
+  @ApiOperation({
+    summary: 'List all connections',
+    description: 'Get all PostgreSQL connections for the current organization.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of connections',
+    type: [ConnectionResponseDto],
+  })
   async listConnections(@Request() req: any) {
     try {
       const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
@@ -85,6 +182,17 @@ export class PostgresController {
    * Get connection by ID
    */
   @Get('connections/:id')
+  @ApiOperation({
+    summary: 'Get connection by ID',
+    description: 'Retrieve a specific PostgreSQL connection by its ID.',
+  })
+  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiResponse({
+    status: 200,
+    description: 'Connection details',
+    type: ConnectionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Connection not found' })
   async getConnection(@Param('id') id: string, @Request() req: any) {
     try {
       const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
@@ -132,6 +240,12 @@ export class PostgresController {
    * Discover databases
    */
   @Get('connections/:id/databases')
+  @ApiOperation({
+    summary: 'Discover databases',
+    description: 'List all databases available in the PostgreSQL connection.',
+  })
+  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiResponse({ status: 200, description: 'List of databases' })
   async getDatabases(@Param('id') id: string, @Request() req: any) {
     try {
       const orgId = req.user?.orgId || 'default-org-id';
@@ -147,6 +261,12 @@ export class PostgresController {
    * Discover schemas
    */
   @Get('connections/:id/schemas')
+  @ApiOperation({
+    summary: 'Discover schemas',
+    description: 'List all schemas available in the PostgreSQL connection.',
+  })
+  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiResponse({ status: 200, description: 'List of schemas' })
   async getSchemas(@Param('id') id: string, @Request() req: any) {
     try {
       const orgId = req.user?.orgId || 'default-org-id';
@@ -162,6 +282,13 @@ export class PostgresController {
    * Discover tables
    */
   @Get('connections/:id/tables')
+  @ApiOperation({
+    summary: 'Discover tables',
+    description: 'List all tables in a specific schema.',
+  })
+  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiQuery({ name: 'schema', description: 'Schema name', required: false, example: 'public' })
+  @ApiResponse({ status: 200, description: 'List of tables' })
   async getTables(
     @Param('id') id: string,
     @Query('schema') schema: string = 'public',
@@ -221,9 +348,22 @@ export class PostgresController {
    * Execute query
    */
   @Post('connections/:id/query')
+  @ApiOperation({
+    summary: 'Execute SQL query',
+    description: 'Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.',
+  })
+  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiBody({ type: ExecuteQueryDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Query executed successfully',
+    type: QueryExecutionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid query or query syntax error' })
+  @ApiResponse({ status: 403, description: 'Query contains dangerous keywords or rate limit exceeded' })
   async executeQuery(
     @Param('id') id: string,
-    @Body() body: { query: string; params?: any[]; timeout?: number },
+    @Body() body: ExecuteQueryDto,
     @Request() req: any,
   ) {
     try {
@@ -270,17 +410,21 @@ export class PostgresController {
    * Create sync job
    */
   @Post('connections/:id/sync')
+  @ApiOperation({
+    summary: 'Create sync job',
+    description: 'Create a new data synchronization job to sync PostgreSQL table data to Supabase.',
+  })
+  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiBody({ type: CreateSyncJobDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Sync job created successfully',
+    type: SyncJobResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid sync configuration' })
   async createSync(
     @Param('id') id: string,
-    @Body()
-    body: {
-      tableName: string;
-      schema?: string;
-      syncMode: 'full' | 'incremental';
-      incrementalColumn?: string;
-      customWhereClause?: string;
-      syncFrequency?: 'manual' | '15min' | '1hour' | '24hours';
-    },
+    @Body() body: CreateSyncJobDto,
     @Request() req: any,
   ) {
     try {
