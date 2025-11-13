@@ -24,9 +24,11 @@ async function runMigrations() {
   console.log(`📦 Database: ${dbUrl.split('@')[1] || 'unknown'}`);
 
   // Use require for postgres to handle CommonJS properly
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const postgres = require('postgres');
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
   const client = postgres(dbUrl, { max: 1 });
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const db = drizzle(client);
 
   try {
@@ -38,8 +40,9 @@ async function runMigrations() {
     console.error('❌ Migration failed:', error);
     process.exit(1);
   } finally {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     await client.end();
   }
 }
 
-runMigrations();
+void runMigrations();

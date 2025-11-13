@@ -4,15 +4,10 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { QueryResult } from 'pg';
 import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 import { QueryExecutionResult } from '../postgres.types';
-import {
-  sanitizeQuery,
-  extractTableNames,
-} from '../utils/query-sanitizer.util';
+import { sanitizeQuery } from '../utils/query-sanitizer.util';
 import { QUERY_CONFIG } from '../constants/postgres.constants';
-import { PostgresErrorCode } from '../constants/error-codes.constants';
 import { mapErrorToStandardized } from '../utils/error-mapper.util';
 
 /**
@@ -83,7 +78,7 @@ export class PostgresQueryExecutorService {
       const standardized = mapErrorToStandardized(error);
 
       // Log query failure
-      await this.logQuery(
+      this.logQuery(
         connectionId,
         userId,
         query,
@@ -118,16 +113,13 @@ export class PostgresQueryExecutorService {
     // Prepend EXPLAIN
     const explainQuery = `EXPLAIN (FORMAT JSON) ${query}`;
 
-    try {
-      const result = await this.connectionPoolService.executeQuery(
-        connectionId,
-        explainQuery,
-        params,
-      );
-      return result.rows[0]?.['QUERY PLAN'] || result.rows[0];
-    } catch (error) {
-      throw error;
-    }
+    const result = await this.connectionPoolService.executeQuery(
+      connectionId,
+      explainQuery,
+      params,
+    );
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    return result.rows[0]?.['QUERY PLAN'] || result.rows[0];
   }
 
   /**
@@ -159,7 +151,7 @@ export class PostgresQueryExecutorService {
   /**
    * Log query execution
    */
-  private async logQuery(
+  private logQuery(
     connectionId: string,
     userId: string,
     query: string,
@@ -167,7 +159,7 @@ export class PostgresQueryExecutorService {
     rowsReturned: number,
     status: 'success' | 'error',
     errorMessage?: string,
-  ): Promise<void> {
+  ): void {
     // TODO: Implement actual logging to database
     // This should use the PostgresQueryLogRepository
     console.log({
@@ -228,8 +220,9 @@ export class PostgresQueryExecutorService {
    * Get slow queries (for monitoring)
    */
   getSlowQueries(
-    connectionId: string,
-    thresholdMs: number = QUERY_CONFIG.SLOW_QUERY_THRESHOLD_MS,
+    _connectionId: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _thresholdMs: number = QUERY_CONFIG.SLOW_QUERY_THRESHOLD_MS,
   ): any[] {
     // TODO: Implement slow query tracking
     // This would require maintaining a query log in memory or database

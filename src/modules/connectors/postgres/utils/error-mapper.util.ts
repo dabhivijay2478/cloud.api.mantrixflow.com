@@ -15,40 +15,57 @@ import {
 export interface StandardizedError {
   code: PostgresErrorCode | string;
   message: string;
-  details?: any;
+  details?: Record<string, unknown>;
   suggestion?: string;
 }
 
 /**
  * Map error to standardized format
  */
-export function mapErrorToStandardized(error: any): StandardizedError {
+export function mapErrorToStandardized(error: unknown): StandardizedError {
+  const errorObj = error as Record<string, unknown>;
   // If already standardized
+
   if (
-    error.code &&
-    error.message &&
-    Object.values(PostgresErrorCode).includes(error.code as PostgresErrorCode)
+    errorObj.code &&
+    errorObj.message &&
+    Object.values(PostgresErrorCode).includes(
+      errorObj.code as PostgresErrorCode,
+    )
   ) {
     return {
-      code: error.code,
-      message: error.message,
-      details: error.details,
-      suggestion: error.suggestion,
+      code: errorObj.code as PostgresErrorCode | string,
+
+      message: errorObj.message as string,
+
+      details: errorObj.details as Record<string, unknown> | undefined,
+
+      suggestion: errorObj.suggestion as string | undefined,
     };
   }
 
   // Map PostgreSQL errors
   const pgErrorCode = mapPostgresError(error);
-  const message = getErrorMessage(pgErrorCode, error.message);
+
+  const message = getErrorMessage(
+    pgErrorCode,
+    errorObj.message as string | undefined,
+  );
 
   // Extract additional details
-  const details: any = {};
-  if (error.hint) details.hint = error.hint;
-  if (error.position) details.position = error.position;
-  if (error.where) details.where = error.where;
-  if (error.schema) details.schema = error.schema;
-  if (error.table) details.table = error.table;
-  if (error.column) details.column = error.column;
+  const details: Record<string, unknown> = {};
+
+  if (errorObj.hint) details.hint = errorObj.hint;
+
+  if (errorObj.position) details.position = errorObj.position;
+
+  if (errorObj.where) details.where = errorObj.where;
+
+  if (errorObj.schema) details.schema = errorObj.schema;
+
+  if (errorObj.table) details.table = errorObj.table;
+
+  if (errorObj.column) details.column = errorObj.column;
 
   // Generate suggestion based on error code
   const suggestion = generateSuggestion(pgErrorCode, error);
@@ -66,8 +83,9 @@ export function mapErrorToStandardized(error: any): StandardizedError {
  */
 function generateSuggestion(
   code: PostgresErrorCode,
-  error: any,
+  error: unknown,
 ): string | undefined {
+  const errorObj = error as Record<string, unknown>;
   switch (code) {
     case PostgresErrorCode.CONNECTION_TIMEOUT:
       return 'Check your network connection and firewall settings. Ensure the database is accessible from this server.';
@@ -88,8 +106,8 @@ function generateSuggestion(
     case PostgresErrorCode.QUERY_PERMISSION_DENIED:
       return 'Contact your database administrator to grant SELECT permissions on the required tables.';
     case PostgresErrorCode.QUERY_SYNTAX_ERROR:
-      if (error.position) {
-        return `Check the SQL syntax around position ${error.position}. Review PostgreSQL documentation for correct syntax.`;
+      if (errorObj.position) {
+        return `Check the SQL syntax around position ${errorObj.position as number}. Review PostgreSQL documentation for correct syntax.`;
       }
       return 'Review the SQL syntax. Ensure all keywords, table names, and column names are correct.';
     case PostgresErrorCode.SYNC_SCHEMA_CHANGED:
@@ -107,7 +125,7 @@ function generateSuggestion(
  * Create user-friendly error response for API
  */
 export function createErrorResponse(
-  error: any,
+  error: unknown,
   statusCode: number = 500,
 ): {
   statusCode: number;
@@ -117,27 +135,24 @@ export function createErrorResponse(
 
   // Map error codes to HTTP status codes
   let httpStatus = statusCode;
-  if (standardized.code === PostgresErrorCode.NOT_FOUND) {
+  const code = standardized.code as PostgresErrorCode;
+  if (code === PostgresErrorCode.NOT_FOUND) {
     httpStatus = 404;
-  } else if (standardized.code === PostgresErrorCode.UNAUTHORIZED) {
+  } else if (code === PostgresErrorCode.UNAUTHORIZED) {
     httpStatus = 401;
-  } else if (standardized.code === PostgresErrorCode.FORBIDDEN) {
+  } else if (code === PostgresErrorCode.FORBIDDEN) {
     httpStatus = 403;
   } else if (
-    [
-      PostgresErrorCode.CONNECTION_TIMEOUT,
-      PostgresErrorCode.CONNECTION_REFUSED,
-      PostgresErrorCode.INVALID_CREDENTIALS,
-      PostgresErrorCode.DATABASE_NOT_FOUND,
-    ].includes(standardized.code as PostgresErrorCode)
+    code === PostgresErrorCode.CONNECTION_TIMEOUT ||
+    code === PostgresErrorCode.CONNECTION_REFUSED ||
+    code === PostgresErrorCode.INVALID_CREDENTIALS ||
+    code === PostgresErrorCode.DATABASE_NOT_FOUND
   ) {
     httpStatus = 400;
   } else if (
-    [
-      PostgresErrorCode.QUERY_PERMISSION_DENIED,
-      PostgresErrorCode.QUERY_DANGEROUS_KEYWORD,
-      PostgresErrorCode.QUERY_RATE_LIMIT_EXCEEDED,
-    ].includes(standardized.code as PostgresErrorCode)
+    code === PostgresErrorCode.QUERY_PERMISSION_DENIED ||
+    code === PostgresErrorCode.QUERY_DANGEROUS_KEYWORD ||
+    code === PostgresErrorCode.QUERY_RATE_LIMIT_EXCEEDED
   ) {
     httpStatus = 403;
   }

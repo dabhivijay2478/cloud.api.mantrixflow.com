@@ -69,7 +69,7 @@ export class PostgresQueryLogRepository {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - QUERY_LOG_RETENTION_DAYS);
 
-    const result = await this.db
+    await this.db
       .delete(postgresQueryLogs)
       .where(lt(postgresQueryLogs.createdAt, cutoffDate));
 

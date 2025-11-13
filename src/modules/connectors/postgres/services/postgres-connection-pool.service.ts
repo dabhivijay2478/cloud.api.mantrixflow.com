@@ -12,7 +12,6 @@ import {
   DecryptedConnectionCredentials,
 } from '../postgres.types';
 import { CONNECTION_DEFAULTS } from '../constants/postgres.constants';
-import { PostgresErrorCode } from '../constants/error-codes.constants';
 
 /**
  * Connection pool with metadata
@@ -55,7 +54,8 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       sshTunnel = await this.createSSHTunnel(credentials);
       // SSH tunnel forwards to localhost
       actualHost = 'localhost';
-      actualPort = (sshTunnel as any).localPort || 5432;
+
+      actualPort = (sshTunnel as { localPort?: number }).localPort || 5432;
     }
 
     // Detect Supabase connections (supabase.co or supabase.com domains)
@@ -218,7 +218,8 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
           sshPrivateKey: config.sshTunnel.privateKey,
         });
         actualHost = 'localhost';
-        actualPort = (sshTunnel as any).localPort || 5432;
+
+        actualPort = (sshTunnel as { localPort?: number }).localPort || 5432;
       }
 
       // Detect Supabase connections (supabase.co or supabase.com domains)
@@ -263,7 +264,9 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       const client = await pool.connect();
       try {
         const result = await client.query('SELECT version()');
-        const version = result.rows[0]?.version || 'Unknown';
+
+        const version =
+          (result.rows[0] as { version?: string })?.version || 'Unknown';
         const responseTimeMs = Date.now() - startTime;
 
         return {
@@ -338,17 +341,30 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
             }
 
             // Create a local server that forwards to the stream
+            // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
             const net = require('net');
-            const server = net.createServer((localStream: any) => {
-              localStream.pipe(stream).pipe(localStream);
-            });
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const server = net.createServer(
+              (localStream: NodeJS.ReadWriteStream) => {
+                localStream.pipe(stream).pipe(localStream);
+              },
+            );
 
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             server.listen(0, () => {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
               const address = server.address();
-              if (address && typeof address === 'object') {
-                localPort = address.port;
-                (ssh as any).config.localPort = localPort;
-                (ssh as any).config.server = server;
+              if (address && typeof address === 'object' && 'port' in address) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                localPort = address.port as number;
+
+                (
+                  ssh as { config: { localPort?: number; server?: unknown } }
+                ).config.localPort = localPort;
+
+                (
+                  ssh as { config: { localPort?: number; server?: unknown } }
+                ).config.server = server;
                 resolve(ssh);
               } else {
                 reject(new Error('Failed to get local port'));
@@ -378,14 +394,18 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     try {
       await metadata.pool.end();
       if (metadata.sshTunnel) {
-        if ((metadata.sshTunnel as any).config?.server) {
-          (metadata.sshTunnel as any).config.server.close();
+        const sshConfig = (
+          metadata.sshTunnel as { config?: { server?: { close: () => void } } }
+        ).config;
+        if (sshConfig?.server) {
+          sshConfig.server.close();
         }
         metadata.sshTunnel.end();
       }
       this.pools.delete(connectionId);
       this.events.emit('pool-closed', { connectionId });
     } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       this.events.emit('pool-close-error', { connectionId, error });
     }
   }

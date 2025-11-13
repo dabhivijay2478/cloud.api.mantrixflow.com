@@ -15,15 +15,17 @@ export const createDrizzleDatabase = (configService: ConfigService) => {
   }
 
   // Use require for postgres to handle CommonJS properly
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const postgres = require('postgres');
 
   // Create postgres client
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
   const client = postgres(connectionString, {
     max: 10,
   });
 
   // Create Drizzle instance
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   return drizzle(client, { schema });
 };
 

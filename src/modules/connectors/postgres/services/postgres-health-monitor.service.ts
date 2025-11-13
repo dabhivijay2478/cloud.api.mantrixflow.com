@@ -50,7 +50,9 @@ export class PostgresHealthMonitorService implements OnModuleInit {
       try {
         const result = await client.query('SELECT version(), NOW()');
         const responseTimeMs = Date.now() - startTime;
-        const version = result.rows[0]?.version || 'Unknown';
+
+        const version =
+          (result.rows[0] as { version?: string })?.version || 'Unknown';
 
         // Get pool stats
         const stats = this.connectionPoolService.getPoolStats(connectionId);

@@ -139,9 +139,10 @@ export function getErrorMessage(
 /**
  * Map PostgreSQL error to our error code
  */
-export function mapPostgresError(error: any): PostgresErrorCode {
-  const code = error?.code;
-  const message = error?.message?.toLowerCase() || '';
+export function mapPostgresError(error: unknown): PostgresErrorCode {
+  const code = (error as { code?: string })?.code;
+
+  const message = (error as { message?: string })?.message?.toLowerCase() || '';
 
   // Connection errors
   if (code === '08001' || code === 'ECONNREFUSED') {
@@ -150,9 +151,11 @@ export function mapPostgresError(error: any): PostgresErrorCode {
   if (code === '08006' || code === 'ECONNRESET') {
     return PostgresErrorCode.CONNECTION_LOST;
   }
+
   if (code === 'ETIMEDOUT' || message.includes('timeout')) {
     return PostgresErrorCode.CONNECTION_TIMEOUT;
   }
+
   if (
     code === '28000' ||
     code === '28P01' ||
@@ -161,6 +164,7 @@ export function mapPostgresError(error: any): PostgresErrorCode {
   ) {
     return PostgresErrorCode.INVALID_CREDENTIALS;
   }
+
   if (
     code === '3D000' ||
     message.includes('database') ||
@@ -168,11 +172,13 @@ export function mapPostgresError(error: any): PostgresErrorCode {
   ) {
     return PostgresErrorCode.DATABASE_NOT_FOUND;
   }
+
   if (code === 'ENOTFOUND' || message.includes('host')) {
     return PostgresErrorCode.HOST_NOT_FOUND;
   }
 
   // Query errors
+
   if (
     code === '42P01' ||
     message.includes('table') ||
@@ -180,6 +186,7 @@ export function mapPostgresError(error: any): PostgresErrorCode {
   ) {
     return PostgresErrorCode.QUERY_TABLE_NOT_FOUND;
   }
+
   if (
     code === '42703' ||
     message.includes('column') ||
@@ -187,6 +194,7 @@ export function mapPostgresError(error: any): PostgresErrorCode {
   ) {
     return PostgresErrorCode.QUERY_COLUMN_NOT_FOUND;
   }
+
   if (
     code === '42501' ||
     message.includes('permission') ||
@@ -194,6 +202,7 @@ export function mapPostgresError(error: any): PostgresErrorCode {
   ) {
     return PostgresErrorCode.QUERY_PERMISSION_DENIED;
   }
+
   if (code === '42601' || message.includes('syntax')) {
     return PostgresErrorCode.QUERY_SYNTAX_ERROR;
   }

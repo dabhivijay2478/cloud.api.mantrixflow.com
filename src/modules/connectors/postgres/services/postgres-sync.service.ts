@@ -7,9 +7,8 @@ import { Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 import { PostgresSyncJobRepository } from '../repositories/postgres-sync-job.repository';
-import { SyncProgress, SyncMode, SyncJobStatus } from '../postgres.types';
+import { SyncMode, SyncJobStatus } from '../postgres.types';
 import { SYNC_CONFIG } from '../constants/postgres.constants';
-import { PostgresErrorCode } from '../constants/error-codes.constants';
 
 @Injectable()
 export class PostgresSyncService {
@@ -94,7 +93,10 @@ export class PostgresSyncService {
       customWhereClause,
     );
     const countResult = await pool.query(countQuery);
-    const totalRows = parseInt(countResult.rows[0]?.count || '0');
+
+    const totalRows = parseInt(
+      (countResult.rows[0] as { count?: string })?.count || '0',
+    );
 
     // Sync in batches
     let offset = 0;
@@ -207,7 +209,11 @@ export class PostgresSyncService {
       // await this.insertBatch(connectionId, destinationTable, result.rows);
 
       // Track max incremental value
-      const lastRow = result.rows[result.rows.length - 1];
+      const lastRow = result.rows[result.rows.length - 1] as Record<
+        string,
+        unknown
+      >;
+
       maxIncrementalValue = lastRow[incrementalColumn];
 
       rowsSynced += result.rows.length;

@@ -85,7 +85,11 @@ export class PostgresConnectionRepository {
     } catch (error) {
       // Log the full error for debugging
       console.error('Failed to insert connection into database:');
-      console.error('Error type:', error?.constructor?.name);
+
+      console.error(
+        'Error type:',
+        (error as { constructor?: { name?: string } })?.constructor?.name,
+      );
       console.error(
         'Error message:',
         error instanceof Error ? error.message : String(error),

@@ -35,10 +35,7 @@ import {
   TestConnectionDto,
   TestConnectionResponseDto,
 } from './dto/test-connection.dto';
-import {
-  CreateConnectionDto,
-  ConnectionResponseDto,
-} from './dto/create-connection.dto';
+import { CreateConnectionDto } from './dto/create-connection.dto';
 import {
   ExecuteQueryDto,
   QueryExecutionResponseDto,
@@ -275,7 +272,8 @@ export class PostgresController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
         );
       }
-      const connections = await this.postgresService.listConnections(finalOrgId);
+      const connections =
+        await this.postgresService.listConnections(finalOrgId);
       return createListResponse(
         connections,
         `Found ${connections.length} connection(s)`,
@@ -508,10 +506,7 @@ export class PostgresController {
         );
       }
       await this.postgresService.deleteConnection(id, finalOrgId);
-      return createDeleteResponse(
-        id,
-        'Connection deleted successfully',
-      );
+      return createDeleteResponse(id, 'Connection deleted successfully');
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -982,6 +977,7 @@ export class PostgresController {
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const plan = await this.postgresService.explainQuery(
         id,
         finalOrgId,
@@ -1048,6 +1044,7 @@ export class PostgresController {
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const syncJob = await this.postgresService.createSyncJob(
         id,
         finalOrgId,
@@ -1064,6 +1061,7 @@ export class PostgresController {
         HttpStatus.CREATED,
         {
           connectionId: id,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
           jobId: syncJob.id,
           tableName: body.tableName,
           syncMode: body.syncMode,
@@ -1178,6 +1176,7 @@ export class PostgresController {
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const syncJob = await this.postgresService.getSyncJob(
         id,
         jobId,
@@ -1189,7 +1188,9 @@ export class PostgresController {
         HttpStatus.OK,
         {
           connectionId: id,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
           jobId: syncJob.id,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
           jobStatus: syncJob.status,
         },
       );
@@ -1459,16 +1460,12 @@ export class PostgresController {
         parseInt(limit, 10),
         parseInt(offset, 10),
       );
-      return createListResponse(
-        logs,
-        `Found ${logs.length} query log(s)`,
-        {
-          total: logs.length,
-          limit: parseInt(limit, 10),
-          offset: parseInt(offset, 10),
-          hasMore: logs.length === parseInt(limit, 10),
-        },
-      );
+      return createListResponse(logs, `Found ${logs.length} query log(s)`, {
+        total: logs.length,
+        limit: parseInt(limit, 10),
+        offset: parseInt(offset, 10),
+        hasMore: logs.length === parseInt(limit, 10),
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (

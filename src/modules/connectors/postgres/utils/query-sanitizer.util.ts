@@ -5,7 +5,6 @@
 
 import {
   DANGEROUS_KEYWORDS,
-  ALLOWED_KEYWORDS,
   QUERY_CONFIG,
 } from '../constants/postgres.constants';
 import { PostgresErrorCode } from '../constants/error-codes.constants';

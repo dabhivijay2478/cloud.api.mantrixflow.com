@@ -4,7 +4,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { Pool, QueryResult } from 'pg';
+import { Pool } from 'pg';
 import {
   SchemaDiscoveryResult,
   DatabaseInfo,
@@ -20,7 +20,6 @@ import {
   isJsonbType,
 } from '../utils/postgres-type-mapper.util';
 import { SCHEMA_DISCOVERY } from '../constants/postgres.constants';
-import { PostgresErrorCode } from '../constants/error-codes.constants';
 
 @Injectable()
 export class PostgresSchemaDiscoveryService {
@@ -33,7 +32,8 @@ export class PostgresSchemaDiscoveryService {
    */
   async discoverSchema(
     connectionId: string,
-    forceRefresh: boolean = false,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _forceRefresh = false,
   ): Promise<SchemaDiscoveryResult> {
     const pool = this.connectionPoolService.getPool(connectionId);
     if (!pool) {
@@ -81,11 +81,15 @@ export class PostgresSchemaDiscoveryService {
 
     try {
       const result = await pool.query(query);
-      return result.rows.map((row) => ({
-        name: row.name,
-        size: row.size,
-        encoding: row.encoding,
-        collation: row.collation,
+
+      return result.rows.map((row: Record<string, unknown>) => ({
+        name: row.name as string,
+
+        size: row.size as number,
+
+        encoding: row.encoding as string,
+
+        collation: row.collation as string,
       }));
     } catch (error) {
       // If permission denied, return empty array
@@ -113,9 +117,11 @@ export class PostgresSchemaDiscoveryService {
 
     try {
       const result = await pool.query(query);
-      return result.rows.map((row) => ({
-        name: row.name,
-        owner: row.owner,
+
+      return result.rows.map((row: Record<string, unknown>) => ({
+        name: row.name as string,
+
+        owner: row.owner as string,
       }));
     } catch (error) {
       if (error instanceof Error && error.message.includes('permission')) {
@@ -168,13 +174,19 @@ export class PostgresSchemaDiscoveryService {
       for (const row of result.rows) {
         const tableInfo = await this.discoverTableDetails(
           pool,
-          row.schema,
-          row.name,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          row.schema as string,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          row.name as string,
           {
-            isView: row.is_view,
-            isMaterializedView: row.is_materialized_view,
-            isPartitioned: row.is_partitioned,
-            parentTable: row.parent_table,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            isView: row.is_view as boolean,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            isMaterializedView: row.is_materialized_view as boolean,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            isPartitioned: row.is_partitioned as boolean,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            parentTable: row.parent_table as string | undefined,
           },
         );
         tables.push(tableInfo);
@@ -234,13 +246,19 @@ export class PostgresSchemaDiscoveryService {
       for (const row of result.rows) {
         const tableInfo = await this.discoverTableDetails(
           pool,
-          row.schema,
-          row.name,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          row.schema as string,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          row.name as string,
           {
-            isView: row.is_view,
-            isMaterializedView: row.is_materialized_view,
-            isPartitioned: row.is_partitioned,
-            parentTable: row.parent_table,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            isView: row.is_view as boolean,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            isMaterializedView: row.is_materialized_view as boolean,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            isPartitioned: row.is_partitioned as boolean,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            parentTable: row.parent_table as string | undefined,
           },
         );
         tables.push(tableInfo);
@@ -270,8 +288,9 @@ export class PostgresSchemaDiscoveryService {
 
     try {
       const result = await pool.query(query, [schemaName]);
-      return parseInt(result.rows[0]?.count || '0') > 0;
-    } catch (error) {
+
+      return parseInt((result.rows[0] as { count?: string })?.count || '0') > 0;
+    } catch {
       return false;
     }
   }
@@ -379,11 +398,15 @@ export class PostgresSchemaDiscoveryService {
       const result = await pool.query(query, [schema, tableName]);
       const columns: ColumnInfo[] = [];
 
-      for (const row of result.rows) {
-        const isArray = isArrayType(row.data_type) || row.is_array;
-        const isJsonb = isJsonbType(row.data_type) || row.is_jsonb;
+      for (const row of result.rows as Array<Record<string, unknown>>) {
+        const isArray =
+          isArrayType(row.data_type as string) || (row.is_array as boolean);
+
+        const isJsonb =
+          isJsonbType(row.data_type as string) || (row.is_jsonb as boolean);
+
         const tsType = mapPostgresTypeToTypeScript(
-          row.data_type,
+          row.data_type as string,
           isArray,
           isJsonb,
         );
@@ -393,37 +416,47 @@ export class PostgresSchemaDiscoveryService {
           pool,
           schema,
           tableName,
-          row.name,
+
+          row.name as string,
         );
         const foreignKeyInfo = await this.getForeignKeyInfo(
           pool,
           schema,
           tableName,
-          row.name,
+
+          row.name as string,
         );
 
         columns.push({
-          name: row.name,
-          dataType: row.data_type,
+          name: row.name as string,
+
+          dataType: row.data_type as string,
           tsType,
-          isNullable: row.is_nullable,
+
+          isNullable: row.is_nullable as boolean,
           isPrimaryKey,
           isForeignKey: !!foreignKeyInfo,
           foreignKeyTable: foreignKeyInfo?.referencedTable,
           foreignKeyColumn: foreignKeyInfo?.referencedColumn,
-          defaultValue: row.default_value,
-          maxLength: row.max_length,
-          numericPrecision: row.numeric_precision,
-          numericScale: row.numeric_scale,
+
+          defaultValue: row.default_value as string | undefined,
+
+          maxLength: row.max_length as number | undefined,
+
+          numericPrecision: row.numeric_precision as number | undefined,
+
+          numericScale: row.numeric_scale as number | undefined,
           isArray,
           isJsonb,
-          isEnum: row.is_enum,
-          enumValues: row.enum_values || undefined,
+
+          isEnum: row.is_enum as boolean,
+
+          enumValues: (row.enum_values as string[] | undefined) || undefined,
         });
       }
 
       return columns;
-    } catch (error) {
+    } catch {
       return [];
     }
   }
@@ -450,7 +483,8 @@ export class PostgresSchemaDiscoveryService {
     `;
 
     const result = await pool.query(query, [schema, tableName, columnName]);
-    return parseInt(result.rows[0]?.count || '0') > 0;
+
+    return parseInt((result.rows[0] as { count?: string })?.count || '0') > 0;
   }
 
   /**
@@ -484,9 +518,11 @@ export class PostgresSchemaDiscoveryService {
 
     const result = await pool.query(query, [schema, tableName, columnName]);
     if (result.rows.length > 0) {
+      const row = result.rows[0] as Record<string, unknown>;
       return {
-        referencedTable: result.rows[0].referenced_table,
-        referencedColumn: result.rows[0].referenced_column,
+        referencedTable: row.referenced_table as string,
+
+        referencedColumn: row.referenced_column as string,
       };
     }
 
@@ -515,8 +551,11 @@ export class PostgresSchemaDiscoveryService {
 
     try {
       const result = await pool.query(query, [schema, tableName]);
-      return result.rows.map((row) => row.column_name);
-    } catch (error) {
+
+      return result.rows.map(
+        (row: Record<string, unknown>) => row.column_name as string,
+      );
+    } catch {
       return [];
     }
   }
@@ -553,12 +592,15 @@ export class PostgresSchemaDiscoveryService {
 
     try {
       const result = await pool.query(query, [schema, tableName]);
-      return result.rows.map((row) => ({
-        column: row.column,
-        referencedTable: row.referenced_table,
-        referencedColumn: row.referenced_column,
+
+      return result.rows.map((row: Record<string, unknown>) => ({
+        column: row.column as string,
+
+        referencedTable: row.referenced_table as string,
+
+        referencedColumn: row.referenced_column as string,
       }));
-    } catch (error) {
+    } catch {
       return [];
     }
   }
@@ -591,13 +633,17 @@ export class PostgresSchemaDiscoveryService {
 
     try {
       const result = await pool.query(query, [schema, tableName]);
-      return result.rows.map((row) => ({
-        name: row.name,
-        columns: row.columns,
-        isUnique: row.is_unique,
-        isPrimary: row.is_primary,
+
+      return result.rows.map((row: Record<string, unknown>) => ({
+        name: row.name as string,
+
+        columns: row.columns as string[],
+
+        isUnique: row.is_unique as boolean,
+
+        isPrimary: row.is_primary as boolean,
       }));
-    } catch (error) {
+    } catch {
       return [];
     }
   }
@@ -622,13 +668,18 @@ export class PostgresSchemaDiscoveryService {
     try {
       const result = await pool.query(query, [schema, tableName]);
       if (result.rows.length > 0) {
-        const rowCount = parseInt(result.rows[0].row_count || '0');
-        const sizeBytes = parseInt(result.rows[0].size_bytes || '0');
+        const row = result.rows[0] as Record<string, unknown>;
+
+        const rowCount = parseInt((row.row_count as string | undefined) || '0');
+
+        const sizeBytes = parseInt(
+          (row.size_bytes as string | undefined) || '0',
+        );
         const sizeFormatted = this.formatBytes(sizeBytes);
 
         return { rowCount, size: sizeBytes, sizeFormatted };
       }
-    } catch (error) {
+    } catch {
       // Fallback: use approximate count
     }
 
@@ -636,10 +687,13 @@ export class PostgresSchemaDiscoveryService {
     try {
       const countQuery = `SELECT COUNT(*) as count FROM ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(tableName)}`;
       const countResult = await pool.query(countQuery);
-      const rowCount = parseInt(countResult.rows[0]?.count || '0');
+
+      const rowCount = parseInt(
+        (countResult.rows[0] as { count?: string })?.count || '0',
+      );
 
       return { rowCount, size: 0, sizeFormatted: '0 B' };
-    } catch (error) {
+    } catch {
       return { rowCount: 0, size: 0, sizeFormatted: '0 B' };
     }
   }
@@ -669,10 +723,14 @@ export class PostgresSchemaDiscoveryService {
       const query = `SELECT MAX(${this.quoteIdentifier(updatedAtColumn.name)}) as last_updated 
                      FROM ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(tableName)}`;
       const result = await pool.query(query);
-      if (result.rows[0]?.last_updated) {
-        return new Date(result.rows[0].last_updated);
+      const row = result.rows[0] as
+        | { last_updated?: string | number | Date }
+        | undefined;
+
+      if (row?.last_updated) {
+        return new Date(row.last_updated);
       }
-    } catch (error) {
+    } catch {
       // Ignore errors
     }
 

@@ -96,12 +96,12 @@ export function isEnumType(pgType: string): boolean {
  * Extract enum values from PostgreSQL (requires query)
  * This is a placeholder - actual implementation would query pg_enum
  */
-export async function getEnumValues(
+export function getEnumValues(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   connection: any,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   enumTypeName: string,
-): Promise<string[]> {
+): string[] {
   // TODO: Implement enum value extraction
   // Query: SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = $1)
   return [];

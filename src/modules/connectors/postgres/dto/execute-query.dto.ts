@@ -1,12 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsString,
-  IsArray,
-  IsNumber,
-  IsOptional,
-  Min,
-  Max,
-} from 'class-validator';
+import { IsString, IsArray, IsNumber, IsOptional, Min } from 'class-validator';
 
 export class ExecuteQueryDto {
   @ApiProperty({

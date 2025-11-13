@@ -22,7 +22,6 @@ import {
   PostgresConnectionConfig,
   SchemaDiscoveryResult,
   QueryExecutionResult,
-  SyncProgress,
   ConnectionHealth,
   ConnectionMetrics,
   PostgresConnection,
@@ -31,7 +30,6 @@ import {
   SchemaInfo,
 } from './postgres.types';
 import { NewPostgresConnection } from '../../../database/drizzle/schema/postgres-connectors.schema';
-import { PostgresErrorCode } from './constants/error-codes.constants';
 
 @Injectable()
 export class PostgresService {
@@ -304,7 +302,7 @@ export class PostgresService {
   async updateConnection(
     connectionId: string,
     orgId: string,
-    updates: Partial<PostgresConnectionConfig> | any, // Accept UpdateConnectionDto or PostgresConnectionConfig
+    updates: Partial<PostgresConnectionConfig> & Record<string, unknown>, // Accept UpdateConnectionDto or PostgresConnectionConfig
   ): Promise<PostgresConnection> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
@@ -313,20 +311,25 @@ export class PostgresService {
 
     // If credentials changed, test connection
     if (
-      updates.host ||
-      updates.port ||
-      updates.database ||
-      updates.username ||
-      updates.password
+      (updates as Record<string, unknown>).host ||
+      (updates as Record<string, unknown>).port ||
+      (updates as Record<string, unknown>).database ||
+      (updates as Record<string, unknown>).username ||
+      (updates as Record<string, unknown>).password
     ) {
+      const updatesRecord = updates as Record<string, unknown>;
       const testConfig: PostgresConnectionConfig = {
-        host: updates.host || connection.host,
-        port: updates.port || connection.port,
-        database: updates.database || connection.database,
-        username: updates.username || connection.username,
-        password: updates.password || connection.password,
-        ssl: updates.ssl,
-        sshTunnel: updates.sshTunnel,
+        host: (updatesRecord.host as string | undefined) || connection.host,
+        port: (updatesRecord.port as number | undefined) || connection.port,
+        database:
+          (updatesRecord.database as string | undefined) || connection.database,
+        username:
+          (updatesRecord.username as string | undefined) || connection.username,
+        password:
+          (updatesRecord.password as string | undefined) || connection.password,
+        ssl: updatesRecord.ssl as PostgresConnectionConfig['ssl'],
+        sshTunnel:
+          updatesRecord.sshTunnel as PostgresConnectionConfig['sshTunnel'],
       };
 
       // Decrypt existing values if needed
@@ -351,47 +354,61 @@ export class PostgresService {
     };
 
     // Map plain text credentials from PostgresConnectionConfig to encrypted format
-    if (updates.host !== undefined) {
-      updateData.host = updates.host; // Will be encrypted in repository
+    const updatesRecord = updates as Record<string, unknown>;
+    if (updatesRecord.host !== undefined) {
+      updateData.host = updatesRecord.host as string; // Will be encrypted in repository
     }
-    if (updates.port !== undefined) {
-      updateData.port = updates.port;
+    if (updatesRecord.port !== undefined) {
+      updateData.port = updatesRecord.port as number;
     }
-    if (updates.database !== undefined) {
-      updateData.database = updates.database; // Will be encrypted in repository
+    if (updatesRecord.database !== undefined) {
+      updateData.database = updatesRecord.database as string; // Will be encrypted in repository
     }
-    if (updates.username !== undefined) {
-      updateData.username = updates.username; // Will be encrypted in repository
+    if (updatesRecord.username !== undefined) {
+      updateData.username = updatesRecord.username as string; // Will be encrypted in repository
     }
-    if (updates.password !== undefined) {
-      updateData.password = updates.password; // Will be encrypted in repository
+    if (updatesRecord.password !== undefined) {
+      updateData.password = updatesRecord.password as string; // Will be encrypted in repository
     }
-    if (updates.ssl?.enabled !== undefined) {
-      updateData.sslEnabled = updates.ssl.enabled;
+    const ssl = updatesRecord.ssl as
+      | { enabled?: boolean; caCert?: string }
+      | undefined;
+    if (ssl?.enabled !== undefined) {
+      updateData.sslEnabled = ssl.enabled;
     }
-    if (updates.ssl?.caCert !== undefined) {
-      updateData.sslCaCert = updates.ssl.caCert; // Will be encrypted in repository
+    if (ssl?.caCert !== undefined) {
+      updateData.sslCaCert = ssl.caCert; // Will be encrypted in repository
     }
-    if (updates.sshTunnel?.enabled !== undefined) {
-      updateData.sshTunnelEnabled = updates.sshTunnel.enabled;
+    const sshTunnel = updatesRecord.sshTunnel as
+      | {
+          enabled?: boolean;
+          host?: string;
+          port?: number;
+          username?: string;
+          privateKey?: string;
+        }
+      | undefined;
+    if (sshTunnel?.enabled !== undefined) {
+      updateData.sshTunnelEnabled = sshTunnel.enabled;
     }
-    if (updates.sshTunnel?.host !== undefined) {
-      updateData.sshHost = updates.sshTunnel.host; // Will be encrypted in repository
+    if (sshTunnel?.host !== undefined) {
+      updateData.sshHost = sshTunnel.host; // Will be encrypted in repository
     }
-    if (updates.sshTunnel?.port !== undefined) {
-      updateData.sshPort = updates.sshTunnel.port;
+    if (sshTunnel?.port !== undefined) {
+      updateData.sshPort = sshTunnel.port;
     }
-    if (updates.sshTunnel?.username !== undefined) {
-      updateData.sshUsername = updates.sshTunnel.username; // Will be encrypted in repository
+    if (sshTunnel?.username !== undefined) {
+      updateData.sshUsername = sshTunnel.username; // Will be encrypted in repository
     }
-    if (updates.sshTunnel?.privateKey !== undefined) {
-      updateData.sshPrivateKey = updates.sshTunnel.privateKey; // Will be encrypted in repository
+    if (sshTunnel?.privateKey !== undefined) {
+      updateData.sshPrivateKey = sshTunnel.privateKey; // Will be encrypted in repository
     }
-    if (updates.poolSize !== undefined) {
-      updateData.connectionPoolSize = updates.poolSize;
+    if (updatesRecord.poolSize !== undefined) {
+      updateData.connectionPoolSize = updatesRecord.poolSize as number;
     }
-    if (updates.queryTimeout !== undefined) {
-      updateData.queryTimeoutSeconds = updates.queryTimeout / 1000; // Convert ms to seconds
+    if (updatesRecord.queryTimeout !== undefined) {
+      updateData.queryTimeoutSeconds =
+        (updatesRecord.queryTimeout as number) / 1000; // Convert ms to seconds
     }
 
     // Update connection
@@ -401,12 +418,13 @@ export class PostgresService {
     );
 
     // Recreate pool if credentials changed
+    const updatesRecord = updates as Record<string, unknown>;
     if (
-      updates.host ||
-      updates.port ||
-      updates.database ||
-      updates.username ||
-      updates.password
+      updatesRecord.host ||
+      updatesRecord.port ||
+      updatesRecord.database ||
+      updatesRecord.username ||
+      updatesRecord.password
     ) {
       await this.connectionPoolService.closePool(connectionId);
       const credentials = this.connectionRepository.decryptCredentials(updated);
@@ -488,10 +506,10 @@ export class PostgresService {
     }
 
     // Discover schemas and tables
-    const schemas = await this.schemaDiscoveryService.discoverSchemas(finalPool);
-    const allTables = await this.schemaDiscoveryService.discoverAllTables(
-      finalPool,
-    );
+    const schemas =
+      await this.schemaDiscoveryService.discoverSchemas(finalPool);
+    const allTables =
+      await this.schemaDiscoveryService.discoverAllTables(finalPool);
 
     // Group tables by schema
     const tablesBySchema = new Map<string, TableInfo[]>();
@@ -650,7 +668,7 @@ export class PostgresService {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
-    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
 
     const validation = this.validator.validateSyncJob({
       tableName,
