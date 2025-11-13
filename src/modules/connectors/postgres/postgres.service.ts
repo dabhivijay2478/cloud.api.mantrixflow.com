@@ -27,6 +27,8 @@ import {
   ConnectionMetrics,
   PostgresConnection,
   SyncMode,
+  TableInfo,
+  SchemaInfo,
 } from './postgres.types';
 import { NewPostgresConnection } from '../../../database/drizzle/schema/postgres-connectors.schema';
 import { PostgresErrorCode } from './constants/error-codes.constants';
@@ -454,6 +456,100 @@ export class PostgresService {
       validConnectionId,
       forceRefresh,
     );
+  }
+
+  /**
+   * Discover schemas with their tables
+   */
+  async discoverSchemasWithTables(
+    connectionId: string,
+    orgId: string,
+  ): Promise<SchemaInfo[]> {
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
+
+    // Ensure pool exists
+    const pool = this.connectionPoolService.getPool(validConnectionId);
+    if (!pool) {
+      const credentials =
+        this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(
+        validConnectionId,
+        credentials,
+      );
+    }
+
+    // Get pool again after ensuring it exists
+    const finalPool = this.connectionPoolService.getPool(validConnectionId);
+    if (!finalPool) {
+      throw new Error(`Pool not found for connection ${validConnectionId}`);
+    }
+
+    // Discover schemas and tables
+    const schemas = await this.schemaDiscoveryService.discoverSchemas(finalPool);
+    const allTables = await this.schemaDiscoveryService.discoverAllTables(
+      finalPool,
+    );
+
+    // Group tables by schema
+    const tablesBySchema = new Map<string, TableInfo[]>();
+    for (const table of allTables) {
+      if (!tablesBySchema.has(table.schema)) {
+        tablesBySchema.set(table.schema, []);
+      }
+      tablesBySchema.get(table.schema)!.push(table);
+    }
+
+    // Map schemas with their tables
+    return schemas.map((schema) => ({
+      ...schema,
+      tables: tablesBySchema.get(schema.name) || [],
+    }));
+  }
+
+  /**
+   * Discover tables for a specific schema
+   */
+  async discoverTablesForSchema(
+    connectionId: string,
+    orgId: string,
+    schema: string,
+  ): Promise<TableInfo[]> {
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
+
+    // Ensure pool exists
+    const pool = this.connectionPoolService.getPool(validConnectionId);
+    if (!pool) {
+      const credentials =
+        this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(
+        validConnectionId,
+        credentials,
+      );
+    }
+
+    // Get pool again after ensuring it exists
+    const finalPool = this.connectionPoolService.getPool(validConnectionId);
+    if (!finalPool) {
+      throw new Error(`Pool not found for connection ${validConnectionId}`);
+    }
+
+    // Check if schema exists
+    const schemaExists = await this.schemaDiscoveryService.schemaExists(
+      finalPool,
+      schema,
+    );
+    if (!schemaExists) {
+      throw new NotFoundException(`Schema "${schema}" not found`);
+    }
+
+    // Discover tables for the schema
+    return await this.schemaDiscoveryService.discoverTables(finalPool, schema);
   }
 
   /**

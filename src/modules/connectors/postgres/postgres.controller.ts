@@ -581,12 +581,13 @@ export class PostgresController {
   }
 
   /**
-   * Discover schemas
+   * Discover schemas with tables
    */
   @Get('connections/:id/schemas')
   @ApiOperation({
-    summary: 'Discover schemas',
-    description: 'List all schemas available in the PostgreSQL connection.',
+    summary: 'Discover schemas with tables',
+    description:
+      'List all schemas available in the PostgreSQL connection, including tables for each schema.',
   })
   @ApiParam({
     name: 'id',
@@ -601,7 +602,7 @@ export class PostgresController {
   })
   @ApiResponse({
     status: 200,
-    description: 'List of schemas',
+    description: 'List of schemas with their tables',
   })
   async getSchemas(
     @Param('id') id: string,
@@ -610,14 +611,23 @@ export class PostgresController {
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
-      const schema = await this.postgresService.discoverSchema(id, finalOrgId);
+      const schemasWithTables =
+        await this.postgresService.discoverSchemasWithTables(id, finalOrgId);
+
+      // Calculate total tables across all schemas
+      const totalTables = schemasWithTables.reduce(
+        (sum, schema) => sum + (schema.tables?.length || 0),
+        0,
+      );
+
       return createSuccessResponse(
-        schema.schemas,
-        `Found ${schema.schemas.length} schema(s)`,
+        schemasWithTables,
+        `Found ${schemasWithTables.length} schema(s) with ${totalTables} table(s)`,
         HttpStatus.OK,
         {
           connectionId: id,
-          totalSchemas: schema.schemas.length,
+          totalSchemas: schemasWithTables.length,
+          totalTables,
         },
       );
     } catch (error) {
@@ -663,6 +673,10 @@ export class PostgresController {
     status: 200,
     description: 'List of tables',
   })
+  @ApiResponse({
+    status: 404,
+    description: 'Schema not found',
+  })
   async getTables(
     @Param('id') id: string,
     @Query('schema') schema: string = 'public',
@@ -671,19 +685,17 @@ export class PostgresController {
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
-      const discovery = await this.postgresService.discoverSchema(
+      const tables = await this.postgresService.discoverTablesForSchema(
         id,
         finalOrgId,
-      );
-      const filteredTables = discovery.tables.filter(
-        (t) => !schema || t.schema === schema,
+        schema,
       );
       return createListResponse(
-        filteredTables,
-        `Found ${filteredTables.length} table(s)${schema ? ` in schema "${schema}"` : ''}`,
+        tables,
+        `Found ${tables.length} table(s)${schema ? ` in schema "${schema}"` : ''}`,
         {
-          total: filteredTables.length,
-          limit: filteredTables.length,
+          total: tables.length,
+          limit: tables.length,
           offset: 0,
           hasMore: false,
         },

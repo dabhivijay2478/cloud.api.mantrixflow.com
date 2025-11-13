@@ -109,6 +109,7 @@ export interface DatabaseInfo {
 export interface SchemaInfo {
   name: string;
   owner?: string;
+  tables?: TableInfo[]; // Tables in this schema (optional for backward compatibility)
 }
 
 /**

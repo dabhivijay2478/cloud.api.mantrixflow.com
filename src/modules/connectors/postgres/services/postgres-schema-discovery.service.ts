@@ -47,8 +47,8 @@ export class PostgresSchemaDiscoveryService {
       // Discover schemas
       const schemas = await this.discoverSchemas(pool);
 
-      // Discover tables
-      const tables = await this.discoverTables(pool);
+      // Discover tables from all schemas
+      const tables = await this.discoverAllTables(pool);
 
       return {
         databases,
@@ -126,7 +126,71 @@ export class PostgresSchemaDiscoveryService {
   }
 
   /**
-   * Discover all tables with metadata
+   * Discover all tables from all schemas
+   */
+  async discoverAllTables(pool: Pool): Promise<TableInfo[]> {
+    const tablesQuery = `
+      SELECT 
+        t.table_schema as schema,
+        t.table_name as name,
+        CASE 
+          WHEN t.table_type = 'VIEW' THEN true
+          ELSE false
+        END as is_view,
+        CASE 
+          WHEN t.table_type = 'MATERIALIZED VIEW' THEN true
+          ELSE false
+        END as is_materialized_view,
+        CASE 
+          WHEN pt.oid IS NOT NULL THEN true
+          ELSE false
+        END as is_partitioned,
+        pt.relname as parent_table
+      FROM information_schema.tables t
+      LEFT JOIN pg_class pc ON pc.relname = t.table_name
+      LEFT JOIN pg_namespace pn ON pn.oid = pc.relnamespace AND pn.nspname = t.table_schema
+      LEFT JOIN pg_inherits pi ON pi.inhrelid = pc.oid
+      LEFT JOIN pg_class pt ON pt.oid = pi.inhparent
+      WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.table_schema NOT LIKE 'pg_temp_%'
+        AND t.table_schema NOT LIKE 'pg_toast_temp_%'
+        AND t.table_type IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW')
+      ORDER BY t.table_schema, t.table_name
+      LIMIT $1;
+    `;
+
+    try {
+      const result = await pool.query(tablesQuery, [
+        SCHEMA_DISCOVERY.MAX_TABLES,
+      ]);
+      const tables: TableInfo[] = [];
+
+      for (const row of result.rows) {
+        const tableInfo = await this.discoverTableDetails(
+          pool,
+          row.schema,
+          row.name,
+          {
+            isView: row.is_view,
+            isMaterializedView: row.is_materialized_view,
+            isPartitioned: row.is_partitioned,
+            parentTable: row.parent_table,
+          },
+        );
+        tables.push(tableInfo);
+      }
+
+      return tables;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('permission')) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Discover all tables with metadata from a specific schema
    */
   async discoverTables(
     pool: Pool,
@@ -188,6 +252,27 @@ export class PostgresSchemaDiscoveryService {
         return [];
       }
       throw error;
+    }
+  }
+
+  /**
+   * Check if a schema exists
+   */
+  async schemaExists(pool: Pool, schemaName: string): Promise<boolean> {
+    const query = `
+      SELECT COUNT(*) as count
+      FROM pg_namespace
+      WHERE nspname = $1
+        AND nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND nspname NOT LIKE 'pg_temp_%'
+        AND nspname NOT LIKE 'pg_toast_temp_%';
+    `;
+
+    try {
+      const result = await pool.query(query, [schemaName]);
+      return parseInt(result.rows[0]?.count || '0') > 0;
+    } catch (error) {
+      return false;
     }
   }
 
