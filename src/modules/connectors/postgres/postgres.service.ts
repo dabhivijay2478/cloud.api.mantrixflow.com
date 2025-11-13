@@ -74,9 +74,10 @@ export class PostgresService {
     // Validate UUIDs - generate if invalid
     const validOrgId = this.validateOrGenerateUUID(orgId);
     const validUserId = this.validateOrGenerateUUID(userId);
-    
+
     // Validate connection count
-    const currentCount = await this.connectionRepository.countByOrgId(validOrgId);
+    const currentCount =
+      await this.connectionRepository.countByOrgId(validOrgId);
     const countValidation =
       this.validator.validateConnectionCount(currentCount);
     if (!countValidation.isValid) {
@@ -90,8 +91,12 @@ export class PostgresService {
     }
 
     // Detect Supabase connections and auto-enable SSL
-    const isSupabase = config.host.includes('supabase.co') || config.host.includes('supabase.com');
-    const sslEnabled = config.ssl?.enabled !== false && (isSupabase || config.ssl?.enabled === true);
+    const isSupabase =
+      config.host.includes('supabase.co') ||
+      config.host.includes('supabase.com');
+    const sslEnabled =
+      config.ssl?.enabled !== false &&
+      (isSupabase || config.ssl?.enabled === true);
 
     // Save connection FIRST - this is the critical operation
     // Do NOT test connection before saving - save immediately
@@ -169,7 +174,10 @@ export class PostgresService {
         });
       } catch (updateError) {
         // Even the update failed - log but don't throw
-        console.error(`Failed to update connection status for ${connectionId}:`, updateError);
+        console.error(
+          `Failed to update connection status for ${connectionId}:`,
+          updateError,
+        );
       }
     }
   }
@@ -195,11 +203,15 @@ export class PostgresService {
 
       // Create connection pool
       try {
-        const updatedConnection = await this.connectionRepository.findById(connectionId);
+        const updatedConnection =
+          await this.connectionRepository.findById(connectionId);
         if (updatedConnection) {
           const credentials =
             this.connectionRepository.decryptCredentials(updatedConnection);
-          await this.connectionPoolService.createPool(connectionId, credentials);
+          await this.connectionPoolService.createPool(
+            connectionId,
+            credentials,
+          );
         }
       } catch (error) {
         // Pool creation failed, update status
@@ -220,18 +232,36 @@ export class PostgresService {
   }
 
   /**
-   * Validate UUID or generate a new one
+   * Validate UUID or generate a new one (only for creation)
    */
   private validateOrGenerateUUID(value: string): string {
     // UUID v4 regex pattern
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
     if (uuidRegex.test(value)) {
       return value;
     }
-    
+
     // Generate a new UUID v4
     return crypto.randomUUID();
+  }
+
+  /**
+   * Validate UUID (throws error if invalid - for queries)
+   */
+  private validateUUID(value: string, fieldName: string = 'ID'): string {
+    // UUID v4 regex pattern
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    if (uuidRegex.test(value)) {
+      return value;
+    }
+
+    throw new BadRequestException(
+      `Invalid ${fieldName} format. Must be a valid UUID v4.`,
+    );
   }
 
   /**
@@ -241,11 +271,14 @@ export class PostgresService {
     connectionId: string,
     orgId?: string,
   ): Promise<PostgresConnection> {
-    // Validate UUID if provided
-    const validOrgId = orgId ? this.validateOrGenerateUUID(orgId) : undefined;
-    
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = orgId
+      ? this.validateUUID(orgId, 'Organization ID')
+      : undefined;
+
     const connection = await this.connectionRepository.findById(
-      connectionId,
+      validConnectionId,
       validOrgId,
     );
     if (!connection) {
@@ -258,8 +291,8 @@ export class PostgresService {
    * List connections for organization
    */
   async listConnections(orgId: string): Promise<PostgresConnection[]> {
-    // Validate UUID - generate if invalid
-    const validOrgId = this.validateOrGenerateUUID(orgId);
+    // Validate UUID - throw error if invalid (for queries)
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
     return await this.connectionRepository.findByOrgId(validOrgId);
   }
 
@@ -269,11 +302,12 @@ export class PostgresService {
   async updateConnection(
     connectionId: string,
     orgId: string,
-    updates: Partial<PostgresConnectionConfig>,
+    updates: Partial<PostgresConnectionConfig> | any, // Accept UpdateConnectionDto or PostgresConnectionConfig
   ): Promise<PostgresConnection> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    const connection = await this.getConnection(connectionId, validOrgId);
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const connection = await this.getConnection(validConnectionId, validOrgId);
 
     // If credentials changed, test connection
     if (
@@ -359,7 +393,10 @@ export class PostgresService {
     }
 
     // Update connection
-    const updated = await this.connectionRepository.update(connectionId, updateData);
+    const updated = await this.connectionRepository.update(
+      validConnectionId,
+      updateData,
+    );
 
     // Recreate pool if credentials changed
     if (
@@ -381,11 +418,12 @@ export class PostgresService {
    * Delete connection
    */
   async deleteConnection(connectionId: string, orgId: string): Promise<void> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify exists and belongs to org
-    await this.connectionPoolService.closePool(connectionId);
-    await this.connectionRepository.delete(connectionId);
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify exists and belongs to org
+    await this.connectionPoolService.closePool(validConnectionId);
+    await this.connectionRepository.delete(validConnectionId);
   }
 
   /**
@@ -396,20 +434,24 @@ export class PostgresService {
     orgId: string,
     forceRefresh: boolean = false,
   ): Promise<SchemaDiscoveryResult> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    const connection = await this.getConnection(connectionId, validOrgId); // Verify access
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
 
     // Ensure pool exists
-    const pool = this.connectionPoolService.getPool(connectionId);
+    const pool = this.connectionPoolService.getPool(validConnectionId);
     if (!pool) {
       const credentials =
         this.connectionRepository.decryptCredentials(connection);
-      await this.connectionPoolService.createPool(connectionId, credentials);
+      await this.connectionPoolService.createPool(
+        validConnectionId,
+        credentials,
+      );
     }
 
     return await this.schemaDiscoveryService.discoverSchema(
-      connectionId,
+      validConnectionId,
       forceRefresh,
     );
   }
@@ -425,13 +467,14 @@ export class PostgresService {
     params?: any[],
     timeout?: number,
   ): Promise<QueryExecutionResult> {
-    // Validate UUIDs
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    const validUserId = this.validateOrGenerateUUID(userId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const validUserId = this.validateUUID(userId, 'User ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
 
     const result = await this.queryExecutorService.executeQuery(
-      connectionId,
+      validConnectionId,
       validUserId,
       query,
       params,
@@ -440,7 +483,7 @@ export class PostgresService {
 
     // Log query
     await this.queryLogRepository.create({
-      connectionId,
+      connectionId: validConnectionId,
       userId: validUserId,
       query,
       executionTimeMs: result.executionTimeMs,
@@ -460,11 +503,12 @@ export class PostgresService {
     query: string,
     params?: any[],
   ): Promise<any> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
     return await this.queryExecutorService.explainQuery(
-      connectionId,
+      validConnectionId,
       query,
       params,
     );
@@ -483,9 +527,10 @@ export class PostgresService {
     customWhereClause?: string,
     syncFrequency: 'manual' | '15min' | '1hour' | '24hours' = 'manual',
   ): Promise<any> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    const connection = await this.getConnection(connectionId, validOrgId); // Verify access
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
 
     const validation = this.validator.validateSyncJob({
       tableName,
@@ -503,7 +548,7 @@ export class PostgresService {
     const destinationTable = `raw_postgres_${validOrgId}_${tableName}`;
 
     const job = await this.syncJobRepository.create({
-      connectionId,
+      connectionId: validConnectionId,
       tableName,
       syncMode,
       incrementalColumn,
@@ -520,7 +565,7 @@ export class PostgresService {
     // Start sync if manual
     if (syncFrequency === 'manual') {
       return await this.syncService.startSync(
-        connectionId,
+        validConnectionId,
         job.id,
         tableName,
         schema,
@@ -537,10 +582,11 @@ export class PostgresService {
    * Get sync jobs
    */
   async getSyncJobs(connectionId: string, orgId: string): Promise<any[]> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
-    return await this.syncJobRepository.findByConnectionId(connectionId);
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
+    return await this.syncJobRepository.findByConnectionId(validConnectionId);
   }
 
   /**
@@ -551,10 +597,15 @@ export class PostgresService {
     jobId: string,
     orgId: string,
   ): Promise<any> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
-    const job = await this.syncJobRepository.findById(jobId, connectionId);
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validJobId = this.validateUUID(jobId, 'Job ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
+    const job = await this.syncJobRepository.findById(
+      validJobId,
+      validConnectionId,
+    );
     if (!job) {
       throw new NotFoundException('Sync job not found');
     }
@@ -569,10 +620,12 @@ export class PostgresService {
     jobId: string,
     orgId: string,
   ): Promise<void> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getSyncJob(connectionId, jobId, validOrgId); // Verify access
-    await this.syncService.cancelSync(jobId);
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validJobId = this.validateUUID(jobId, 'Job ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getSyncJob(validConnectionId, validJobId, validOrgId); // Verify access
+    await this.syncService.cancelSync(validJobId);
   }
 
   /**
@@ -582,10 +635,11 @@ export class PostgresService {
     connectionId: string,
     orgId: string,
   ): Promise<ConnectionHealth> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
-    return await this.healthMonitorService.checkHealth(connectionId);
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
+    return await this.healthMonitorService.checkHealth(validConnectionId);
   }
 
   /**
@@ -595,15 +649,18 @@ export class PostgresService {
     connectionId: string,
     orgId: string,
   ): Promise<ConnectionMetrics> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
 
-    const stats = await this.queryLogRepository.getStatistics(connectionId);
-    const poolStats = this.connectionPoolService.getPoolStats(connectionId);
+    const stats =
+      await this.queryLogRepository.getStatistics(validConnectionId);
+    const poolStats =
+      this.connectionPoolService.getPoolStats(validConnectionId);
 
     return {
-      connectionId,
+      connectionId: validConnectionId,
       ...stats,
       connectionPoolUtilization: poolStats
         ? (poolStats.activeConnections / (poolStats.activeConnections + 10)) *
@@ -622,11 +679,12 @@ export class PostgresService {
     limit: number = 100,
     offset: number = 0,
   ): Promise<any[]> {
-    // Validate UUID
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    await this.getConnection(connectionId, validOrgId); // Verify access
+    // Validate UUIDs - throw error if invalid (for queries)
+    const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    await this.getConnection(validConnectionId, validOrgId); // Verify access
     return await this.queryLogRepository.findByConnectionId(
-      connectionId,
+      validConnectionId,
       limit,
       offset,
     );

@@ -6,7 +6,12 @@ export class CreateSyncJobDto {
   @IsString()
   tableName: string;
 
-  @ApiProperty({ description: 'Schema name', example: 'public', default: 'public', required: false })
+  @ApiProperty({
+    description: 'Schema name',
+    example: 'public',
+    default: 'public',
+    required: false,
+  })
   @IsString()
   @IsOptional()
   schema?: string;
@@ -50,10 +55,16 @@ export class CreateSyncJobDto {
 }
 
 export class SyncJobResponseDto {
-  @ApiProperty({ description: 'Sync job ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({
+    description: 'Sync job ID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
   id: string;
 
-  @ApiProperty({ description: 'Connection ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({
+    description: 'Connection ID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
   connectionId: string;
 
   @ApiProperty({ description: 'Table name', example: 'users' })
@@ -62,13 +73,19 @@ export class SyncJobResponseDto {
   @ApiProperty({ description: 'Sync mode', enum: ['full', 'incremental'] })
   syncMode: string;
 
-  @ApiProperty({ description: 'Job status', enum: ['pending', 'running', 'success', 'failed'] })
+  @ApiProperty({
+    description: 'Job status',
+    enum: ['pending', 'running', 'success', 'failed'],
+  })
   status: string;
 
   @ApiProperty({ description: 'Rows synced', example: 1000 })
   rowsSynced: number;
 
-  @ApiProperty({ description: 'Sync frequency', enum: ['manual', '15min', '1hour', '24hours'] })
+  @ApiProperty({
+    description: 'Sync frequency',
+    enum: ['manual', '15min', '1hour', '24hours'],
+  })
   syncFrequency: string;
 
   @ApiProperty({ description: 'Started at', required: false })
@@ -80,4 +97,3 @@ export class SyncJobResponseDto {
   @ApiProperty({ description: 'Error message', required: false })
   errorMessage?: string;
 }
-

@@ -74,7 +74,7 @@ export class PostgresConnectionRepository {
     try {
       console.log('Attempting to insert connection into database...');
       console.log('Connection data keys:', Object.keys(connectionData));
-      
+
       const [connection] = await this.db
         .insert(postgresConnections)
         .values(connectionData)
@@ -86,10 +86,16 @@ export class PostgresConnectionRepository {
       // Log the full error for debugging
       console.error('Failed to insert connection into database:');
       console.error('Error type:', error?.constructor?.name);
-      console.error('Error message:', error instanceof Error ? error.message : String(error));
+      console.error(
+        'Error message:',
+        error instanceof Error ? error.message : String(error),
+      );
       console.error('Error details:', JSON.stringify(error, null, 2));
-      console.error('Connection data that failed:', JSON.stringify(connectionData, null, 2));
-      
+      console.error(
+        'Connection data that failed:',
+        JSON.stringify(connectionData, null, 2),
+      );
+
       throw new Error(
         `Failed to save connection to database: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -104,15 +110,18 @@ export class PostgresConnectionRepository {
     orgId?: string,
   ): Promise<PostgresConnection | null> {
     const conditions = orgId
-      ? and(eq(postgresConnections.id, id), eq(postgresConnections.orgId, orgId))
+      ? and(
+          eq(postgresConnections.id, id),
+          eq(postgresConnections.orgId, orgId),
+        )
       : eq(postgresConnections.id, id);
-    
+
     const [connection] = await this.db
       .select()
       .from(postgresConnections)
       .where(conditions)
       .limit(1);
-    
+
     return connection || null;
   }
 
@@ -171,7 +180,7 @@ export class PostgresConnectionRepository {
       .set(encrypted)
       .where(eq(postgresConnections.id, id))
       .returning();
-    
+
     return connection;
   }
 
@@ -191,8 +200,15 @@ export class PostgresConnectionRepository {
     connection: PostgresConnection,
   ): DecryptedConnectionCredentials {
     // Validate that required encrypted fields exist
-    if (!connection.host || !connection.database || !connection.username || !connection.password) {
-      throw new Error('Connection is missing required credentials. Connection may not be properly initialized.');
+    if (
+      !connection.host ||
+      !connection.database ||
+      !connection.username ||
+      !connection.password
+    ) {
+      throw new Error(
+        'Connection is missing required credentials. Connection may not be properly initialized.',
+      );
     }
 
     return {

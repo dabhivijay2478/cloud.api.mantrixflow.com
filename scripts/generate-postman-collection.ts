@@ -13,10 +13,37 @@ const PORT = process.env.PORT || 8000;
 const API_URL = `http://localhost:${PORT}`;
 const OPENAPI_JSON_URL = `${API_URL}/api/docs-json`; // Swagger JSON endpoint
 const OUTPUT_DIR = path.join(__dirname, '../postman');
-const OUTPUT_FILE = path.join(
-  OUTPUT_DIR,
-  'MantrixFlow_PostgreSQL_Connector.postman_collection.json',
-);
+
+/**
+ * Generate dynamic filename from OpenAPI spec
+ */
+function generateFileName(openapiSpec: OpenAPISpec): string {
+  // Get API name from OpenAPI spec
+  const apiName =
+    (openapiSpec.info?.title && typeof openapiSpec.info.title === 'string')
+      ? openapiSpec.info.title
+      : 'API';
+
+  // Sanitize filename: remove special characters, replace spaces with underscores
+  const sanitizedName = String(apiName)
+    .replace(/[^a-zA-Z0-9\s-_]/g, '') // Remove special chars
+    .replace(/\s+/g, '_') // Replace spaces with underscores
+    .replace(/_+/g, '_') // Replace multiple underscores with single
+    .toLowerCase();
+
+  // Get version if available
+  const version =
+    (openapiSpec.info?.version && typeof openapiSpec.info.version === 'string')
+      ? openapiSpec.info.version
+      : '1.0.0';
+  const sanitizedVersion = String(version).replace(/[^a-zA-Z0-9.-]/g, '');
+
+  // Generate timestamp for uniqueness
+  const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
+  // Generate filename: {api_name}_v{version}_{date}.postman_collection.json
+  return `${sanitizedName}_v${sanitizedVersion}_${timestamp}.postman_collection.json`;
+}
 
 interface OpenAPIPath {
   [method: string]: {
@@ -269,15 +296,19 @@ function fetchOpenAPISpec(): Promise<OpenAPISpec> {
 
         res.on('end', () => {
           try {
-            const spec = JSON.parse(data);
+            const spec = JSON.parse(data) as OpenAPISpec;
             resolve(spec);
           } catch (error) {
-            reject(new Error(`Failed to parse OpenAPI spec: ${error}`));
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
+            reject(new Error(`Failed to parse OpenAPI spec: ${errorMessage}`));
           }
         });
       })
       .on('error', (error) => {
-        reject(new Error(`Failed to fetch OpenAPI spec: ${error.message}`));
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        reject(new Error(`Failed to fetch OpenAPI spec: ${errorMessage}`));
       });
   });
 }
@@ -296,12 +327,16 @@ async function generatePostmanCollection() {
     const openapiSpec = await fetchOpenAPISpec();
     console.log('✅ OpenAPI spec fetched successfully');
 
+    // Generate dynamic filename based on OpenAPI spec
+    const fileName = generateFileName(openapiSpec);
+    const outputFile = path.join(OUTPUT_DIR, fileName);
+
     // Try using the converter library first
     let collection;
     try {
       collection = await convertOpenAPIToPostman(openapiSpec);
       console.log('✅ Converted using openapi-to-postmanv2');
-    } catch (converterError) {
+    } catch {
       console.warn('⚠️  Converter library failed, using manual conversion...');
       collection = convertOpenAPIToPostmanManual(openapiSpec);
     }
@@ -312,12 +347,11 @@ async function generatePostmanCollection() {
     }
 
     // Write collection file
-    fs.writeFileSync(OUTPUT_FILE, JSON.stringify(collection, null, 2));
-    console.log(`✅ Postman collection saved to: ${OUTPUT_FILE}`);
+    fs.writeFileSync(outputFile, JSON.stringify(collection, null, 2));
+    console.log(`✅ Postman collection saved to: ${outputFile}`);
+    console.log(`📄 Filename: ${fileName}`);
     console.log('\n📋 Import this file into Postman to test the API!');
-    console.log(
-      '   File: postman/MantrixFlow_PostgreSQL_Connector.postman_collection.json',
-    );
+    console.log(`   File: postman/${fileName}`);
   } catch (error) {
     console.error('❌ Error generating Postman collection:', error);
     console.log('\n💡 Make sure the server is running: pnpm start:dev');
@@ -327,7 +361,7 @@ async function generatePostmanCollection() {
 
 // Run if executed directly
 if (require.main === module) {
-  generatePostmanCollection();
+  void generatePostmanCollection();
 }
 
 export { generatePostmanCollection };

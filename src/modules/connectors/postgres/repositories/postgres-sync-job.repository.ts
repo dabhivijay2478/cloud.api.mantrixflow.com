@@ -14,9 +14,7 @@ import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 
 @Injectable()
 export class PostgresSyncJobRepository {
-  constructor(
-    @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
-  ) {}
+  constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
   /**
    * Create sync job
@@ -42,13 +40,13 @@ export class PostgresSyncJobRepository {
           eq(postgresSyncJobs.connectionId, connectionId),
         )
       : eq(postgresSyncJobs.id, id);
-    
+
     const [job] = await this.db
       .select()
       .from(postgresSyncJobs)
       .where(conditions)
       .limit(1);
-    
+
     return job || null;
   }
 
@@ -80,7 +78,7 @@ export class PostgresSyncJobRepository {
       .set(updateData)
       .where(eq(postgresSyncJobs.id, id))
       .returning();
-    
+
     return job;
   }
 
@@ -88,9 +86,7 @@ export class PostgresSyncJobRepository {
    * Delete sync job
    */
   async delete(id: string): Promise<void> {
-    await this.db
-      .delete(postgresSyncJobs)
-      .where(eq(postgresSyncJobs.id, id));
+    await this.db.delete(postgresSyncJobs).where(eq(postgresSyncJobs.id, id));
   }
 
   /**

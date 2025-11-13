@@ -59,11 +59,12 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     }
 
     // Detect Supabase connections (supabase.co or supabase.com domains)
-    const isSupabase = actualHost.includes('supabase.co') || actualHost.includes('supabase.com');
-    
+    const isSupabase =
+      actualHost.includes('supabase.co') || actualHost.includes('supabase.com');
+
     // Supabase requires SSL, so enable it if not explicitly disabled
     const shouldUseSSL = credentials.sslEnabled || isSupabase;
-    
+
     // Build pool configuration
     const poolConfig: PoolConfig = {
       host: actualHost,
@@ -221,16 +222,21 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       }
 
       // Detect Supabase connections (supabase.co or supabase.com domains)
-      const isSupabase = actualHost.includes('supabase.co') || actualHost.includes('supabase.com');
-      
+      const isSupabase =
+        actualHost.includes('supabase.co') ||
+        actualHost.includes('supabase.com');
+
       // Supabase requires SSL, so enable it if not explicitly disabled
-      const shouldUseSSL = config.ssl?.enabled !== false && (isSupabase || config.ssl?.enabled === true);
-      
+      const shouldUseSSL =
+        config.ssl?.enabled !== false &&
+        (isSupabase || config.ssl?.enabled === true);
+
       // Increase timeout for Supabase connections (they may need more time)
-      const connectionTimeout = isSupabase 
-        ? (config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS * 2) // Double timeout for Supabase
-        : (config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS);
-      
+      const connectionTimeout = isSupabase
+        ? config.connectionTimeout ||
+          CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS * 2 // Double timeout for Supabase
+        : config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS;
+
       // Create temporary pool for testing
       pool = new Pool({
         host: actualHost,
@@ -243,7 +249,9 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         // For Supabase, use SSL but don't reject unauthorized if no CA cert provided
         ssl: shouldUseSSL
           ? {
-              rejectUnauthorized: config.ssl?.caCert ? (config.ssl.rejectUnauthorized !== false) : false,
+              rejectUnauthorized: config.ssl?.caCert
+                ? config.ssl.rejectUnauthorized !== false
+                : false,
               ca: config.ssl?.caCert
                 ? Buffer.from(config.ssl.caCert)
                 : undefined,
@@ -268,16 +276,21 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       }
     } catch (error) {
       // Map error to user-friendly message without throwing
-      const errorMessage = error instanceof Error ? error.message : 'Connection failed';
-      
+      const errorMessage =
+        error instanceof Error ? error.message : 'Connection failed';
+
       // Check if it's a timeout error
-      if (errorMessage.includes('timeout') || errorMessage.includes('ETIMEDOUT')) {
+      if (
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('ETIMEDOUT')
+      ) {
         return {
           success: false,
-          error: 'Connection timed out. Please check your network and database settings.',
+          error:
+            'Connection timed out. Please check your network and database settings.',
         };
       }
-      
+
       return {
         success: false,
         error: errorMessage,

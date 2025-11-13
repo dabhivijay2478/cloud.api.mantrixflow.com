@@ -57,7 +57,7 @@
             "description": "Test a PostgreSQL connection without saving it. Validates credentials and connectivity.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5433,\n  \"database\": \"postgres\",\n  \"username\": \"postgres\",\n  \"password\": \"mysecretpassword\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+              "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5432,\n  \"database\": \"mydb\",\n  \"username\": \"postgres\",\n  \"password\": \"password123\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -92,7 +92,7 @@
                 "description": "Test a PostgreSQL connection without saving it. Validates credentials and connectivity.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5433,\n  \"database\": \"postgres\",\n  \"username\": \"postgres\",\n  \"password\": \"mysecretpassword\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+                  "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5432,\n  \"database\": \"mydb\",\n  \"username\": \"postgres\",\n  \"password\": \"password123\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -139,7 +139,7 @@
             "description": "Create a new PostgreSQL connection with encrypted credentials.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Local PostgreSQL Database\",\n  \"config\": {\n    \"host\": \"localhost\",\n    \"port\": 5433,\n    \"database\": \"postgres\",\n    \"username\": \"postgres\",\n    \"password\": \"mysecretpassword\",\n    \"ssl\": null,\n    \"sshTunnel\": null,\n    \"connectionTimeout\": 30000,\n    \"queryTimeout\": 60000,\n    \"poolSize\": 5\n  }\n}",
+              "raw": "{\n  \"name\": \"Production Database\",\n  \"config\": null\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -174,7 +174,7 @@
                 "description": "Create a new PostgreSQL connection with encrypted credentials.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"name\": \"Local PostgreSQL Database\",\n  \"config\": {\n    \"host\": \"localhost\",\n    \"port\": 5433,\n    \"database\": \"postgres\",\n    \"username\": \"postgres\",\n    \"password\": \"mysecretpassword\",\n    \"ssl\": null,\n    \"sshTunnel\": null,\n    \"connectionTimeout\": 30000,\n    \"queryTimeout\": 60000,\n    \"poolSize\": 5\n  }\n}",
+                  "raw": "{\n  \"name\": \"Production Database\",\n  \"config\": null\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -211,13 +211,19 @@
                 "postgres",
                 "connections"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4). If not provided, will use the authenticated user's organization ID."
+                }
+              ]
             },
-            "description": "Get all PostgreSQL connections for the current organization."
+            "description": "Get all PostgreSQL connections for the specified organization. Organization ID can be passed as a query parameter or will be extracted from the authenticated user."
           },
           "response": [
             {
-              "name": "200 List of connections",
+              "name": "200 List of connections for the organization",
               "originalRequest": {
                 "method": "GET",
                 "header": [],
@@ -232,9 +238,15 @@
                     "postgres",
                     "connections"
                   ],
-                  "query": []
+                  "query": [
+                    {
+                      "key": "orgId",
+                      "value": "",
+                      "description": "Organization ID (UUID v4). If not provided, will use the authenticated user's organization ID."
+                    }
+                  ]
                 },
-                "description": "Get all PostgreSQL connections for the current organization."
+                "description": "Get all PostgreSQL connections for the specified organization. Organization ID can be passed as a query parameter or will be extracted from the authenticated user."
               },
               "status": "200",
               "code": 200,
@@ -255,7 +267,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -264,11 +276,17 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}"
+                ":id"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4). Optional filter to ensure the connection belongs to the specified organization."
+                }
+              ]
             },
-            "description": "Retrieve a specific PostgreSQL connection by its ID. Use the connectionId from the Create Connection response."
+            "description": "Retrieve a specific PostgreSQL connection by its ID. Organization ID can be passed as a query parameter for filtering."
           },
           "response": [
             {
@@ -277,7 +295,7 @@
                 "method": "GET",
                 "header": [],
                 "url": {
-                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}",
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
                   "host": [
                     "{{baseUrl}}"
                   ],
@@ -286,11 +304,17 @@
                     "connectors",
                     "postgres",
                     "connections",
-                    "{{connectionId}}"
+                    ":id"
                   ],
-                  "query": []
+                  "query": [
+                    {
+                      "key": "orgId",
+                      "value": "",
+                      "description": "Organization ID (UUID v4). Optional filter to ensure the connection belongs to the specified organization."
+                    }
+                  ]
                 },
-                "description": "Retrieve a specific PostgreSQL connection by its ID. Use the connectionId from the Create Connection response."
+                "description": "Retrieve a specific PostgreSQL connection by its ID. Organization ID can be passed as a query parameter for filtering."
               },
               "status": "200",
               "code": 200,
@@ -306,12 +330,17 @@
           ]
         },
         {
-          "name": "PATCH /api/connectors/postgres/connections/{{connectionId}}",
+          "name": "Update connection",
           "request": {
             "method": "PATCH",
-            "header": [],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -320,21 +349,89 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}"
+                ":id"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4). Required to verify the connection belongs to your organization."
+                }
+              ]
             },
-            "description": ""
+            "description": "Update an existing PostgreSQL connection. Only provided fields will be updated. Organization ID is required to verify ownership.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Production Database\",\n  \"host\": \"localhost\",\n  \"port\": 5432,\n  \"database\": \"mydb\",\n  \"username\": \"postgres\",\n  \"password\": \"password\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
-          "response": []
+          "response": [
+            {
+              "name": "200 Connection updated successfully",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections",
+                    ":id"
+                  ],
+                  "query": [
+                    {
+                      "key": "orgId",
+                      "value": "",
+                      "description": "Organization ID (UUID v4). Required to verify the connection belongs to your organization."
+                    }
+                  ]
+                },
+                "description": "Update an existing PostgreSQL connection. Only provided fields will be updated. Organization ID is required to verify ownership.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Production Database\",\n  \"host\": \"localhost\",\n  \"port\": 5432,\n  \"database\": \"mydb\",\n  \"username\": \"postgres\",\n  \"password\": \"password\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "200",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"name\": \"Production Database\",\n  \"status\": \"active\",\n  \"port\": 5432,\n  \"sslEnabled\": false,\n  \"sshTunnelEnabled\": false,\n  \"connectionPoolSize\": 5,\n  \"queryTimeoutSeconds\": 60,\n  \"lastConnectedAt\": \"string\",\n  \"createdAt\": \"string\",\n  \"updatedAt\": \"string\"\n}"
+            }
+          ]
         },
         {
-          "name": "DELETE /api/connectors/postgres/connections/{{connectionId}}",
+          "name": "Delete connection",
           "request": {
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -343,11 +440,17 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}"
+                ":id"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4). Required to verify the connection belongs to your organization."
+                }
+              ]
             },
-            "description": ""
+            "description": "Delete a PostgreSQL connection. Organization ID is required to verify ownership."
           },
           "response": []
         },
@@ -357,7 +460,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/databases",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/databases",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -366,10 +469,16 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "databases"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
             "description": "List all databases available in the PostgreSQL connection."
           },
@@ -381,7 +490,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/schemas",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/schemas",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -390,10 +499,16 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "schemas"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
             "description": "List all schemas available in the PostgreSQL connection."
           },
@@ -405,7 +520,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/tables?schema=public",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/tables",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -414,14 +529,19 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "tables"
               ],
               "query": [
                 {
                   "key": "schema",
-                  "value": "public",
+                  "value": "",
                   "description": "Schema name"
+                },
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
                 }
               ]
             },
@@ -430,12 +550,12 @@
           "response": []
         },
         {
-          "name": "GET /api/connectors/postgres/connections/{{connectionId}}/tables/{table}/schema",
+          "name": "Get table schema",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/tables/{table}/schema",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/tables/{table}/schema",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -444,30 +564,35 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "tables",
-                "{{tableName}}",
+                ":table",
                 "schema"
               ],
               "query": [
                 {
                   "key": "schema",
                   "value": "",
-                  "description": ""
+                  "description": "Schema name"
+                },
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
                 }
               ]
             },
-            "description": ""
+            "description": "Get detailed schema information for a specific table."
           },
           "response": []
         },
         {
-          "name": "POST /api/connectors/postgres/connections/{{connectionId}}/refresh-schema",
+          "name": "Refresh schema cache",
           "request": {
             "method": "POST",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/refresh-schema",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/refresh-schema",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -476,12 +601,18 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "refresh-schema"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Force refresh the schema cache for a connection. This will re-discover all databases, schemas, and tables."
           },
           "response": []
         },
@@ -496,7 +627,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/query",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -505,15 +636,21 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "query"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
             "description": "Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"query\": \"SELECT version();\",\n  \"params\": [],\n  \"timeout\": 60000\n}",
+              "raw": "{\n  \"query\": \"SELECT * FROM users LIMIT 10\",\n  \"params\": [\n    \"value1\",\n    \"value2\"\n  ],\n  \"timeout\": 60000\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -533,7 +670,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/query",
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query",
                   "host": [
                     "{{baseUrl}}"
                   ],
@@ -542,15 +679,21 @@
                     "connectors",
                     "postgres",
                     "connections",
-                    "{{connectionId}}",
+                    ":id",
                     "query"
                   ],
-                  "query": []
+                  "query": [
+                    {
+                      "key": "orgId",
+                      "value": "",
+                      "description": "Organization ID (UUID v4)"
+                    }
+                  ]
                 },
                 "description": "Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"query\": \"SELECT version();\",\n  \"params\": [],\n  \"timeout\": 60000\n}",
+                  "raw": "{\n  \"query\": \"SELECT * FROM users LIMIT 10\",\n  \"params\": [\n    \"value1\",\n    \"value2\"\n  ],\n  \"timeout\": 60000\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -572,12 +715,17 @@
           ]
         },
         {
-          "name": "POST /api/connectors/postgres/connections/{{connectionId}}/query/explain",
+          "name": "Explain query execution plan",
           "request": {
             "method": "POST",
-            "header": [],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/query/explain",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query/explain",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -586,13 +734,28 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "query",
                 "explain"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Get the execution plan for a SQL query without executing it. Useful for query optimization.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"string\",\n  \"params\": [\n    null\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         },
@@ -607,7 +770,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/sync",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -616,15 +779,21 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "sync"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
             "description": "Create a new data synchronization job to sync PostgreSQL table data to Supabase.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"tableName\": \"pg_user\",\n  \"schema\": \"pg_catalog\",\n  \"syncMode\": \"full\",\n  \"incrementalColumn\": null,\n  \"customWhereClause\": null,\n  \"syncFrequency\": \"manual\"\n}",
+              "raw": "{\n  \"tableName\": \"users\",\n  \"schema\": \"public\",\n  \"syncMode\": \"full\",\n  \"incrementalColumn\": \"updated_at\",\n  \"customWhereClause\": \"status = 'active'\",\n  \"syncFrequency\": \"manual\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -644,7 +813,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/sync",
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync",
                   "host": [
                     "{{baseUrl}}"
                   ],
@@ -653,15 +822,21 @@
                     "connectors",
                     "postgres",
                     "connections",
-                    "{{connectionId}}",
+                    ":id",
                     "sync"
                   ],
-                  "query": []
+                  "query": [
+                    {
+                      "key": "orgId",
+                      "value": "",
+                      "description": "Organization ID (UUID v4)"
+                    }
+                  ]
                 },
                 "description": "Create a new data synchronization job to sync PostgreSQL table data to Supabase.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"tableName\": \"pg_user\",\n  \"schema\": \"pg_catalog\",\n  \"syncMode\": \"full\",\n  \"incrementalColumn\": null,\n  \"customWhereClause\": null,\n  \"syncFrequency\": \"manual\"\n}",
+                  "raw": "{\n  \"tableName\": \"users\",\n  \"schema\": \"public\",\n  \"syncMode\": \"full\",\n  \"incrementalColumn\": \"updated_at\",\n  \"customWhereClause\": \"status = 'active'\",\n  \"syncFrequency\": \"manual\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -683,12 +858,12 @@
           ]
         },
         {
-          "name": "GET /api/connectors/postgres/connections/{{connectionId}}/sync-jobs",
+          "name": "List sync jobs",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/sync-jobs",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -697,22 +872,28 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "sync-jobs"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Get all synchronization jobs for a connection."
           },
           "response": []
         },
         {
-          "name": "GET /api/connectors/postgres/connections/{{connectionId}}/sync-jobs/{jobId}",
+          "name": "Get sync job by ID",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/sync-jobs/{jobId}",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -721,23 +902,29 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "sync-jobs",
-                "{{syncJobId}}"
+                ":jobId"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Retrieve details of a specific synchronization job."
           },
           "response": []
         },
         {
-          "name": "POST /api/connectors/postgres/connections/{{connectionId}}/sync-jobs/{jobId}/cancel",
+          "name": "Cancel sync job",
           "request": {
             "method": "POST",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/sync-jobs/{jobId}/cancel",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}/cancel",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -746,24 +933,35 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "sync-jobs",
-                "{{syncJobId}}",
+                ":jobId",
                 "cancel"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Cancel a running or pending synchronization job."
           },
           "response": []
         },
         {
-          "name": "PATCH /api/connectors/postgres/connections/{{connectionId}}/sync-jobs/{jobId}/schedule",
+          "name": "Update sync schedule",
           "request": {
             "method": "PATCH",
-            "header": [],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/sync-jobs/{jobId}/schedule",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/sync-jobs/{jobId}/schedule",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -772,24 +970,39 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "sync-jobs",
-                "{{syncJobId}}",
+                ":jobId",
                 "schedule"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Update the synchronization frequency for a sync job. This will update the sync job's frequency and nextSyncAt.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"syncFrequency\": \"manual\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         },
         {
-          "name": "GET /api/connectors/postgres/connections/{{connectionId}}/health",
+          "name": "Get connection health",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/health",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/health",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -798,22 +1011,28 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "health"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Check the health status of a PostgreSQL connection, including connectivity and pool statistics."
           },
           "response": []
         },
         {
-          "name": "GET /api/connectors/postgres/connections/{{connectionId}}/query-logs",
+          "name": "Get query logs",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/query-logs",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/query-logs",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -822,33 +1041,38 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "query-logs"
               ],
               "query": [
                 {
                   "key": "limit",
                   "value": "",
-                  "description": ""
+                  "description": "Maximum number of logs to return"
                 },
                 {
                   "key": "offset",
                   "value": "",
-                  "description": ""
+                  "description": "Number of logs to skip"
+                },
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
                 }
               ]
             },
-            "description": ""
+            "description": "Retrieve query execution logs for a connection. Supports pagination."
           },
           "response": []
         },
         {
-          "name": "GET /api/connectors/postgres/connections/{{connectionId}}/metrics",
+          "name": "Get connection metrics",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/metrics",
+              "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}/metrics",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -857,12 +1081,18 @@
                 "connectors",
                 "postgres",
                 "connections",
-                "{{connectionId}}",
+                ":id",
                 "metrics"
               ],
-              "query": []
+              "query": [
+                {
+                  "key": "orgId",
+                  "value": "",
+                  "description": "Organization ID (UUID v4)"
+                }
+              ]
             },
-            "description": ""
+            "description": "Get performance metrics and statistics for a connection, including query counts, execution times, and pool utilization."
           },
           "response": []
         }
@@ -879,24 +1109,6 @@
       "key": "baseUrl1",
       "value": "https://api.mantrixflow.com",
       "type": "string"
-    },
-    {
-      "key": "connectionId",
-      "value": "",
-      "type": "string",
-      "description": "Connection ID from Create Connection response"
-    },
-    {
-      "key": "syncJobId",
-      "value": "",
-      "type": "string",
-      "description": "Sync Job ID from Create Sync Job response"
-    },
-    {
-      "key": "tableName",
-      "value": "pg_user",
-      "type": "string",
-      "description": "Table name for schema discovery"
     }
   ]
 }

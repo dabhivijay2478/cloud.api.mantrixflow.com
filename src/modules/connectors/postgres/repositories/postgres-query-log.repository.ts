@@ -15,9 +15,7 @@ import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 
 @Injectable()
 export class PostgresQueryLogRepository {
-  constructor(
-    @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
-  ) {}
+  constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
   /**
    * Create query log entry
@@ -74,7 +72,7 @@ export class PostgresQueryLogRepository {
     const result = await this.db
       .delete(postgresQueryLogs)
       .where(lt(postgresQueryLogs.createdAt, cutoffDate));
-    
+
     // Drizzle returns the result, but we need to check how many rows were affected
     // Since Drizzle doesn't return rowCount directly, we'll return 0 for now
     // In a real scenario, you might want to query first to get the count

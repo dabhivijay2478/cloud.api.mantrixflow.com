@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsArray, IsNumber, IsOptional, Min, Max } from 'class-validator';
+import {
+  IsString,
+  IsArray,
+  IsNumber,
+  IsOptional,
+  Min,
+  Max,
+} from 'class-validator';
 
 export class ExecuteQueryDto {
   @ApiProperty({
@@ -53,7 +60,9 @@ export class QueryExecutionResponseDto {
   @ApiProperty({ description: 'Execution time in milliseconds', example: 45 })
   executionTimeMs: number;
 
-  @ApiProperty({ description: 'Query execution plan (if explain was requested)', required: false })
+  @ApiProperty({
+    description: 'Query execution plan (if explain was requested)',
+    required: false,
+  })
   queryPlan?: any;
 }
-

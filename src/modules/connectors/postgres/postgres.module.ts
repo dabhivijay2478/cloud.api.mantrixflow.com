@@ -25,7 +25,10 @@ import { PostgresHealthMonitorService } from './services/postgres-health-monitor
 import { EncryptionService } from '../../../common/encryption/encryption.service';
 
 // Database
-import { createDrizzleDatabase, DrizzleDatabase } from '../../../database/drizzle/database';
+import {
+  createDrizzleDatabase,
+  DrizzleDatabase,
+} from '../../../database/drizzle/database';
 
 @Module({
   controllers: [PostgresController],

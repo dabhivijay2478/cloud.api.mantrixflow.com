@@ -14,8 +14,10 @@ import {
   Query,
   HttpCode,
   HttpStatus,
-  UseGuards,
   Request,
+  BadRequestException,
+  NotFoundException,
+  HttpException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -27,15 +29,43 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 import { PostgresService } from './postgres.service';
-import { PostgresConnectionConfig, ExecuteQuerySchema } from './postgres.types';
+import { PostgresConnectionConfig } from './postgres.types';
 import { createErrorResponse } from './utils/error-mapper.util';
-import { TestConnectionDto, TestConnectionResponseDto } from './dto/test-connection.dto';
-import { CreateConnectionDto, ConnectionResponseDto } from './dto/create-connection.dto';
-import { ExecuteQueryDto, QueryExecutionResponseDto } from './dto/execute-query.dto';
-import { CreateSyncJobDto, SyncJobResponseDto } from './dto/create-sync-job.dto';
+import {
+  TestConnectionDto,
+  TestConnectionResponseDto,
+} from './dto/test-connection.dto';
+import {
+  CreateConnectionDto,
+  ConnectionResponseDto,
+} from './dto/create-connection.dto';
+import {
+  ExecuteQueryDto,
+  QueryExecutionResponseDto,
+} from './dto/execute-query.dto';
+import {
+  CreateSyncJobDto,
+  SyncJobResponseDto,
+} from './dto/create-sync-job.dto';
+import { UpdateConnectionDto } from './dto/update-connection.dto';
+import {
+  ApiSuccessResponse,
+  ApiListResponse,
+  ApiDeleteResponse,
+  createSuccessResponse,
+  createListResponse,
+  createDeleteResponse,
+} from '../../../common/dto/api-response.dto';
 
 // TODO: Create and use actual auth guards
 // @UseGuards(JwtAuthGuard, OrgGuard)
+
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id?: string;
+    orgId?: string;
+  };
+}
 
 @ApiTags('postgres')
 @ApiBearerAuth('JWT-auth')
@@ -50,7 +80,8 @@ export class PostgresController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Test PostgreSQL connection',
-    description: 'Test a PostgreSQL connection without saving it. Validates credentials and connectivity.',
+    description:
+      'Test a PostgreSQL connection without saving it. Validates credentials and connectivity.',
   })
   @ApiBody({ type: TestConnectionDto })
   @ApiResponse({
@@ -58,7 +89,10 @@ export class PostgresController {
     description: 'Connection test successful',
     type: TestConnectionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Invalid connection parameters' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid connection parameters',
+  })
   async testConnection(@Body() dto: TestConnectionDto) {
     try {
       // Convert DTO to PostgresConnectionConfig
@@ -88,10 +122,29 @@ export class PostgresController {
         queryTimeout: dto.queryTimeout,
         poolSize: dto.poolSize,
       };
-      return await this.postgresService.testConnection(config);
+      const testResult = await this.postgresService.testConnection(config);
+      return createSuccessResponse(
+        testResult,
+        testResult.success
+          ? 'Connection test successful'
+          : 'Connection test failed',
+        testResult.success ? HttpStatus.OK : HttpStatus.BAD_REQUEST,
+        {
+          success: testResult.success,
+          responseTimeMs: testResult.responseTimeMs,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -102,19 +155,26 @@ export class PostgresController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create PostgreSQL connection',
-    description: 'Create a new PostgreSQL connection with encrypted credentials.',
+    description:
+      'Create a new PostgreSQL connection with encrypted credentials.',
   })
   @ApiBody({ type: CreateConnectionDto })
   @ApiResponse({
     status: 201,
     description: 'Connection created successfully',
-    type: ConnectionResponseDto,
+    type: ApiSuccessResponse,
   })
-  @ApiResponse({ status: 400, description: 'Invalid connection data or connection test failed' })
-  @ApiResponse({ status: 403, description: 'Maximum connections exceeded' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid connection data or connection test failed',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Maximum connections exceeded',
+  })
   async createConnection(
     @Body() body: CreateConnectionDto,
-    @Request() req: any, // TODO: Use proper request type with user/org
+    @Request() req: AuthenticatedRequest,
   ) {
     try {
       const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
@@ -148,10 +208,32 @@ export class PostgresController {
         poolSize: body.config.poolSize,
       };
 
-      return await this.postgresService.createConnection(orgId, userId, body.name, config);
+      const connection = await this.postgresService.createConnection(
+        orgId,
+        userId,
+        body.name,
+        config,
+      );
+      return createSuccessResponse(
+        connection,
+        'Connection created successfully',
+        HttpStatus.CREATED,
+        {
+          connectionId: connection.id,
+          connectionName: connection.name,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -161,20 +243,60 @@ export class PostgresController {
   @Get('connections')
   @ApiOperation({
     summary: 'List all connections',
-    description: 'Get all PostgreSQL connections for the current organization.',
+    description:
+      'Get all PostgreSQL connections for the specified organization. Organization ID can be passed as a query parameter or will be extracted from the authenticated user.',
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description:
+      "Organization ID (UUID v4). If not provided, will use the authenticated user's organization ID.",
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    type: String,
   })
   @ApiResponse({
     status: 200,
-    description: 'List of connections',
-    type: [ConnectionResponseDto],
+    description: 'List of connections for the organization',
+    type: ApiListResponse,
   })
-  async listConnections(@Request() req: any) {
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid organization ID format',
+  })
+  async listConnections(
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
-      return await this.postgresService.listConnections(orgId);
+      // Use query parameter if provided, otherwise try to get from auth, otherwise throw error
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+        );
+      }
+      const connections = await this.postgresService.listConnections(finalOrgId);
+      return createListResponse(
+        connections,
+        `Found ${connections.length} connection(s)`,
+        {
+          total: connections.length,
+          limit: connections.length,
+          offset: 0,
+          hasMore: false,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -184,22 +306,69 @@ export class PostgresController {
   @Get('connections/:id')
   @ApiOperation({
     summary: 'Get connection by ID',
-    description: 'Retrieve a specific PostgreSQL connection by its ID.',
+    description:
+      'Retrieve a specific PostgreSQL connection by its ID. Organization ID can be passed as a query parameter for filtering.',
   })
-  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description:
+      'Organization ID (UUID v4). Optional filter to ensure the connection belongs to the specified organization.',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    type: String,
+  })
   @ApiResponse({
     status: 200,
     description: 'Connection details',
-    type: ConnectionResponseDto,
+    type: ApiSuccessResponse,
   })
-  @ApiResponse({ status: 404, description: 'Connection not found' })
-  async getConnection(@Param('id') id: string, @Request() req: any) {
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid connection ID or organization ID format',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Connection not found',
+  })
+  async getConnection(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
-      return await this.postgresService.getConnection(id, orgId);
+      // Use query parameter if provided, otherwise try to get from auth
+      const finalOrgId = orgId || req?.user?.orgId;
+      const connection = await this.postgresService.getConnection(
+        id,
+        finalOrgId,
+      );
+      return createSuccessResponse(
+        connection,
+        'Connection retrieved successfully',
+        HttpStatus.OK,
+        {
+          connectionId: connection.id,
+          connectionName: connection.name,
+          connectionStatus: connection.status,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -207,17 +376,84 @@ export class PostgresController {
    * Update connection
    */
   @Patch('connections/:id')
+  @ApiOperation({
+    summary: 'Update connection',
+    description:
+      'Update an existing PostgreSQL connection. Only provided fields will be updated. Organization ID is required to verify ownership.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: true,
+    description:
+      'Organization ID (UUID v4). Required to verify the connection belongs to your organization.',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    type: String,
+  })
+  @ApiBody({
+    type: UpdateConnectionDto,
+    description:
+      'Connection update data. Only include fields you want to update.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Connection updated successfully',
+    type: ApiSuccessResponse,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid connection data, organization ID, or connection test failed',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Connection not found',
+  })
   async updateConnection(
     @Param('id') id: string,
-    @Body() updates: Partial<PostgresConnectionConfig>,
-    @Request() req: any,
+    @Query('orgId') orgId: string,
+    @Body() updates: UpdateConnectionDto,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
-      return await this.postgresService.updateConnection(id, orgId, updates);
+      // Use query parameter if provided, otherwise try to get from auth
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter.',
+        );
+      }
+      const updated = await this.postgresService.updateConnection(
+        id,
+        finalOrgId,
+        updates,
+      );
+      return createSuccessResponse(
+        updated,
+        'Connection updated successfully',
+        HttpStatus.OK,
+        {
+          connectionId: updated.id,
+          connectionName: updated.name,
+          updatedFields: Object.keys(updates),
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -225,14 +461,68 @@ export class PostgresController {
    * Delete connection
    */
   @Delete('connections/:id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async deleteConnection(@Param('id') id: string, @Request() req: any) {
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete connection',
+    description:
+      'Delete a PostgreSQL connection. Organization ID is required to verify ownership.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: true,
+    description:
+      'Organization ID (UUID v4). Required to verify the connection belongs to your organization.',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Connection deleted successfully',
+    type: ApiDeleteResponse,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid connection ID or organization ID format',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Connection not found',
+  })
+  async deleteConnection(
+    @Param('id') id: string,
+    @Query('orgId') orgId: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
-      await this.postgresService.deleteConnection(id, orgId);
+      // Use query parameter if provided, otherwise try to get from auth
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter.',
+        );
+      }
+      await this.postgresService.deleteConnection(id, finalOrgId);
+      return createDeleteResponse(
+        id,
+        'Connection deleted successfully',
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -244,16 +534,49 @@ export class PostgresController {
     summary: 'Discover databases',
     description: 'List all databases available in the PostgreSQL connection.',
   })
-  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
-  @ApiResponse({ status: 200, description: 'List of databases' })
-  async getDatabases(@Param('id') id: string, @Request() req: any) {
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of databases',
+  })
+  async getDatabases(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      const schema = await this.postgresService.discoverSchema(id, orgId);
-      return schema.databases;
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const schema = await this.postgresService.discoverSchema(id, finalOrgId);
+      return createSuccessResponse(
+        schema.databases,
+        `Found ${schema.databases.length} database(s)`,
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          totalDatabases: schema.databases.length,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -265,16 +588,49 @@ export class PostgresController {
     summary: 'Discover schemas',
     description: 'List all schemas available in the PostgreSQL connection.',
   })
-  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
-  @ApiResponse({ status: 200, description: 'List of schemas' })
-  async getSchemas(@Param('id') id: string, @Request() req: any) {
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of schemas',
+  })
+  async getSchemas(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      const schema = await this.postgresService.discoverSchema(id, orgId);
-      return schema.schemas;
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const schema = await this.postgresService.discoverSchema(id, finalOrgId);
+      return createSuccessResponse(
+        schema.schemas,
+        `Found ${schema.schemas.length} schema(s)`,
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          totalSchemas: schema.schemas.length,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -286,21 +642,63 @@ export class PostgresController {
     summary: 'Discover tables',
     description: 'List all tables in a specific schema.',
   })
-  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
-  @ApiQuery({ name: 'schema', description: 'Schema name', required: false, example: 'public' })
-  @ApiResponse({ status: 200, description: 'List of tables' })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'schema',
+    description: 'Schema name',
+    required: false,
+    example: 'public',
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of tables',
+  })
   async getTables(
     @Param('id') id: string,
     @Query('schema') schema: string = 'public',
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      const discovery = await this.postgresService.discoverSchema(id, orgId);
-      return discovery.tables.filter((t) => !schema || t.schema === schema);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const discovery = await this.postgresService.discoverSchema(
+        id,
+        finalOrgId,
+      );
+      const filteredTables = discovery.tables.filter(
+        (t) => !schema || t.schema === schema,
+      );
+      return createListResponse(
+        filteredTables,
+        `Found ${filteredTables.length} table(s)${schema ? ` in schema "${schema}"` : ''}`,
+        {
+          total: filteredTables.length,
+          limit: filteredTables.length,
+          offset: 0,
+          hasMore: false,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -308,25 +706,82 @@ export class PostgresController {
    * Get table schema
    */
   @Get('connections/:id/tables/:table/schema')
+  @ApiOperation({
+    summary: 'Get table schema',
+    description: 'Get detailed schema information for a specific table.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiParam({
+    name: 'table',
+    description: 'Table name',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'schema',
+    description: 'Schema name',
+    required: false,
+    example: 'public',
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Table schema details',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Table not found',
+  })
   async getTableSchema(
     @Param('id') id: string,
     @Param('table') table: string,
     @Query('schema') schema: string = 'public',
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      const discovery = await this.postgresService.discoverSchema(id, orgId);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const discovery = await this.postgresService.discoverSchema(
+        id,
+        finalOrgId,
+      );
       const tableInfo = discovery.tables.find(
         (t) => t.name === table && t.schema === schema,
       );
       if (!tableInfo) {
-        throw new Error('Table not found');
+        throw new NotFoundException(
+          `Table "${table}" not found in schema "${schema}"`,
+        );
       }
-      return tableInfo;
+      return createSuccessResponse(
+        tableInfo,
+        `Table "${table}" schema retrieved successfully`,
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          tableName: table,
+          schemaName: schema,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -334,13 +789,60 @@ export class PostgresController {
    * Refresh schema cache
    */
   @Post('connections/:id/refresh-schema')
-  async refreshSchema(@Param('id') id: string, @Request() req: any) {
+  @ApiOperation({
+    summary: 'Refresh schema cache',
+    description:
+      'Force refresh the schema cache for a connection. This will re-discover all databases, schemas, and tables.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Schema cache refreshed successfully',
+  })
+  async refreshSchema(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.discoverSchema(id, orgId, true);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const schema = await this.postgresService.discoverSchema(
+        id,
+        finalOrgId,
+        true,
+      );
+      return createSuccessResponse(
+        schema,
+        'Schema cache refreshed successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          totalDatabases: schema.databases.length,
+          totalSchemas: schema.schemas.length,
+          totalTables: schema.tables.length,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -350,36 +852,72 @@ export class PostgresController {
   @Post('connections/:id/query')
   @ApiOperation({
     summary: 'Execute SQL query',
-    description: 'Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.',
+    description:
+      'Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.',
   })
-  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
   @ApiBody({ type: ExecuteQueryDto })
   @ApiResponse({
     status: 200,
     description: 'Query executed successfully',
     type: QueryExecutionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Invalid query or query syntax error' })
-  @ApiResponse({ status: 403, description: 'Query contains dangerous keywords or rate limit exceeded' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid query or query syntax error',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Query contains dangerous keywords or rate limit exceeded',
+  })
   async executeQuery(
     @Param('id') id: string,
     @Body() body: ExecuteQueryDto,
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      const userId = req.user?.id || 'default-user-id';
-      return await this.postgresService.executeQuery(
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const userId = req?.user?.id || 'default-user-id';
+      const result = await this.postgresService.executeQuery(
         id,
-        orgId,
+        finalOrgId,
         userId,
         body.query,
         body.params,
         body.timeout,
       );
+      return createSuccessResponse(
+        result,
+        'Query executed successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          rowsReturned: result.rowCount,
+          executionTimeMs: result.executionTimeMs,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -387,22 +925,76 @@ export class PostgresController {
    * Explain query
    */
   @Post('connections/:id/query/explain')
+  @ApiOperation({
+    summary: 'Explain query execution plan',
+    description:
+      'Get the execution plan for a SQL query without executing it. Useful for query optimization.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'SQL query to explain',
+        },
+        params: {
+          type: 'array',
+          items: { type: 'any' },
+          description: 'Query parameters',
+        },
+      },
+      required: ['query'],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Query execution plan',
+  })
   async explainQuery(
     @Param('id') id: string,
-    @Body() body: { query: string; params?: any[] },
-    @Request() req: any,
+    @Body() body: { query: string; params?: unknown[] },
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.explainQuery(
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const plan = await this.postgresService.explainQuery(
         id,
-        orgId,
+        finalOrgId,
         body.query,
         body.params,
       );
+      return createSuccessResponse(
+        plan,
+        'Query execution plan generated successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -412,26 +1004,41 @@ export class PostgresController {
   @Post('connections/:id/sync')
   @ApiOperation({
     summary: 'Create sync job',
-    description: 'Create a new data synchronization job to sync PostgreSQL table data to Supabase.',
+    description:
+      'Create a new data synchronization job to sync PostgreSQL table data to Supabase.',
   })
-  @ApiParam({ name: 'id', description: 'Connection ID', type: String })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
   @ApiBody({ type: CreateSyncJobDto })
   @ApiResponse({
     status: 201,
     description: 'Sync job created successfully',
     type: SyncJobResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Invalid sync configuration' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid sync configuration',
+  })
   async createSync(
     @Param('id') id: string,
     @Body() body: CreateSyncJobDto,
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.createSyncJob(
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const syncJob = await this.postgresService.createSyncJob(
         id,
-        orgId,
+        finalOrgId,
         body.tableName,
         body.schema || 'public',
         body.syncMode,
@@ -439,9 +1046,28 @@ export class PostgresController {
         body.customWhereClause,
         body.syncFrequency || 'manual',
       );
+      return createSuccessResponse(
+        syncJob,
+        'Sync job created successfully',
+        HttpStatus.CREATED,
+        {
+          connectionId: id,
+          jobId: syncJob.id,
+          tableName: body.tableName,
+          syncMode: body.syncMode,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -449,13 +1075,54 @@ export class PostgresController {
    * Get sync jobs
    */
   @Get('connections/:id/sync-jobs')
-  async getSyncJobs(@Param('id') id: string, @Request() req: any) {
+  @ApiOperation({
+    summary: 'List sync jobs',
+    description: 'Get all synchronization jobs for a connection.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of sync jobs',
+  })
+  async getSyncJobs(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.getSyncJobs(id, orgId);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const syncJobs = await this.postgresService.getSyncJobs(id, finalOrgId);
+      return createListResponse(
+        syncJobs,
+        `Found ${syncJobs.length} sync job(s)`,
+        {
+          total: syncJobs.length,
+          limit: syncJobs.length,
+          offset: 0,
+          hasMore: false,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -463,17 +1130,68 @@ export class PostgresController {
    * Get sync job by ID
    */
   @Get('connections/:id/sync-jobs/:jobId')
+  @ApiOperation({
+    summary: 'Get sync job by ID',
+    description: 'Retrieve details of a specific synchronization job.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiParam({
+    name: 'jobId',
+    description: 'Sync job ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Sync job details',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Sync job not found',
+  })
   async getSyncJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.getSyncJob(id, jobId, orgId);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const syncJob = await this.postgresService.getSyncJob(
+        id,
+        jobId,
+        finalOrgId,
+      );
+      return createSuccessResponse(
+        syncJob,
+        'Sync job retrieved successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          jobId: syncJob.id,
+          jobStatus: syncJob.status,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -481,17 +1199,63 @@ export class PostgresController {
    * Cancel sync job
    */
   @Post('connections/:id/sync-jobs/:jobId/cancel')
+  @ApiOperation({
+    summary: 'Cancel sync job',
+    description: 'Cancel a running or pending synchronization job.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiParam({
+    name: 'jobId',
+    description: 'Sync job ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Sync job cancelled successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Sync job not found',
+  })
   async cancelSyncJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      await this.postgresService.cancelSyncJob(id, jobId, orgId);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      await this.postgresService.cancelSyncJob(id, jobId, finalOrgId);
+      return createSuccessResponse(
+        { jobId, connectionId: id },
+        'Sync job cancelled successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          jobId,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -499,20 +1263,76 @@ export class PostgresController {
    * Update sync schedule
    */
   @Patch('connections/:id/sync-jobs/:jobId/schedule')
-  async updateSyncSchedule(
+  @ApiOperation({
+    summary: 'Update sync schedule',
+    description:
+      "Update the synchronization frequency for a sync job. This will update the sync job's frequency and nextSyncAt.",
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiParam({
+    name: 'jobId',
+    description: 'Sync job ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        syncFrequency: {
+          type: 'string',
+          enum: ['manual', '15min', '1hour', '24hours'],
+          description: 'Sync frequency',
+        },
+      },
+      required: ['syncFrequency'],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Schedule updated successfully',
+  })
+  updateSyncSchedule(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
     @Body() body: { syncFrequency: 'manual' | '15min' | '1hour' | '24hours' },
-    @Request() req: any,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
       // TODO: Implement schedule update
       // This would update the sync job's frequency and nextSyncAt
-      return { message: 'Schedule updated' };
+      return createSuccessResponse(
+        {
+          connectionId: id,
+          jobId,
+          syncFrequency: body.syncFrequency,
+        },
+        'Schedule updated successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          jobId,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -520,13 +1340,57 @@ export class PostgresController {
    * Get connection health
    */
   @Get('connections/:id/health')
-  async getHealth(@Param('id') id: string, @Request() req: any) {
+  @ApiOperation({
+    summary: 'Get connection health',
+    description:
+      'Check the health status of a PostgreSQL connection, including connectivity and pool statistics.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Connection health status',
+  })
+  async getHealth(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.getConnectionHealth(id, orgId);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const health = await this.postgresService.getConnectionHealth(
+        id,
+        finalOrgId,
+      );
+      return createSuccessResponse(
+        health,
+        'Connection health retrieved successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          status: health.status,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -534,23 +1398,76 @@ export class PostgresController {
    * Get query logs
    */
   @Get('connections/:id/query-logs')
+  @ApiOperation({
+    summary: 'Get query logs',
+    description:
+      'Retrieve query execution logs for a connection. Supports pagination.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'limit',
+    description: 'Maximum number of logs to return',
+    required: false,
+    example: '100',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'offset',
+    description: 'Number of logs to skip',
+    required: false,
+    example: '0',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of query logs',
+  })
   async getQueryLogs(
     @Param('id') id: string,
     @Query('limit') limit: string = '100',
     @Query('offset') offset: string = '0',
-    @Request() req: any,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.getQueryLogs(
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const logs = await this.postgresService.getQueryLogs(
         id,
-        orgId,
-        parseInt(limit),
-        parseInt(offset),
+        finalOrgId,
+        parseInt(limit, 10),
+        parseInt(offset, 10),
+      );
+      return createListResponse(
+        logs,
+        `Found ${logs.length} query log(s)`,
+        {
+          total: logs.length,
+          limit: parseInt(limit, 10),
+          offset: parseInt(offset, 10),
+          hasMore: logs.length === parseInt(limit, 10),
+        },
       );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 
@@ -558,13 +1475,57 @@ export class PostgresController {
    * Get connection metrics
    */
   @Get('connections/:id/metrics')
-  async getMetrics(@Param('id') id: string, @Request() req: any) {
+  @ApiOperation({
+    summary: 'Get connection metrics',
+    description:
+      'Get performance metrics and statistics for a connection, including query counts, execution times, and pool utilization.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Connection ID (UUID v4)',
+    type: String,
+  })
+  @ApiQuery({
+    name: 'orgId',
+    required: false,
+    description: 'Organization ID (UUID v4)',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Connection metrics',
+  })
+  async getMetrics(
+    @Param('id') id: string,
+    @Query('orgId') orgId?: string,
+    @Request() req?: AuthenticatedRequest,
+  ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      return await this.postgresService.getConnectionMetrics(id, orgId);
+      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const metrics = await this.postgresService.getConnectionMetrics(
+        id,
+        finalOrgId,
+      );
+      return createSuccessResponse(
+        metrics,
+        'Connection metrics retrieved successfully',
+        HttpStatus.OK,
+        {
+          connectionId: id,
+          totalQueries: metrics.totalQueries,
+        },
+      );
     } catch (error) {
+      // If it's already a NestJS exception, re-throw it
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof HttpException
+      ) {
+        throw error;
+      }
       const errorResponse = createErrorResponse(error);
-      throw errorResponse;
+      throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
 }
