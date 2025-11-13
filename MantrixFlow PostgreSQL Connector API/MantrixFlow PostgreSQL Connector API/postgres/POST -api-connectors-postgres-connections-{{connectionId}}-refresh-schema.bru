@@ -1,0 +1,15 @@
+meta {
+  name: POST /api/connectors/postgres/connections/{{connectionId}}/refresh-schema
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/refresh-schema
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

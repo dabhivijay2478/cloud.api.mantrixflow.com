@@ -1,0 +1,15 @@
+meta {
+  name: PATCH /api/connectors/postgres/connections/{{connectionId}}
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

@@ -5,6 +5,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -20,11 +21,13 @@ export class EncryptionService {
     p: 1, // Parallelization parameter
   };
 
+  constructor(private readonly configService: ConfigService) {}
+
   /**
    * Get encryption key from environment variable or derive from master key
    */
   private getEncryptionKey(): Buffer {
-    const masterKey = process.env.ENCRYPTION_MASTER_KEY;
+    const masterKey = this.configService.get<string>('ENCRYPTION_MASTER_KEY');
     if (!masterKey) {
       throw new Error('ENCRYPTION_MASTER_KEY environment variable is not set');
     }

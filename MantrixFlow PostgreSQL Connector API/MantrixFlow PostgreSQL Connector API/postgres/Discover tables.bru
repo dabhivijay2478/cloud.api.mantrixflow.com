@@ -1,0 +1,23 @@
+meta {
+  name: Discover tables
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}/tables?schema=public
+  body: none
+  auth: inherit
+}
+
+params:query {
+  schema: public
+}
+
+settings {
+  encodeUrl: true
+}
+
+docs {
+  List all tables in a specific schema.
+}

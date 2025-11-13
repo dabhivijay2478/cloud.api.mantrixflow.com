@@ -1,31 +1,61 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsObject,
+  ValidateNested,
+} from 'class-validator';
 import { TestConnectionDto } from './test-connection.dto';
+import { Type } from 'class-transformer';
 
 export class CreateConnectionDto {
-  @ApiProperty({ description: 'Connection name', example: 'Production Database' })
+  @ApiProperty({
+    description: 'Connection name',
+    example: 'Production Database',
+  })
   @IsString()
   @IsNotEmpty()
   name: string;
 
-  @ApiProperty({ description: 'Connection configuration', type: TestConnectionDto })
+  @ApiProperty({
+    description: 'Connection configuration',
+    type: TestConnectionDto,
+  })
+  @IsObject()
+  @ValidateNested()
+  @Type(() => TestConnectionDto)
   config: TestConnectionDto;
 }
 
 export class ConnectionResponseDto {
-  @ApiProperty({ description: 'Connection ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({
+    description: 'Connection ID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
   id: string;
 
-  @ApiProperty({ description: 'Organization ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({
+    description: 'Organization ID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
   orgId: string;
 
-  @ApiProperty({ description: 'User ID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({
+    description: 'User ID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
   userId: string;
 
-  @ApiProperty({ description: 'Connection name', example: 'Production Database' })
+  @ApiProperty({
+    description: 'Connection name',
+    example: 'Production Database',
+  })
   name: string;
 
-  @ApiProperty({ description: 'Connection status', enum: ['active', 'inactive', 'error'] })
+  @ApiProperty({
+    description: 'Connection status',
+    enum: ['active', 'inactive', 'error'],
+  })
   status: string;
 
   @ApiProperty({ description: 'Port', example: 5432 })
@@ -52,4 +82,3 @@ export class ConnectionResponseDto {
   @ApiProperty({ description: 'Updated at' })
   updatedAt: Date;
 }
-

@@ -1,0 +1,15 @@
+meta {
+  name: DELETE /api/connectors/postgres/connections/{{connectionId}}
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/api/connectors/postgres/connections/{{connectionId}}
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}
