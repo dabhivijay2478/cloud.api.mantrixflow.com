@@ -57,7 +57,7 @@
             "description": "Test a PostgreSQL connection without saving it. Validates credentials and connectivity.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5432,\n  \"database\": \"mydb\",\n  \"username\": \"postgres\",\n  \"password\": \"password123\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+              "raw": "{\n  \"host\": \"localhost\",\n  \"port\": 5433,\n  \"database\": \"postgres\",\n  \"username\": \"postgres\",\n  \"password\": \"mysecretpassword\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -109,7 +109,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"error\": \"string\",\n  \"version\": \"PostgreSQL 14.5\",\n  \"responseTimeMs\": 45\n}"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 200,\n    \"message\": \"Connection test successful\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\",\n    \"metadata\": {\n      \"success\": true,\n      \"responseTimeMs\": 45\n    }\n  },\n  \"data\": {\n    \"success\": true,\n    \"error\": null,\n    \"version\": \"PostgreSQL 14.5\",\n    \"responseTimeMs\": 45\n  }\n}"
             }
           ]
         },
@@ -139,7 +139,7 @@
             "description": "Create a new PostgreSQL connection with encrypted credentials.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Production Database\",\n  \"config\": null\n}",
+              "raw": "{\n  \"name\": \"Production Database\",\n  \"config\": {\n    \"host\": \"localhost\",\n    \"port\": 5433,\n    \"database\": \"postgres\",\n    \"username\": \"postgres\",\n    \"password\": \"mysecretpassword\",\n    \"ssl\": null,\n    \"sshTunnel\": null,\n    \"connectionTimeout\": 30000,\n    \"queryTimeout\": 60000,\n    \"poolSize\": 5\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -191,7 +191,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"name\": \"Production Database\",\n  \"status\": \"active\",\n  \"port\": 5432,\n  \"sslEnabled\": false,\n  \"sshTunnelEnabled\": false,\n  \"connectionPoolSize\": 5,\n  \"queryTimeoutSeconds\": 60,\n  \"lastConnectedAt\": \"string\",\n  \"createdAt\": \"string\",\n  \"updatedAt\": \"string\"\n}"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 201,\n    \"message\": \"Connection created successfully\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\",\n    \"metadata\": {\n      \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"connectionName\": \"Production Database\"\n    }\n  },\n  \"data\": {\n    \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"name\": \"Production Database\",\n    \"status\": \"active\",\n    \"port\": 5433,\n    \"sslEnabled\": false,\n    \"sshTunnelEnabled\": false,\n    \"connectionPoolSize\": 5,\n    \"queryTimeoutSeconds\": 60,\n    \"lastConnectedAt\": \"string\",\n    \"createdAt\": \"string\",\n    \"updatedAt\": \"string\"\n  }\n}"
             }
           ]
         },
@@ -257,7 +257,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "[\n  null\n]"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 200,\n    \"message\": \"Found 1 connection(s)\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n  },\n  \"data\": [\n    {\n      \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"name\": \"Production Database\",\n      \"status\": \"active\",\n      \"port\": 5433,\n      \"sslEnabled\": false,\n      \"sshTunnelEnabled\": false,\n      \"connectionPoolSize\": 5,\n      \"queryTimeoutSeconds\": 60,\n      \"lastConnectedAt\": \"string\",\n      \"createdAt\": \"string\",\n      \"updatedAt\": \"string\"\n    }\n  ],\n  \"pagination\": {\n    \"total\": 1,\n    \"limit\": 1,\n    \"offset\": 0,\n    \"hasMore\": false\n  }\n}"
             }
           ]
         },
@@ -325,7 +325,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"name\": \"Production Database\",\n  \"status\": \"active\",\n  \"port\": 5432,\n  \"sslEnabled\": false,\n  \"sshTunnelEnabled\": false,\n  \"connectionPoolSize\": 5,\n  \"queryTimeoutSeconds\": 60,\n  \"lastConnectedAt\": \"string\",\n  \"createdAt\": \"string\",\n  \"updatedAt\": \"string\"\n}"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 200,\n    \"message\": \"Connection retrieved successfully\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\",\n    \"metadata\": {\n      \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"connectionName\": \"Production Database\",\n      \"connectionStatus\": \"active\"\n    }\n  },\n  \"data\": {\n    \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"name\": \"Production Database\",\n    \"status\": \"active\",\n    \"port\": 5433,\n    \"sslEnabled\": false,\n    \"sshTunnelEnabled\": false,\n    \"connectionPoolSize\": 5,\n    \"queryTimeoutSeconds\": 60,\n    \"lastConnectedAt\": \"string\",\n    \"createdAt\": \"string\",\n    \"updatedAt\": \"string\"\n  }\n}"
             }
           ]
         },
@@ -362,7 +362,7 @@
             "description": "Update an existing PostgreSQL connection. Only provided fields will be updated. Organization ID is required to verify ownership.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Production Database\",\n  \"host\": \"localhost\",\n  \"port\": 5432,\n  \"database\": \"mydb\",\n  \"username\": \"postgres\",\n  \"password\": \"password\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
+              "raw": "{\n  \"name\": \"Production Database\",\n  \"host\": \"localhost\",\n  \"port\": 5433,\n  \"database\": \"postgres\",\n  \"username\": \"postgres\",\n  \"password\": \"mysecretpassword\",\n  \"ssl\": null,\n  \"sshTunnel\": null,\n  \"connectionTimeout\": 30000,\n  \"queryTimeout\": 60000,\n  \"poolSize\": 5\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -421,7 +421,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"name\": \"Production Database\",\n  \"status\": \"active\",\n  \"port\": 5432,\n  \"sslEnabled\": false,\n  \"sshTunnelEnabled\": false,\n  \"connectionPoolSize\": 5,\n  \"queryTimeoutSeconds\": 60,\n  \"lastConnectedAt\": \"string\",\n  \"createdAt\": \"string\",\n  \"updatedAt\": \"string\"\n}"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 200,\n    \"message\": \"Connection updated successfully\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\",\n    \"metadata\": {\n      \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"connectionName\": \"Production Database\",\n      \"updatedFields\": [\"name\", \"host\", \"port\", \"database\", \"username\", \"password\"]\n    }\n  },\n  \"data\": {\n    \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"orgId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"userId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"name\": \"Production Database\",\n    \"status\": \"active\",\n    \"port\": 5433,\n    \"sslEnabled\": false,\n    \"sshTunnelEnabled\": false,\n    \"connectionPoolSize\": 5,\n    \"queryTimeoutSeconds\": 60,\n    \"lastConnectedAt\": \"string\",\n    \"createdAt\": \"string\",\n    \"updatedAt\": \"string\"\n  }\n}"
             }
           ]
         },
@@ -452,7 +452,46 @@
             },
             "description": "Delete a PostgreSQL connection. Organization ID is required to verify ownership."
           },
-          "response": []
+          "response": [
+            {
+              "name": "200 Connection deleted successfully",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/connectors/postgres/connections/{id}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "connectors",
+                    "postgres",
+                    "connections",
+                    ":id"
+                  ],
+                  "query": [
+                    {
+                      "key": "orgId",
+                      "value": "",
+                      "description": "Organization ID (UUID v4). Required to verify the connection belongs to your organization."
+                    }
+                  ]
+                },
+                "description": "Delete a PostgreSQL connection. Organization ID is required to verify ownership."
+              },
+              "status": "200",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 200,\n    \"message\": \"Connection deleted successfully\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n  },\n  \"deletedId\": \"123e4567-e89b-12d3-a456-426614174000\"\n}"
+            }
+          ]
         },
         {
           "name": "Discover databases",
@@ -650,7 +689,7 @@
             "description": "Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"query\": \"SELECT * FROM users LIMIT 10\",\n  \"params\": [\n    \"value1\",\n    \"value2\"\n  ],\n  \"timeout\": 60000\n}",
+              "raw": "{\n  \"query\": \"SELECT version(), current_database(), current_user\",\n  \"params\": [],\n  \"timeout\": 60000\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -693,7 +732,7 @@
                 "description": "Execute a SELECT query against the PostgreSQL database. Only read-only queries are allowed.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"query\": \"SELECT * FROM users LIMIT 10\",\n  \"params\": [\n    \"value1\",\n    \"value2\"\n  ],\n  \"timeout\": 60000\n}",
+                  "raw": "{\n  \"query\": \"SELECT version(), current_database(), current_user\",\n  \"params\": [],\n  \"timeout\": 60000\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -710,7 +749,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"rows\": [\n    {}\n  ],\n  \"rowCount\": 10,\n  \"columns\": [\n    {\n      \"name\": \"string\",\n      \"dataType\": \"string\"\n    }\n  ],\n  \"executionTimeMs\": 45,\n  \"queryPlan\": {}\n}"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 200,\n    \"message\": \"Query executed successfully\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\",\n    \"metadata\": {\n      \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"rowsReturned\": 10,\n      \"executionTimeMs\": 45\n    }\n  },\n  \"data\": {\n    \"rows\": [\n      {}\n    ],\n    \"rowCount\": 10,\n    \"columns\": [\n      {\n        \"name\": \"string\",\n        \"dataType\": \"string\"\n      }\n    ],\n    \"executionTimeMs\": 45,\n    \"queryPlan\": {}\n  }\n}"
             }
           ]
         },
@@ -853,7 +892,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n  \"tableName\": \"users\",\n  \"syncMode\": \"full\",\n  \"status\": \"pending\",\n  \"rowsSynced\": 1000,\n  \"syncFrequency\": \"manual\",\n  \"startedAt\": \"string\",\n  \"completedAt\": \"string\",\n  \"errorMessage\": \"string\"\n}"
+              "body": "{\n  \"meta\": {\n    \"statusCode\": 201,\n    \"message\": \"Sync job created successfully\",\n    \"status\": \"success\",\n    \"timestamp\": \"2024-01-15T10:30:00.000Z\",\n    \"metadata\": {\n      \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"jobId\": \"123e4567-e89b-12d3-a456-426614174000\",\n      \"tableName\": \"users\",\n      \"syncMode\": \"full\"\n    }\n  },\n  \"data\": {\n    \"id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"connectionId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"tableName\": \"users\",\n    \"syncMode\": \"full\",\n    \"status\": \"pending\",\n    \"rowsSynced\": 1000,\n    \"syncFrequency\": \"manual\",\n    \"startedAt\": \"string\",\n    \"completedAt\": \"string\",\n    \"errorMessage\": \"string\"\n  }\n}"
             }
           ]
         },
