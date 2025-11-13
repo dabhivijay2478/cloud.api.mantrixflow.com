@@ -13,7 +13,10 @@ const PORT = process.env.PORT || 8000;
 const API_URL = `http://localhost:${PORT}`;
 const OPENAPI_JSON_URL = `${API_URL}/api/docs-json`; // Swagger JSON endpoint
 const OUTPUT_DIR = path.join(__dirname, '../postman');
-const OUTPUT_FILE = path.join(OUTPUT_DIR, 'MantrixFlow_PostgreSQL_Connector.postman_collection.json');
+const OUTPUT_FILE = path.join(
+  OUTPUT_DIR,
+  'MantrixFlow_PostgreSQL_Connector.postman_collection.json',
+);
 
 interface OpenAPIPath {
   [method: string]: {
@@ -62,7 +65,9 @@ function convertOpenAPIToPostman(openapi: OpenAPISpec): Promise<any> {
           if (result.result && result.result.length > 0) {
             resolve(result.result[0].output[0].data);
           } else {
-            reject(new Error('Failed to convert OpenAPI to Postman collection'));
+            reject(
+              new Error('Failed to convert OpenAPI to Postman collection'),
+            );
           }
         }
       },
@@ -73,12 +78,15 @@ function convertOpenAPIToPostman(openapi: OpenAPISpec): Promise<any> {
 /**
  * Convert OpenAPI spec to Postman Collection (Manual fallback)
  */
-function convertOpenAPIToPostmanManual(openapi: OpenAPISpec): PostmanCollection {
+function convertOpenAPIToPostmanManual(
+  openapi: OpenAPISpec,
+): PostmanCollection {
   const collection: PostmanCollection = {
     info: {
       name: openapi.info.title || 'MantrixFlow PostgreSQL Connector API',
       description: openapi.info.description || '',
-      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+      schema:
+        'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
       _exporter_id: 'mantrixflow-postgres-connector',
     },
     item: [],
@@ -164,25 +172,31 @@ function convertOpenAPIToPostmanManual(openapi: OpenAPISpec): PostmanCollection 
 
       // Add example responses
       if (operation.responses) {
-        Object.entries(operation.responses).forEach(([statusCode, response]: [string, any]) => {
-          if (response.content && response.content['application/json']) {
-            const schema = response.content['application/json'].schema;
-            item.response.push({
-              name: `${statusCode} ${response.description || ''}`,
-              originalRequest: { ...item.request },
-              status: statusCode,
-              code: parseInt(statusCode),
-              _postman_previewlanguage: 'json',
-              header: [
-                {
-                  key: 'Content-Type',
-                  value: 'application/json',
-                },
-              ],
-              body: JSON.stringify(generateExampleFromSchema(schema), null, 2),
-            });
-          }
-        });
+        Object.entries(operation.responses).forEach(
+          ([statusCode, response]: [string, any]) => {
+            if (response.content && response.content['application/json']) {
+              const schema = response.content['application/json'].schema;
+              item.response.push({
+                name: `${statusCode} ${response.description || ''}`,
+                originalRequest: { ...item.request },
+                status: statusCode,
+                code: parseInt(statusCode),
+                _postman_previewlanguage: 'json',
+                header: [
+                  {
+                    key: 'Content-Type',
+                    value: 'application/json',
+                  },
+                ],
+                body: JSON.stringify(
+                  generateExampleFromSchema(schema),
+                  null,
+                  2,
+                ),
+              });
+            }
+          },
+        );
       }
 
       itemsByTag[tag].push(item);
@@ -245,24 +259,26 @@ function generateExampleFromSchema(schema: any): any {
  */
 function fetchOpenAPISpec(): Promise<OpenAPISpec> {
   return new Promise((resolve, reject) => {
-    http.get(OPENAPI_JSON_URL, (res) => {
-      let data = '';
+    http
+      .get(OPENAPI_JSON_URL, (res) => {
+        let data = '';
 
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
 
-      res.on('end', () => {
-        try {
-          const spec = JSON.parse(data);
-          resolve(spec);
-        } catch (error) {
-          reject(new Error(`Failed to parse OpenAPI spec: ${error}`));
-        }
+        res.on('end', () => {
+          try {
+            const spec = JSON.parse(data);
+            resolve(spec);
+          } catch (error) {
+            reject(new Error(`Failed to parse OpenAPI spec: ${error}`));
+          }
+        });
+      })
+      .on('error', (error) => {
+        reject(new Error(`Failed to fetch OpenAPI spec: ${error.message}`));
       });
-    }).on('error', (error) => {
-      reject(new Error(`Failed to fetch OpenAPI spec: ${error.message}`));
-    });
   });
 }
 
@@ -299,7 +315,9 @@ async function generatePostmanCollection() {
     fs.writeFileSync(OUTPUT_FILE, JSON.stringify(collection, null, 2));
     console.log(`✅ Postman collection saved to: ${OUTPUT_FILE}`);
     console.log('\n📋 Import this file into Postman to test the API!');
-    console.log('   File: postman/MantrixFlow_PostgreSQL_Connector.postman_collection.json');
+    console.log(
+      '   File: postman/MantrixFlow_PostgreSQL_Connector.postman_collection.json',
+    );
   } catch (error) {
     console.error('❌ Error generating Postman collection:', error);
     console.log('\n💡 Make sure the server is running: pnpm start:dev');
@@ -313,4 +331,3 @@ if (require.main === module) {
 }
 
 export { generatePostmanCollection };
-

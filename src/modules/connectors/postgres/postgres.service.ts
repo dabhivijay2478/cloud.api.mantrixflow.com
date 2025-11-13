@@ -28,6 +28,7 @@ import {
   PostgresConnection,
   SyncMode,
 } from './postgres.types';
+import { NewPostgresConnection } from '../../../database/drizzle/schema/postgres-connectors.schema';
 import { PostgresErrorCode } from './constants/error-codes.constants';
 
 @Injectable()
@@ -308,11 +309,57 @@ export class PostgresService {
       }
     }
 
-    // Update connection
-    const updated = await this.connectionRepository.update(connectionId, {
-      ...updates,
+    // Prepare update data - convert PostgresConnectionConfig to database format
+    const updateData: Partial<NewPostgresConnection> = {
       lastConnectedAt: new Date(),
-    });
+    };
+
+    // Map plain text credentials from PostgresConnectionConfig to encrypted format
+    if (updates.host !== undefined) {
+      updateData.host = updates.host; // Will be encrypted in repository
+    }
+    if (updates.port !== undefined) {
+      updateData.port = updates.port;
+    }
+    if (updates.database !== undefined) {
+      updateData.database = updates.database; // Will be encrypted in repository
+    }
+    if (updates.username !== undefined) {
+      updateData.username = updates.username; // Will be encrypted in repository
+    }
+    if (updates.password !== undefined) {
+      updateData.password = updates.password; // Will be encrypted in repository
+    }
+    if (updates.ssl?.enabled !== undefined) {
+      updateData.sslEnabled = updates.ssl.enabled;
+    }
+    if (updates.ssl?.caCert !== undefined) {
+      updateData.sslCaCert = updates.ssl.caCert; // Will be encrypted in repository
+    }
+    if (updates.sshTunnel?.enabled !== undefined) {
+      updateData.sshTunnelEnabled = updates.sshTunnel.enabled;
+    }
+    if (updates.sshTunnel?.host !== undefined) {
+      updateData.sshHost = updates.sshTunnel.host; // Will be encrypted in repository
+    }
+    if (updates.sshTunnel?.port !== undefined) {
+      updateData.sshPort = updates.sshTunnel.port;
+    }
+    if (updates.sshTunnel?.username !== undefined) {
+      updateData.sshUsername = updates.sshTunnel.username; // Will be encrypted in repository
+    }
+    if (updates.sshTunnel?.privateKey !== undefined) {
+      updateData.sshPrivateKey = updates.sshTunnel.privateKey; // Will be encrypted in repository
+    }
+    if (updates.poolSize !== undefined) {
+      updateData.connectionPoolSize = updates.poolSize;
+    }
+    if (updates.queryTimeout !== undefined) {
+      updateData.queryTimeoutSeconds = updates.queryTimeout / 1000; // Convert ms to seconds
+    }
+
+    // Update connection
+    const updated = await this.connectionRepository.update(connectionId, updateData);
 
     // Recreate pool if credentials changed
     if (

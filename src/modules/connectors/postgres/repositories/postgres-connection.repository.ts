@@ -4,7 +4,7 @@
  */
 
 import { Injectable, Inject } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import {
   postgresConnections,
   PostgresConnection,
@@ -131,10 +131,10 @@ export class PostgresConnectionRepository {
    */
   async countByOrgId(orgId: string): Promise<number> {
     const result = await this.db
-      .select()
+      .select({ count: sql<number>`count(*)::int` })
       .from(postgresConnections)
       .where(eq(postgresConnections.orgId, orgId));
-    return result.length;
+    return result[0]?.count || 0;
   }
 
   /**
