@@ -566,8 +566,20 @@ export class PostgresService {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
-    const validUserId = this.validateUUID(userId, 'User ID');
-    await this.getConnection(validConnectionId, validOrgId); // Verify access
+    // For userId, generate UUID if invalid (for query logging purposes)
+    const validUserId = this.validateOrGenerateUUID(userId);
+    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
+
+    // Ensure pool exists
+    const pool = this.connectionPoolService.getPool(validConnectionId);
+    if (!pool) {
+      const credentials =
+        this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(
+        validConnectionId,
+        credentials,
+      );
+    }
 
     const result = await this.queryExecutorService.executeQuery(
       validConnectionId,
@@ -602,7 +614,19 @@ export class PostgresService {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
-    await this.getConnection(validConnectionId, validOrgId); // Verify access
+    const connection = await this.getConnection(validConnectionId, validOrgId); // Verify access
+
+    // Ensure pool exists
+    const pool = this.connectionPoolService.getPool(validConnectionId);
+    if (!pool) {
+      const credentials =
+        this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(
+        validConnectionId,
+        credentials,
+      );
+    }
+
     return await this.queryExecutorService.explainQuery(
       validConnectionId,
       query,
