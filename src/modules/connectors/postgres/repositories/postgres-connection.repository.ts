@@ -72,15 +72,24 @@ export class PostgresConnectionRepository {
 
     // Insert into database using Drizzle
     try {
+      console.log('Attempting to insert connection into database...');
+      console.log('Connection data keys:', Object.keys(connectionData));
+      
       const [connection] = await this.db
         .insert(postgresConnections)
         .values(connectionData)
         .returning();
 
+      console.log('Connection saved successfully with ID:', connection.id);
       return connection;
     } catch (error) {
-      // Log the error for debugging
-      console.error('Failed to insert connection into database:', error);
+      // Log the full error for debugging
+      console.error('Failed to insert connection into database:');
+      console.error('Error type:', error?.constructor?.name);
+      console.error('Error message:', error instanceof Error ? error.message : String(error));
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      console.error('Connection data that failed:', JSON.stringify(connectionData, null, 2));
+      
       throw new Error(
         `Failed to save connection to database: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );

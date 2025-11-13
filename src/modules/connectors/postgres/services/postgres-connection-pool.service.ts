@@ -267,9 +267,20 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         client.release();
       }
     } catch (error) {
+      // Map error to user-friendly message without throwing
+      const errorMessage = error instanceof Error ? error.message : 'Connection failed';
+      
+      // Check if it's a timeout error
+      if (errorMessage.includes('timeout') || errorMessage.includes('ETIMEDOUT')) {
+        return {
+          success: false,
+          error: 'Connection timed out. Please check your network and database settings.',
+        };
+      }
+      
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Connection failed',
+        error: errorMessage,
       };
     } finally {
       // Cleanup
