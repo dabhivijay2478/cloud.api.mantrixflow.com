@@ -55,7 +55,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       sshTunnel = await this.createSSHTunnel(credentials);
       // SSH tunnel forwards to localhost
       actualHost = 'localhost';
-      actualPort = sshTunnel.config.localPort || 5432;
+      actualPort = (sshTunnel as any).localPort || 5432;
     }
 
     // Build pool configuration
@@ -65,7 +65,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       database: credentials.database,
       user: credentials.username,
       password: credentials.password,
-      max: credentials.connectionPoolSize || CONNECTION_DEFAULTS.MAX_POOL_SIZE,
+      max: credentials.connectionPoolSize ?? CONNECTION_DEFAULTS.MAX_POOL_SIZE,
       min: 1,
       idleTimeoutMillis: CONNECTION_DEFAULTS.IDLE_TIMEOUT_MS,
       connectionTimeoutMillis: CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
@@ -137,7 +137,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
   /**
    * Execute query using pool
    */
-  async executeQuery<T = any>(
+  async executeQuery<T extends Record<string, any> = any>(
     connectionId: string,
     query: string,
     params?: any[],
@@ -211,7 +211,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
           sshPrivateKey: config.sshTunnel.privateKey,
         });
         actualHost = 'localhost';
-        actualPort = sshTunnel.config.localPort || 5432;
+        actualPort = (sshTunnel as any).localPort || 5432;
       }
 
       // Create temporary pool for testing

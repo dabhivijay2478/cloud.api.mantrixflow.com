@@ -7,7 +7,10 @@ import { Injectable } from '@nestjs/common';
 import { QueryResult } from 'pg';
 import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 import { QueryExecutionResult } from '../postgres.types';
-import { sanitizeQuery, extractTableNames } from '../utils/query-sanitizer.util';
+import {
+  sanitizeQuery,
+  extractTableNames,
+} from '../utils/query-sanitizer.util';
 import { QUERY_CONFIG } from '../constants/postgres.constants';
 import { PostgresErrorCode } from '../constants/error-codes.constants';
 import { mapErrorToStandardized } from '../utils/error-mapper.util';
@@ -24,7 +27,9 @@ interface RateLimitEntry {
 export class PostgresQueryExecutorService {
   private rateLimits = new Map<string, RateLimitEntry>();
 
-  constructor(private readonly connectionPoolService: PostgresConnectionPoolService) {}
+  constructor(
+    private readonly connectionPoolService: PostgresConnectionPoolService,
+  ) {}
 
   /**
    * Execute query
@@ -62,12 +67,14 @@ export class PostgresQueryExecutorService {
       // Extract column information
       const columns = result.fields.map((field) => ({
         name: field.name,
-        dataType: field.dataTypeID ? this.getDataTypeName(field.dataTypeID) : 'unknown',
+        dataType: field.dataTypeID
+          ? this.getDataTypeName(field.dataTypeID)
+          : 'unknown',
       }));
 
       return {
         rows: result.rows,
-        rowCount: result.rowCount,
+        rowCount: result.rowCount || 0,
         columns,
         executionTimeMs,
       };
@@ -76,7 +83,15 @@ export class PostgresQueryExecutorService {
       const standardized = mapErrorToStandardized(error);
 
       // Log query failure
-      await this.logQuery(connectionId, userId, query, executionTimeMs, 0, 'error', standardized.message);
+      await this.logQuery(
+        connectionId,
+        userId,
+        query,
+        executionTimeMs,
+        0,
+        'error',
+        standardized.message,
+      );
 
       throw error;
     } finally {
@@ -104,8 +119,12 @@ export class PostgresQueryExecutorService {
     const explainQuery = `EXPLAIN (FORMAT JSON) ${query}`;
 
     try {
-      const result = await this.connectionPoolService.executeQuery(connectionId, explainQuery, params);
-      return result.rows[0]?.QUERY PLAN || result.rows[0];
+      const result = await this.connectionPoolService.executeQuery(
+        connectionId,
+        explainQuery,
+        params,
+      );
+      return result.rows[0]?.['QUERY PLAN'] || result.rows[0];
     } catch (error) {
       throw error;
     }
@@ -199,17 +218,21 @@ export class PostgresQueryExecutorService {
     try {
       await pool.query('SELECT pg_cancel_backend($1)', [pid]);
     } catch (error) {
-      throw new Error(`Failed to cancel query: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to cancel query: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
   }
 
   /**
    * Get slow queries (for monitoring)
    */
-  getSlowQueries(connectionId: string, thresholdMs: number = QUERY_CONFIG.SLOW_QUERY_THRESHOLD_MS): any[] {
+  getSlowQueries(
+    connectionId: string,
+    thresholdMs: number = QUERY_CONFIG.SLOW_QUERY_THRESHOLD_MS,
+  ): any[] {
     // TODO: Implement slow query tracking
     // This would require maintaining a query log in memory or database
     return [];
   }
 }
-

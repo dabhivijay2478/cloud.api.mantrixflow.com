@@ -9,7 +9,7 @@ import {
   postgresSyncJobs,
   PostgresSyncJob,
   NewPostgresSyncJob,
-} from '../../../database/drizzle/schema/postgres-connectors.schema';
+} from '../../../../database/drizzle/schema/postgres-connectors.schema';
 
 // TODO: Replace with actual Drizzle database instance
 interface DrizzleDatabase {

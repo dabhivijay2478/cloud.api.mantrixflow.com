@@ -25,6 +25,7 @@ import {
   ConnectionHealth,
   ConnectionMetrics,
   PostgresConnection,
+  SyncMode,
 } from './postgres.types';
 import { PostgresErrorCode } from './constants/error-codes.constants';
 
@@ -349,7 +350,7 @@ export class PostgresService {
         job.id,
         tableName,
         schema,
-        syncMode,
+        syncMode as SyncMode,
         incrementalColumn,
         customWhereClause,
       );
@@ -424,6 +425,7 @@ export class PostgresService {
         ? (poolStats.activeConnections / (poolStats.activeConnections + 10)) *
           100
         : 0,
+      dataVolumeTransferred: 0, // TODO: Calculate from query logs
     };
   }
 

@@ -32,7 +32,7 @@ export class PostgresValidator {
     try {
       const result = PostgresConnectionConfigSchema.safeParse(config);
       if (!result.success) {
-        const firstError = result.error.errors[0];
+        const firstError = result.error.issues[0];
         return {
           isValid: false,
           error: firstError.message,
@@ -79,7 +79,7 @@ export class PostgresValidator {
     try {
       const result = TestConnectionSchema.safeParse(config);
       if (!result.success) {
-        const firstError = result.error.errors[0];
+        const firstError = result.error.issues[0];
         return {
           isValid: false,
           error: firstError.message,
@@ -114,7 +114,7 @@ export class PostgresValidator {
     try {
       const result = ExecuteQuerySchema.safeParse(query);
       if (!result.success) {
-        const firstError = result.error.errors[0];
+        const firstError = result.error.issues[0];
         return {
           isValid: false,
           error: firstError.message,
@@ -147,7 +147,7 @@ export class PostgresValidator {
     try {
       const result = CreateSyncJobSchema.safeParse(config);
       if (!result.success) {
-        const firstError = result.error.errors[0];
+        const firstError = result.error.issues[0];
         return {
           isValid: false,
           error: firstError.message,
@@ -192,7 +192,7 @@ export class PostgresValidator {
     try {
       const result = UpdateSyncScheduleSchema.safeParse(config);
       if (!result.success) {
-        const firstError = result.error.errors[0];
+        const firstError = result.error.issues[0];
         return {
           isValid: false,
           error: firstError.message,

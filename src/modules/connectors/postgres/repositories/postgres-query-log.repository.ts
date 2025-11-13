@@ -9,7 +9,7 @@ import {
   postgresQueryLogs,
   PostgresQueryLog,
   NewPostgresQueryLog,
-} from '../../../database/drizzle/schema/postgres-connectors.schema';
+} from '../../../../database/drizzle/schema/postgres-connectors.schema';
 import { QUERY_LOG_RETENTION_DAYS } from '../constants/postgres.constants';
 
 // TODO: Replace with actual Drizzle database instance

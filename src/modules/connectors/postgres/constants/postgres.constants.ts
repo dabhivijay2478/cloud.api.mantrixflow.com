@@ -16,6 +16,12 @@ export const CONNECTION_DEFAULTS = {
 } as const;
 
 /**
+ * Export MAX_CONNECTIONS_PER_ORG separately for convenience
+ */
+export const MAX_CONNECTIONS_PER_ORG =
+  CONNECTION_DEFAULTS.MAX_CONNECTIONS_PER_ORG;
+
+/**
  * Schema Discovery Configuration
  */
 export const SCHEMA_DISCOVERY = {

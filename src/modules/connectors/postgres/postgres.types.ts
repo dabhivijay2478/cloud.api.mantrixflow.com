@@ -4,6 +4,12 @@
  */
 
 import { z } from 'zod';
+import type { PostgresConnection as PostgresConnectionSchema } from '../../../database/drizzle/schema/postgres-connectors.schema';
+
+/**
+ * Re-export PostgresConnection from schema for convenience
+ */
+export type PostgresConnection = PostgresConnectionSchema;
 
 /**
  * Connection Status
@@ -84,6 +90,7 @@ export interface DecryptedConnectionCredentials {
   sshPort?: number;
   sshUsername?: string;
   sshPrivateKey?: string;
+  connectionPoolSize?: number;
 }
 
 /**

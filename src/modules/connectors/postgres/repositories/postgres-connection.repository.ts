@@ -9,8 +9,8 @@ import {
   postgresConnections,
   PostgresConnection,
   NewPostgresConnection,
-} from '../../../database/drizzle/schema/postgres-connectors.schema';
-import { EncryptionService } from '../../../common/encryption/encryption.service';
+} from '../../../../database/drizzle/schema/postgres-connectors.schema';
+import { EncryptionService } from '../../../../common/encryption/encryption.service';
 import { DecryptedConnectionCredentials } from '../postgres.types';
 
 // TODO: Replace with actual Drizzle database instance
@@ -202,6 +202,7 @@ export class PostgresConnectionRepository {
       sshPrivateKey: connection.sshPrivateKey
         ? this.encryptionService.decrypt(connection.sshPrivateKey)
         : undefined,
+      connectionPoolSize: connection.connectionPoolSize,
     };
   }
 }
