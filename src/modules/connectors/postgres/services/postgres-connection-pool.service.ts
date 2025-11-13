@@ -58,6 +58,12 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       actualPort = (sshTunnel as any).localPort || 5432;
     }
 
+    // Detect Supabase connections (supabase.co or supabase.com domains)
+    const isSupabase = actualHost.includes('supabase.co') || actualHost.includes('supabase.com');
+    
+    // Supabase requires SSL, so enable it if not explicitly disabled
+    const shouldUseSSL = credentials.sslEnabled || isSupabase;
+    
     // Build pool configuration
     const poolConfig: PoolConfig = {
       host: actualHost,
@@ -69,9 +75,9 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       min: 1,
       idleTimeoutMillis: CONNECTION_DEFAULTS.IDLE_TIMEOUT_MS,
       connectionTimeoutMillis: CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
-      ssl: credentials.sslEnabled
+      ssl: shouldUseSSL
         ? {
-            rejectUnauthorized: true,
+            rejectUnauthorized: credentials.sslCaCert ? true : false, // Only reject if CA cert is provided
             ca: credentials.sslCaCert
               ? Buffer.from(credentials.sslCaCert)
               : undefined,
@@ -214,6 +220,17 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         actualPort = (sshTunnel as any).localPort || 5432;
       }
 
+      // Detect Supabase connections (supabase.co or supabase.com domains)
+      const isSupabase = actualHost.includes('supabase.co') || actualHost.includes('supabase.com');
+      
+      // Supabase requires SSL, so enable it if not explicitly disabled
+      const shouldUseSSL = config.ssl?.enabled !== false && (isSupabase || config.ssl?.enabled === true);
+      
+      // Increase timeout for Supabase connections (they may need more time)
+      const connectionTimeout = isSupabase 
+        ? (config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS * 2) // Double timeout for Supabase
+        : (config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS);
+      
       // Create temporary pool for testing
       pool = new Pool({
         host: actualHost,
@@ -222,12 +239,12 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         user: config.username,
         password: config.password,
         max: 1,
-        connectionTimeoutMillis:
-          config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
-        ssl: config.ssl?.enabled
+        connectionTimeoutMillis: connectionTimeout,
+        // For Supabase, use SSL but don't reject unauthorized if no CA cert provided
+        ssl: shouldUseSSL
           ? {
-              rejectUnauthorized: config.ssl.rejectUnauthorized !== false,
-              ca: config.ssl.caCert
+              rejectUnauthorized: config.ssl?.caCert ? (config.ssl.rejectUnauthorized !== false) : false,
+              ca: config.ssl?.caCert
                 ? Buffer.from(config.ssl.caCert)
                 : undefined,
             }

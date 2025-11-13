@@ -4,6 +4,7 @@
  */
 
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PostgresController } from './postgres.controller';
 import { PostgresService } from './postgres.service';
 import { PostgresValidator } from './postgres.validator';
@@ -23,9 +24,21 @@ import { PostgresHealthMonitorService } from './services/postgres-health-monitor
 // Common services
 import { EncryptionService } from '../../../common/encryption/encryption.service';
 
+// Database
+import { createDrizzleDatabase, DrizzleDatabase } from '../../../database/drizzle/database';
+
 @Module({
   controllers: [PostgresController],
   providers: [
+    // Database provider
+    {
+      provide: 'DRIZZLE_DB',
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        return createDrizzleDatabase(configService);
+      },
+    },
+
     // Main service
     PostgresService,
 

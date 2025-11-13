@@ -1,22 +1,32 @@
 /**
  * Drizzle Database Configuration
- * TODO: Configure with actual Supabase/PostgreSQL connection
+ * Factory function to create Drizzle database instance with ConfigService
  */
 
 import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
+import { ConfigService } from '@nestjs/config';
 import * as schema from './schema/postgres-connectors.schema';
 
-// TODO: Replace with actual database connection string from environment
-const connectionString = process.env.DATABASE_URL || '';
+export const createDrizzleDatabase = (configService: ConfigService) => {
+  const connectionString = configService.get<string>('DATABASE_URL');
 
-// Create postgres client
-const client = postgres(connectionString, {
-  max: 10,
-});
+  if (!connectionString) {
+    throw new Error('DATABASE_URL environment variable is not set');
+  }
 
-// Create Drizzle instance
-export const db = drizzle(client, { schema });
+  // Use require for postgres to handle CommonJS properly
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const postgres = require('postgres');
+
+  // Create postgres client
+  const client = postgres(connectionString, {
+    max: 10,
+  });
+
+  // Create Drizzle instance
+  return drizzle(client, { schema });
+};
 
 // Export schema for use in repositories
 export { schema };
+export type DrizzleDatabase = ReturnType<typeof createDrizzleDatabase>;

@@ -83,15 +83,31 @@ export class PostgresService {
       throw new BadRequestException(validation.error);
     }
 
-    // Test connection first
-    const testResult = await this.testConnection(config);
-    if (!testResult.success) {
-      throw new BadRequestException(
-        testResult.error || 'Connection test failed',
-      );
+    // Test connection first (non-blocking - save even if test fails)
+    let connectionStatus: 'active' | 'inactive' | 'error' = 'active';
+    let lastConnectedAt: Date | null = new Date();
+    let lastError: string | null = null;
+
+    try {
+      const testResult = await this.testConnection(config);
+      if (!testResult.success) {
+        connectionStatus = 'error';
+        lastError = testResult.error || 'Connection test failed';
+        lastConnectedAt = null;
+      }
+    } catch (error) {
+      // Connection test failed, but we'll still save the connection
+      connectionStatus = 'error';
+      lastError =
+        error instanceof Error ? error.message : 'Connection test failed';
+      lastConnectedAt = null;
     }
 
-    // Create connection record
+    // Detect Supabase connections and auto-enable SSL
+    const isSupabase = config.host.includes('supabase.co') || config.host.includes('supabase.com');
+    const sslEnabled = config.ssl?.enabled !== false && (isSupabase || config.ssl?.enabled === true);
+
+    // Create connection record (save even if test failed)
     const connection = await this.connectionRepository.create({
       orgId,
       userId,
@@ -101,7 +117,7 @@ export class PostgresService {
       database: config.database,
       username: config.username,
       password: config.password,
-      sslEnabled: config.ssl?.enabled || false,
+      sslEnabled,
       sslCaCert: config.ssl?.caCert,
       sshTunnelEnabled: config.sshTunnel?.enabled || false,
       sshHost: config.sshTunnel?.host,
@@ -110,14 +126,26 @@ export class PostgresService {
       sshPrivateKey: config.sshTunnel?.privateKey,
       connectionPoolSize: config.poolSize || 5,
       queryTimeoutSeconds: config.queryTimeout || 60,
-      status: 'active',
-      lastConnectedAt: new Date(),
+      status: connectionStatus,
+      lastConnectedAt,
+      lastError,
     });
 
-    // Create connection pool
-    const credentials =
-      this.connectionRepository.decryptCredentials(connection);
-    await this.connectionPoolService.createPool(connection.id, credentials);
+    // Only create connection pool if test was successful
+    if (connectionStatus === 'active') {
+      try {
+        const credentials =
+          this.connectionRepository.decryptCredentials(connection);
+        await this.connectionPoolService.createPool(connection.id, credentials);
+      } catch (error) {
+        // Pool creation failed, update status
+        await this.connectionRepository.update(connection.id, {
+          status: 'error',
+          lastError:
+            error instanceof Error ? error.message : 'Pool creation failed',
+        });
+      }
+    }
 
     return connection;
   }

@@ -3,9 +3,8 @@
  * Handles database operations for postgres_connections table
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
-import * as crypto from 'crypto';
 import {
   postgresConnections,
   PostgresConnection,
@@ -13,25 +12,14 @@ import {
 } from '../../../../database/drizzle/schema/postgres-connectors.schema';
 import { EncryptionService } from '../../../../common/encryption/encryption.service';
 import { DecryptedConnectionCredentials } from '../postgres.types';
-
-// TODO: Replace with actual Drizzle database instance
-// This is a placeholder - you'll need to inject your Drizzle database instance
-interface DrizzleDatabase {
-  select: () => any;
-  insert: (table: any) => any;
-  update: (table: any) => any;
-  delete: (table: any) => any;
-}
+import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 
 @Injectable()
 export class PostgresConnectionRepository {
-  constructor(private readonly encryptionService: EncryptionService) {
-    // TODO: Inject Drizzle database instance
-    // constructor(
-    //   private readonly db: DrizzleDatabase,
-    //   private readonly encryptionService: EncryptionService,
-    // ) {}
-  }
+  constructor(
+    @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
+    private readonly encryptionService: EncryptionService,
+  ) {}
 
   /**
    * Create connection with encrypted credentials
@@ -82,18 +70,21 @@ export class PostgresConnectionRepository {
       sshPrivateKey: encrypted.sshPrivateKey,
     };
 
-    // TODO: Use actual Drizzle insert
-    // const [connection] = await this.db.insert(postgresConnections).values(connectionData).returning();
-    // return connection;
+    // Insert into database using Drizzle
+    try {
+      const [connection] = await this.db
+        .insert(postgresConnections)
+        .values(connectionData)
+        .returning();
 
-    // Placeholder return - return the connection data with a generated ID
-    // This ensures encrypted fields are present for decryption
-    return {
-      ...connectionData,
-      id: crypto.randomUUID(),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    } as PostgresConnection;
+      return connection;
+    } catch (error) {
+      // Log the error for debugging
+      console.error('Failed to insert connection into database:', error);
+      throw new Error(
+        `Failed to save connection to database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
   }
 
   /**
@@ -103,35 +94,38 @@ export class PostgresConnectionRepository {
     id: string,
     orgId?: string,
   ): Promise<PostgresConnection | null> {
-    // TODO: Use actual Drizzle query
-    // const conditions = orgId
-    //   ? and(eq(postgresConnections.id, id), eq(postgresConnections.orgId, orgId))
-    //   : eq(postgresConnections.id, id);
-    // const [connection] = await this.db.select().from(postgresConnections).where(conditions).limit(1);
-    // return connection || null;
-
-    return null;
+    const conditions = orgId
+      ? and(eq(postgresConnections.id, id), eq(postgresConnections.orgId, orgId))
+      : eq(postgresConnections.id, id);
+    
+    const [connection] = await this.db
+      .select()
+      .from(postgresConnections)
+      .where(conditions)
+      .limit(1);
+    
+    return connection || null;
   }
 
   /**
    * Find all connections for organization
    */
   async findByOrgId(orgId: string): Promise<PostgresConnection[]> {
-    // TODO: Use actual Drizzle query
-    // return await this.db.select().from(postgresConnections).where(eq(postgresConnections.orgId, orgId));
-    return [];
+    return await this.db
+      .select()
+      .from(postgresConnections)
+      .where(eq(postgresConnections.orgId, orgId));
   }
 
   /**
    * Count connections for organization
    */
   async countByOrgId(orgId: string): Promise<number> {
-    // TODO: Use actual Drizzle query
-    // const result = await this.db.select({ count: sql<number>`count(*)` })
-    //   .from(postgresConnections)
-    //   .where(eq(postgresConnections.orgId, orgId));
-    // return result[0]?.count || 0;
-    return 0;
+    const result = await this.db
+      .select()
+      .from(postgresConnections)
+      .where(eq(postgresConnections.orgId, orgId));
+    return result.length;
   }
 
   /**
@@ -163,23 +157,22 @@ export class PostgresConnectionRepository {
 
     encrypted.updatedAt = new Date();
 
-    // TODO: Use actual Drizzle update
-    // const [connection] = await this.db
-    //   .update(postgresConnections)
-    //   .set(encrypted)
-    //   .where(eq(postgresConnections.id, id))
-    //   .returning();
-    // return connection;
-
-    return {} as PostgresConnection;
+    const [connection] = await this.db
+      .update(postgresConnections)
+      .set(encrypted)
+      .where(eq(postgresConnections.id, id))
+      .returning();
+    
+    return connection;
   }
 
   /**
    * Delete connection
    */
   async delete(id: string): Promise<void> {
-    // TODO: Use actual Drizzle delete
-    // await this.db.delete(postgresConnections).where(eq(postgresConnections.id, id));
+    await this.db
+      .delete(postgresConnections)
+      .where(eq(postgresConnections.id, id));
   }
 
   /**
