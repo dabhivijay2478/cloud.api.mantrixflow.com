@@ -5,6 +5,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
+import * as crypto from 'crypto';
 import {
   postgresConnections,
   PostgresConnection,
@@ -85,8 +86,14 @@ export class PostgresConnectionRepository {
     // const [connection] = await this.db.insert(postgresConnections).values(connectionData).returning();
     // return connection;
 
-    // Placeholder return
-    return {} as PostgresConnection;
+    // Placeholder return - return the connection data with a generated ID
+    // This ensures encrypted fields are present for decryption
+    return {
+      ...connectionData,
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as PostgresConnection;
   }
 
   /**
@@ -181,6 +188,11 @@ export class PostgresConnectionRepository {
   decryptCredentials(
     connection: PostgresConnection,
   ): DecryptedConnectionCredentials {
+    // Validate that required encrypted fields exist
+    if (!connection.host || !connection.database || !connection.username || !connection.password) {
+      throw new Error('Connection is missing required credentials. Connection may not be properly initialized.');
+    }
+
     return {
       host: this.encryptionService.decrypt(connection.host),
       port: connection.port,
