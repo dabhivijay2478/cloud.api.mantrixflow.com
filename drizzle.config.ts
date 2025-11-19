@@ -9,7 +9,10 @@ if (!process.env.DATABASE_URL) {
 }
 
 export default {
-  schema: './src/database/drizzle/schema/postgres-connectors.schema.ts',
+  schema: [
+    './src/database/drizzle/schema/postgres-connectors.schema.ts',
+    './src/database/drizzle/schema/postgres-pipeline.schema.ts',
+  ],
   out: './src/database/drizzle/migrations',
   dialect: 'postgresql',
   dbCredentials: {

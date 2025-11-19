@@ -16,6 +16,14 @@
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": false,
     "strictBindCallApply": false,
-    "noFallthroughCasesInSwitch": false
+    "noFallthroughCasesInSwitch": false,
+    "paths": {
+      "@db/schema": [
+        "src/database/drizzle/schema"
+      ],
+      "@db/schema/*": [
+        "src/database/drizzle/schema/*"
+      ]
+    }
   }
 }

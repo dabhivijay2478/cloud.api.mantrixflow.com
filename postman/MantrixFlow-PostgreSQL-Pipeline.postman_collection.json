@@ -1,0 +1,526 @@
+{
+    "info": {
+        "name": "MantrixFlow - PostgreSQL Pipeline API",
+        "description": "Complete API collection for PostgreSQL bidirectional data pipelines. Includes all 15 endpoints for pipeline management, execution, and monitoring.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "version": "1.0.0"
+    },
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:3000",
+            "type": "string"
+        },
+        {
+            "key": "orgId",
+            "value": "your-org-id-here",
+            "type": "string"
+        },
+        {
+            "key": "userId",
+            "value": "your-user-id-here",
+            "type": "string"
+        },
+        {
+            "key": "pipelineId",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "runId",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "sourceConnectionId",
+            "value": "your-source-connection-id",
+            "type": "string"
+        },
+        {
+            "key": "destinationConnectionId",
+            "value": "your-destination-connection-id",
+            "type": "string"
+        }
+    ],
+    "item": [
+        {
+            "name": "Pipeline Management",
+            "item": [
+                {
+                    "name": "Create Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines"
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"Orders Replication Pipeline\",\n  \"description\": \"Sync orders from production to analytics database\",\n  \"sourceType\": \"postgres\",\n  \"sourceConnectionId\": \"{{sourceConnectionId}}\",\n  \"sourceSchema\": \"public\",\n  \"sourceTable\": \"orders\",\n  \"destinationConnectionId\": \"{{destinationConnectionId}}\",\n  \"destinationSchema\": \"analytics\",\n  \"destinationTable\": \"orders_replica\",\n  \"writeMode\": \"upsert\",\n  \"upsertKey\": [\"id\"],\n  \"syncMode\": \"incremental\",\n  \"incrementalColumn\": \"updated_at\",\n  \"syncFrequency\": \"15min\",\n  \"columnMappings\": [\n    {\n      \"sourceColumn\": \"id\",\n      \"destinationColumn\": \"id\",\n      \"dataType\": \"UUID\",\n      \"nullable\": false,\n      \"isPrimaryKey\": true\n    },\n    {\n      \"sourceColumn\": \"customer_id\",\n      \"destinationColumn\": \"customer_id\",\n      \"dataType\": \"UUID\",\n      \"nullable\": false\n    },\n    {\n      \"sourceColumn\": \"total\",\n      \"destinationColumn\": \"total_amount\",\n      \"dataType\": \"NUMERIC\",\n      \"nullable\": false\n    },\n    {\n      \"sourceColumn\": \"status\",\n      \"destinationColumn\": \"order_status\",\n      \"dataType\": \"VARCHAR(50)\",\n      \"nullable\": false\n    },\n    {\n      \"sourceColumn\": \"created_at\",\n      \"destinationColumn\": \"created_at\",\n      \"dataType\": \"TIMESTAMPTZ\",\n      \"nullable\": false\n    },\n    {\n      \"sourceColumn\": \"updated_at\",\n      \"destinationColumn\": \"updated_at\",\n      \"dataType\": \"TIMESTAMPTZ\",\n      \"nullable\": false\n    }\n  ]\n}"
+                        }
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "if (pm.response.code === 201) {",
+                                    "    const response = pm.response.json();",
+                                    "    pm.collectionVariables.set('pipelineId', response.data.id);",
+                                    "    pm.test('Pipeline created successfully', () => {",
+                                    "        pm.expect(response.success).to.be.true;",
+                                    "    });",
+                                    "}"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "List Pipelines",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines?orgId={{orgId}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines"
+                            ],
+                            "query": [
+                                {
+                                    "key": "orgId",
+                                    "value": "{{orgId}}"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Pipeline Details",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}?orgId={{orgId}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "orgId",
+                                    "value": "{{orgId}}"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Pipeline",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}?orgId={{orgId}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "orgId",
+                                    "value": "{{orgId}}"
+                                }
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"Updated Pipeline Name\",\n  \"description\": \"Updated description\",\n  \"syncFrequency\": \"1hour\"\n}"
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Pipeline",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}?orgId={{orgId}}&dropTable=false",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "orgId",
+                                    "value": "{{orgId}}"
+                                },
+                                {
+                                    "key": "dropTable",
+                                    "value": "false",
+                                    "description": "Set to true to also drop the destination table"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Pipeline Execution",
+            "item": [
+                {
+                    "name": "Execute Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/run",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "run"
+                            ]
+                        }
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "if (pm.response.code === 200) {",
+                                    "    const response = pm.response.json();",
+                                    "    pm.collectionVariables.set('runId', response.data.runId);",
+                                    "    pm.test('Pipeline executed successfully', () => {",
+                                    "        pm.expect(response.success).to.be.true;",
+                                    "    });",
+                                    "}"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Dry Run Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/dry-run",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "dry-run"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Pause Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/pause",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "pause"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Resume Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/resume",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "resume"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Pipeline Configuration",
+            "item": [
+                {
+                    "name": "Validate Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/validate",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "validate"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Auto-Map Columns",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/auto-map",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "auto-map"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Pipeline Monitoring",
+            "item": [
+                {
+                    "name": "Get Pipeline Runs",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/runs?limit=20&offset=0",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "runs"
+                            ],
+                            "query": [
+                                {
+                                    "key": "limit",
+                                    "value": "20"
+                                },
+                                {
+                                    "key": "offset",
+                                    "value": "0"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Run Details",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/runs/{{runId}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "runs",
+                                "{{runId}}"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Pipeline Statistics",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines/{{pipelineId}}/stats",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines",
+                                "{{pipelineId}}",
+                                "stats"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Example: Full Sync Pipeline",
+            "item": [
+                {
+                    "name": "Create Full Sync Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines"
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"Users Full Sync\",\n  \"description\": \"Full sync of users table\",\n  \"sourceType\": \"postgres\",\n  \"sourceConnectionId\": \"{{sourceConnectionId}}\",\n  \"sourceSchema\": \"public\",\n  \"sourceTable\": \"users\",\n  \"destinationConnectionId\": \"{{destinationConnectionId}}\",\n  \"destinationSchema\": \"backup\",\n  \"destinationTable\": \"users_backup\",\n  \"writeMode\": \"replace\",\n  \"syncMode\": \"full\",\n  \"syncFrequency\": \"24hours\"\n}"
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Example: Custom Query Pipeline",
+            "item": [
+                {
+                    "name": "Create Custom Query Pipeline",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/connectors/postgres/pipelines",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "api",
+                                "connectors",
+                                "postgres",
+                                "pipelines"
+                            ]
+                        },
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"User Activity Summary\",\n  \"description\": \"Aggregate user activity data\",\n  \"sourceType\": \"postgres\",\n  \"sourceConnectionId\": \"{{sourceConnectionId}}\",\n  \"sourceQuery\": \"SELECT user_id, COUNT(*) as activity_count, MAX(created_at) as last_activity FROM user_events WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY user_id\",\n  \"destinationConnectionId\": \"{{destinationConnectionId}}\",\n  \"destinationSchema\": \"analytics\",\n  \"destinationTable\": \"user_activity_weekly\",\n  \"writeMode\": \"replace\",\n  \"syncMode\": \"full\",\n  \"syncFrequency\": \"24hours\"\n}"
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        }
+    ]
+}

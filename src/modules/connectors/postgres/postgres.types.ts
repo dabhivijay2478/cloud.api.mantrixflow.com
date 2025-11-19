@@ -324,3 +324,216 @@ export const UpdateSyncScheduleSchema = z.object({
   syncFrequency: z.enum(['manual', '15min', '1hour', '24hours']),
   nextSyncAt: z.date().optional(),
 });
+
+/**
+ * Pipeline-related Types
+ */
+
+/**
+ * Write Mode for destination
+ */
+export enum WriteMode {
+  APPEND = 'append',
+  UPSERT = 'upsert',
+  REPLACE = 'replace',
+}
+
+/**
+ * Pipeline Status
+ */
+export enum PipelineStatus {
+  ACTIVE = 'active',
+  PAUSED = 'paused',
+  ERROR = 'error',
+}
+
+/**
+ * Pipeline Run Status
+ */
+export enum PipelineRunStatus {
+  PENDING = 'pending',
+  RUNNING = 'running',
+  SUCCESS = 'success',
+  FAILED = 'failed',
+  CANCELLED = 'cancelled',
+}
+
+/**
+ * Trigger Type
+ */
+export enum TriggerType {
+  MANUAL = 'manual',
+  SCHEDULED = 'scheduled',
+  WEBHOOK = 'webhook',
+}
+
+/**
+ * Pipeline Configuration
+ */
+export interface Pipeline {
+  id: string;
+  orgId: string;
+  userId: string;
+  name: string;
+  description?: string;
+  sourceType: string;
+  sourceConnectionId?: string;
+  sourceConfig?: any;
+  sourceSchema?: string;
+  sourceTable?: string;
+  sourceQuery?: string;
+  destinationConnectionId: string;
+  destinationSchema: string;
+  destinationTable: string;
+  destinationTableExists: boolean;
+  columnMappings?: ColumnMapping[];
+  transformations?: Transformation[];
+  writeMode: WriteMode;
+  upsertKey?: string[];
+  syncMode: SyncMode;
+  incrementalColumn?: string;
+  lastSyncValue?: string;
+  syncFrequency: SyncFrequency;
+  nextSyncAt?: Date;
+  status: PipelineStatus;
+  lastRunAt?: Date;
+  lastRunStatus?: PipelineRunStatus;
+  lastError?: string;
+  totalRowsProcessed: number;
+  totalRunsSuccessful: number;
+  totalRunsFailed: number;
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt?: Date;
+}
+
+/**
+ * Pipeline Run Result
+ */
+export interface PipelineRunResult {
+  runId: string;
+  status: 'success' | 'failed';
+  rowsRead: number;
+  rowsWritten: number;
+  rowsSkipped: number;
+  rowsFailed: number;
+  durationSeconds: number;
+  errors: PipelineError[];
+}
+
+/**
+ * Pipeline Error
+ */
+export interface PipelineError {
+  stage: 'source' | 'transform' | 'destination';
+  message: string;
+  row?: number;
+  code?: string;
+}
+
+/**
+ * Write Result
+ */
+export interface WriteResult {
+  rowsWritten: number;
+  rowsSkipped: number;
+  rowsFailed: number;
+  errors: WriteError[];
+}
+
+/**
+ * Write Error
+ */
+export interface WriteError {
+  row: number;
+  error: string;
+  data: any;
+}
+
+/**
+ * Schema Validation Result
+ */
+export interface SchemaValidationResult {
+  valid: boolean;
+  missingColumns: string[];
+  typeMismatches: TypeMismatch[];
+}
+
+/**
+ * Type Mismatch
+ */
+export interface TypeMismatch {
+  column: string;
+  expectedType: string;
+  actualType: string;
+}
+
+/**
+ * Table Statistics
+ */
+export interface TableStats {
+  rowCount: number;
+  sizeBytes: number;
+  lastUpdated: Date;
+}
+
+/**
+ * Validation Result
+ */
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * Dry Run Result
+ */
+export interface DryRunResult {
+  sourceRowCount: number;
+  sampleRows: any[];
+  destinationSchemaPreview: ColumnMapping[];
+  estimatedDuration: number;
+}
+
+/**
+ * Type Inference Result
+ */
+export interface TypeInferenceResult {
+  column: string;
+  inferredType: string;
+  confidence: number;
+  alternatives: string[];
+}
+
+/**
+ * Validation Error
+ */
+export interface ValidationError {
+  column: string;
+  error: string;
+  severity: 'error' | 'warning';
+}
+
+/**
+ * Column Mapping (re-exported from schema)
+ */
+export interface ColumnMapping {
+  sourceColumn: string;
+  destinationColumn: string;
+  dataType: string;
+  nullable: boolean;
+  defaultValue?: string;
+  isPrimaryKey?: boolean;
+  maxLength?: number;
+}
+
+/**
+ * Transformation (re-exported from schema)
+ */
+export interface Transformation {
+  sourceColumn: string;
+  transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom';
+  transformConfig: any;
+  destinationColumn: string;
+}
