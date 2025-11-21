@@ -7,11 +7,18 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Pool, PoolConfig, QueryResult } from 'pg';
 import { Client as SSHClient, ConnectConfig } from 'ssh2';
 import { EventEmitter } from 'events';
+import { promises as dns, setDefaultResultOrder } from 'dns';
 import {
   PostgresConnectionConfig,
   DecryptedConnectionCredentials,
 } from '../postgres.types';
 import { CONNECTION_DEFAULTS } from '../constants/postgres.constants';
+
+// Set Node.js to prefer IPv4 for DNS lookups (affects all connections)
+// This helps prevent IPv6 connectivity issues for ALL PostgreSQL connections
+if (typeof setDefaultResultOrder === 'function') {
+  setDefaultResultOrder('ipv4first');
+}
 
 /**
  * Connection pool with metadata
@@ -32,6 +39,108 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
   private readonly events = new EventEmitter();
 
   /**
+   * Resolve hostname to IPv4 address to force IPv4 connections
+   * This prevents IPv6 connectivity issues (EHOSTUNREACH)
+   * Works for ALL PostgreSQL connections, not just Supabase
+   */
+  private async resolveToIPv4(host: string): Promise<string> {
+    // If it's already an IP address, return as-is
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      return host;
+    }
+
+    // If it's localhost, return as-is (will use IPv4 by default)
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return host;
+    }
+
+    try {
+      // First, try to resolve to IPv4 address explicitly with a timeout
+      // Use all: true to get all addresses, then filter for IPv4
+      const allAddresses = await Promise.race([
+        dns.lookup(host, { family: 4, all: true }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('DNS lookup timeout')), 5000),
+        ),
+      ]);
+
+      // Find the first IPv4 address
+      if (Array.isArray(allAddresses) && allAddresses.length > 0) {
+        const ipv4Address = allAddresses.find((addr) => addr.family === 4);
+        if (ipv4Address) {
+          return ipv4Address.address;
+        }
+      }
+
+      // If no IPv4 found in all addresses, try single lookup
+      const singleAddress = await dns.lookup(host, { family: 4, all: false });
+      return singleAddress.address;
+    } catch {
+      // If IPv4 lookup fails, try getting all addresses without family restriction
+      try {
+        const allAddresses = await Promise.race([
+          dns.lookup(host, { all: true }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('DNS lookup timeout')), 5000),
+          ),
+        ]);
+
+        if (Array.isArray(allAddresses) && allAddresses.length > 0) {
+          // Find the first IPv4 address
+          const ipv4Address = allAddresses.find((addr) => addr.family === 4);
+          if (ipv4Address) {
+            return ipv4Address.address;
+          }
+        }
+      } catch (fallbackError) {
+        // If all lookups fail, we'll still try with the hostname
+        // but log a warning that IPv6 issues might occur
+        console.warn(
+          `[PostgreSQL Connection] Failed to resolve ${host} to IPv4 address. ` +
+            `Connection will attempt with hostname (may try IPv6). Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+        );
+      }
+      // Return original hostname as last resort
+      // Note: This might still try IPv6, but it's better than failing completely
+      return host;
+    }
+  }
+
+  /**
+   * Convert Supabase direct DB hostname to pooler hostname (for IPv4 support)
+   * Supabase direct connections are IPv6-only, but pooler supports IPv4
+   * Returns multiple pooler options to try
+   */
+  private getSupabasePoolerOptions(
+    host: string,
+  ): Array<{ host: string; port: number; type: string }> {
+    // Pattern: db.{project-ref}.supabase.co
+    const supabaseDirectPattern = /^db\.([a-z0-9]+)\.supabase\.co$/i;
+    const match = host.match(supabaseDirectPattern);
+
+    if (match) {
+      const projectRef = match[1];
+      // Try multiple pooler formats:
+      // 1. Transaction pooler: {project-ref}.pooler.supabase.com:6543
+      // 2. Session pooler: {project-ref}.pooler.supabase.com:5432
+      return [
+        {
+          host: `${projectRef}.pooler.supabase.com`,
+          port: 6543,
+          type: 'transaction',
+        },
+        {
+          host: `${projectRef}.pooler.supabase.com`,
+          port: 5432,
+          type: 'session',
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  /**
    * Create or get connection pool
    */
   async createPool(
@@ -49,6 +158,43 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     let sshTunnel: SSHClient | undefined;
     let actualHost = credentials.host;
     let actualPort = credentials.port;
+    let actualUsername = credentials.username;
+
+    // Check if this is a Supabase pooler hostname and fix it if needed
+    const isSupabasePoolerHost = /^aws-\d+-[a-z0-9-]+$/i.test(actualHost);
+    let isSupabasePooler = false;
+
+    if (!credentials.sshTunnelEnabled) {
+      // Fix incomplete Supabase pooler hostname (e.g., "aws-1-ap-southeast-2" -> "aws-1-ap-southeast-2.pooler.supabase.com")
+      if (
+        isSupabasePoolerHost &&
+        !actualHost.includes('.pooler.supabase.com')
+      ) {
+        actualHost = `${actualHost}.pooler.supabase.com`;
+        isSupabasePooler = true;
+        // Fix username format for Supabase pooler (should be postgres.{project-ref})
+        if (!actualUsername.includes('.')) {
+          actualUsername = `postgres.${actualUsername}`;
+        }
+      } else {
+        // Try to convert Supabase direct DB to pooler for IPv4 support
+        const poolerOptions = this.getSupabasePoolerOptions(credentials.host);
+        // Use the first pooler option (transaction pooler) for persistent connections
+        if (poolerOptions.length > 0) {
+          const poolerOption = poolerOptions[0];
+          isSupabasePooler = true;
+          actualHost = poolerOption.host;
+          actualPort = poolerOption.port;
+
+          // Log the conversion for debugging
+          this.events.emit('hostname-converted', {
+            original: `${credentials.host}:${credentials.port}`,
+            converted: `${poolerOption.host}:${poolerOption.port}`,
+            type: poolerOption.type,
+          });
+        }
+      }
+    }
 
     if (credentials.sshTunnelEnabled) {
       sshTunnel = await this.createSSHTunnel(credentials);
@@ -58,19 +204,19 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       actualPort = (sshTunnel as { localPort?: number }).localPort || 5432;
     }
 
-    // Detect Supabase connections (supabase.co or supabase.com domains)
-    const isSupabase =
-      actualHost.includes('supabase.co') || actualHost.includes('supabase.com');
+    // Resolve hostname to IPv4 address to force IPv4 connections
+    // This prevents IPv6 connectivity issues (EHOSTUNREACH)
+    const resolvedHost = await this.resolveToIPv4(actualHost);
 
-    // Supabase requires SSL, so enable it if not explicitly disabled
-    const shouldUseSSL = credentials.sslEnabled || isSupabase;
+    // SSL is enabled if explicitly configured OR if using Supabase pooler (which requires SSL)
+    const shouldUseSSL = credentials.sslEnabled === true || isSupabasePooler;
 
     // Build pool configuration
     const poolConfig: PoolConfig = {
-      host: actualHost,
+      host: resolvedHost,
       port: actualPort,
       database: credentials.database,
-      user: credentials.username,
+      user: actualUsername, // Use corrected username for Supabase
       password: credentials.password,
       max: credentials.connectionPoolSize ?? CONNECTION_DEFAULTS.MAX_POOL_SIZE,
       min: 1,
@@ -202,6 +348,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       // Create SSH tunnel if needed
       let actualHost = config.host;
       let actualPort = config.port || CONNECTION_DEFAULTS.PORT;
+      let isSupabasePooler = false;
 
       if (config.sshTunnel?.enabled) {
         sshTunnel = await this.createSSHTunnel({
@@ -218,74 +365,264 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
           sshPrivateKey: config.sshTunnel.privateKey,
         });
         actualHost = 'localhost';
-
         actualPort = (sshTunnel as { localPort?: number }).localPort || 5432;
       }
 
-      // Detect Supabase connections (supabase.co or supabase.com domains)
-      const isSupabase =
-        actualHost.includes('supabase.co') ||
-        actualHost.includes('supabase.com');
+      // Check if this is a Supabase connection and fix hostname/username if needed
+      const isSupabaseDirect = /^db\.([a-z0-9]+)\.supabase\.co$/i.test(
+        config.host,
+      );
+      const isSupabasePoolerHost = /^aws-\d+-[a-z0-9-]+$/i.test(actualHost);
+      let actualUsername = config.username;
+      let isSupabaseConnection = false;
 
-      // Supabase requires SSL, so enable it if not explicitly disabled
-      const shouldUseSSL =
-        config.ssl?.enabled !== false &&
-        (isSupabase || config.ssl?.enabled === true);
+      // Fix incomplete Supabase pooler hostname (e.g., "aws-1-ap-southeast-2" -> "aws-1-ap-southeast-2.pooler.supabase.com")
+      if (
+        isSupabasePoolerHost &&
+        !actualHost.includes('.pooler.supabase.com')
+      ) {
+        actualHost = `${actualHost}.pooler.supabase.com`;
+        isSupabaseConnection = true;
+        isSupabasePooler = true;
+        // Fix username format for Supabase pooler (should be postgres.{project-ref})
+        // If username doesn't start with "postgres.", try to add it
+        // But we need the project ref - extract from username if it's just the project ref
+        if (!actualUsername.includes('.')) {
+          // Username is likely just the project ref, add "postgres." prefix
+          actualUsername = `postgres.${actualUsername}`;
+        } else if (!actualUsername.startsWith('postgres.')) {
+          // Username has a dot but doesn't start with postgres., might be wrong format
+          // Keep as-is but log a warning
+          console.warn(
+            `[PostgreSQL Connection] Supabase username format might be incorrect. Expected format: postgres.{project-ref}, got: ${actualUsername}`,
+          );
+        }
+      }
 
-      // Increase timeout for Supabase connections (they may need more time)
-      const connectionTimeout = isSupabase
-        ? config.connectionTimeout ||
-          CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS * 2 // Double timeout for Supabase
-        : config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS;
+      // Resolve hostname to IPv4 address to force IPv4 connections
+      // This prevents IPv6 connectivity issues (EHOSTUNREACH)
+      // For Supabase direct connections, they're IPv6-only, so resolution will return hostname
+      let resolvedHost: string;
+      let shouldUseSSL = config.ssl?.enabled === true || isSupabaseConnection;
 
-      // Create temporary pool for testing
-      pool = new Pool({
-        host: actualHost,
-        port: actualPort,
-        database: config.database,
-        user: config.username,
-        password: config.password,
-        max: 1,
-        connectionTimeoutMillis: connectionTimeout,
-        // For Supabase, use SSL but don't reject unauthorized if no CA cert provided
-        ssl: shouldUseSSL
-          ? {
-              rejectUnauthorized: config.ssl?.caCert
-                ? config.ssl.rejectUnauthorized !== false
-                : false,
-              ca: config.ssl?.caCert
-                ? Buffer.from(config.ssl.caCert)
-                : undefined,
-            }
-          : false,
-      });
-
-      // Test connection
-      const client = await pool.connect();
       try {
-        const result = await client.query('SELECT version()');
+        resolvedHost = await this.resolveToIPv4(actualHost);
+        // If resolution returned the hostname (not an IP), it means it's IPv6-only or DNS failed
+        // We'll try to connect anyway and handle IPv6 errors in the catch block
+      } catch {
+        // DNS resolution completely failed, use hostname and let connection attempt fail with clearer error
+        resolvedHost = actualHost;
+      }
 
-        const version =
-          (result.rows[0] as { version?: string })?.version || 'Unknown';
-        const responseTimeMs = Date.now() - startTime;
+      // Use configured timeout or default
+      const connectionTimeout =
+        config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS;
 
-        return {
-          success: true,
-          version,
-          responseTimeMs,
-        };
-      } finally {
-        client.release();
+      // Try connection
+      try {
+        // Create temporary pool for testing
+        pool = new Pool({
+          host: resolvedHost,
+          port: actualPort,
+          database: config.database,
+          user: actualUsername, // Use corrected username for Supabase
+          password: config.password,
+          max: 1,
+          connectionTimeoutMillis: connectionTimeout,
+          ssl: shouldUseSSL
+            ? {
+                rejectUnauthorized: config.ssl?.caCert
+                  ? config.ssl.rejectUnauthorized !== false
+                  : false,
+                ca: config.ssl?.caCert
+                  ? Buffer.from(config.ssl.caCert)
+                  : undefined,
+              }
+            : false,
+        });
+
+        // Test connection
+        const client = await pool.connect();
+        try {
+          const result = await client.query('SELECT version()');
+
+          const version =
+            (result.rows[0] as { version?: string })?.version || 'Unknown';
+          const responseTimeMs = Date.now() - startTime;
+
+          return {
+            success: true,
+            version,
+            responseTimeMs,
+          };
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        // If Supabase direct connection failed with IPv6 error and we haven't tried pooler yet
+        if (
+          isSupabaseDirect &&
+          !config.sshTunnel?.enabled &&
+          !isSupabasePooler
+        ) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          const isIPv6Error =
+            errorMessage.includes('EHOSTUNREACH') ||
+            errorMessage.includes('IPv6') ||
+            (error instanceof Error &&
+              (error as { code?: string }).code === 'EHOSTUNREACH');
+
+          // If it's an IPv6 error, try pooler (but only if pooler hostname resolves)
+          if (isIPv6Error) {
+            // Clean up failed pool
+            if (pool) {
+              await pool.end();
+              pool = undefined;
+            }
+
+            // Try multiple pooler options
+            const poolerOptions = this.getSupabasePoolerOptions(config.host);
+            let poolerSuccess = false;
+
+            for (const poolerOption of poolerOptions) {
+              try {
+                // Check if pooler hostname resolves
+                const poolerResolved = await this.resolveToIPv4(
+                  poolerOption.host,
+                );
+
+                // Pooler hostname resolves, try to connect
+                isSupabasePooler = true;
+                actualHost = poolerOption.host;
+                actualPort = poolerOption.port;
+                resolvedHost = poolerResolved;
+                shouldUseSSL = true; // Pooler requires SSL
+
+                // Clean up any existing pool (from previous iteration)
+                if (pool) {
+                  const poolToClose: Pool = pool;
+                  pool = undefined;
+                  await poolToClose.end();
+                }
+
+                // Create new pool with pooler
+                pool = new Pool({
+                  host: resolvedHost,
+                  port: actualPort,
+                  database: config.database,
+                  user: actualUsername, // Use corrected username for Supabase
+                  password: config.password,
+                  max: 1,
+                  connectionTimeoutMillis: connectionTimeout,
+                  ssl: {
+                    rejectUnauthorized: false, // Pooler doesn't require CA cert
+                  },
+                });
+
+                // Test connection with pooler
+                const client = await pool.connect();
+                try {
+                  const result = await client.query('SELECT version()');
+
+                  const version =
+                    (result.rows[0] as { version?: string })?.version ||
+                    'Unknown';
+                  const responseTimeMs = Date.now() - startTime;
+
+                  poolerSuccess = true;
+                  return {
+                    success: true,
+                    version,
+                    responseTimeMs,
+                  };
+                } finally {
+                  client.release();
+                }
+              } catch {
+                // This pooler option failed, try next one
+                if (pool) {
+                  await pool.end();
+                  pool = undefined;
+                }
+                continue;
+              }
+            }
+
+            // All pooler options failed - this should never happen if poolerSuccess is true
+            // But TypeScript needs this check to understand the control flow
+            if (!poolerSuccess) {
+              throw new Error(
+                `Supabase direct connection (${config.host}) is IPv6-only and not accessible from this server. ` +
+                  `Pooler connections are not available for this project. ` +
+                  `Please use the connection string from your Supabase dashboard (Settings → Database → Connection String) ` +
+                  `which includes the correct pooler hostname, or enable IPv6 support on your server.`,
+              );
+            }
+            // If we reach here, poolerSuccess is true and we should have returned
+            // This should never happen, but TypeScript needs it for type checking
+            throw new Error(
+              'Unexpected state: pooler connection succeeded but did not return',
+            );
+          } else {
+            // Not an IPv6 error, re-throw
+            throw error;
+          }
+        } else {
+          // Not a Supabase connection or already tried pooler, re-throw
+          throw error;
+        }
       }
     } catch (error) {
-      // Map error to user-friendly message without throwing
-      const errorMessage =
-        error instanceof Error ? error.message : 'Connection failed';
+      // Properly extract and return error message
+      let errorMessage = 'Connection failed';
+      let errorCode = '';
 
-      // Check if it's a timeout error
+      // Handle AggregateError (used by pg library for connection errors)
+      if (error && typeof error === 'object' && 'errors' in error) {
+        const aggregateError = error as {
+          errors?: Array<{ message?: string; code?: string }>;
+          code?: string;
+        };
+
+        // Try to get the first error's message
+        if (
+          aggregateError.errors &&
+          Array.isArray(aggregateError.errors) &&
+          aggregateError.errors.length > 0
+        ) {
+          const firstError = aggregateError.errors[0];
+          errorMessage =
+            firstError.message || firstError.code || 'Connection failed';
+          errorCode = firstError.code || aggregateError.code || '';
+        } else if (aggregateError.code) {
+          errorCode = aggregateError.code;
+          errorMessage = aggregateError.code;
+        }
+      } else if (error instanceof Error) {
+        errorMessage = error.message || 'Connection failed';
+        errorCode = (error as { code?: string }).code || '';
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        errorMessage =
+          String((error as { message: unknown }).message) ||
+          'Connection failed';
+        errorCode = (error as { code?: unknown }).code
+          ? String((error as { code: unknown }).code)
+          : '';
+      }
+
+      // Use error code if message is still empty
+      if (!errorMessage || errorMessage.trim() === '') {
+        errorMessage = errorCode || 'Connection failed';
+      }
+
+      // Check for specific error types and provide user-friendly messages
       if (
         errorMessage.includes('timeout') ||
-        errorMessage.includes('ETIMEDOUT')
+        errorMessage.includes('ETIMEDOUT') ||
+        errorCode === 'ETIMEDOUT'
       ) {
         return {
           success: false,
@@ -294,6 +631,59 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         };
       }
 
+      if (
+        errorMessage.includes('ECONNREFUSED') ||
+        errorCode === 'ECONNREFUSED'
+      ) {
+        return {
+          success: false,
+          error:
+            'Connection refused. Please verify the host and port are correct.',
+        };
+      }
+
+      if (errorMessage.includes('ENOTFOUND') || errorCode === 'ENOTFOUND') {
+        return {
+          success: false,
+          error: 'Host not found. Please verify the hostname or IP address.',
+        };
+      }
+
+      if (
+        errorMessage.includes('EHOSTUNREACH') ||
+        errorCode === 'EHOSTUNREACH'
+      ) {
+        return {
+          success: false,
+          error:
+            'Host unreachable. The server may not be accessible via IPv6. Please check your network configuration or use an IPv4 address.',
+        };
+      }
+
+      if (errorMessage.includes('password authentication failed')) {
+        return {
+          success: false,
+          error:
+            'Authentication failed. Please verify your username and password.',
+        };
+      }
+
+      if (errorMessage.includes('no pg_hba.conf entry')) {
+        return {
+          success: false,
+          error:
+            'Access denied. The database server does not allow connections from your IP address.',
+        };
+      }
+
+      if (errorMessage.includes('does not exist')) {
+        return {
+          success: false,
+          error: 'Database does not exist. Please verify the database name.',
+        };
+      }
+
+      // Return the original error message if no specific match
       return {
         success: false,
         error: errorMessage,
