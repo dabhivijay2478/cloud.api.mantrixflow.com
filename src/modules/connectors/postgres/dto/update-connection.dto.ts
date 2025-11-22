@@ -138,22 +138,22 @@ export class UpdateConnectionDto {
   @ApiPropertyOptional({
     description: 'SSL configuration',
     type: SSLConfigDto,
+    nullable: true,
   })
   @IsOptional()
-  @IsObject()
   @ValidateNested()
   @Type(() => SSLConfigDto)
-  ssl?: SSLConfigDto;
+  ssl?: SSLConfigDto | null;
 
   @ApiPropertyOptional({
     description: 'SSH tunnel configuration',
     type: SSHTunnelConfigDto,
+    nullable: true,
   })
   @IsOptional()
-  @IsObject()
   @ValidateNested()
   @Type(() => SSHTunnelConfigDto)
-  sshTunnel?: SSHTunnelConfigDto;
+  sshTunnel?: SSHTunnelConfigDto | null;
 
   @ApiPropertyOptional({
     description: 'Connection timeout in milliseconds',

@@ -97,7 +97,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         // but log a warning that IPv6 issues might occur
         console.warn(
           `[PostgreSQL Connection] Failed to resolve ${host} to IPv4 address. ` +
-            `Connection will attempt with hostname (may try IPv6). Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+          `Connection will attempt with hostname (may try IPv6). Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
         );
       }
       // Return original hostname as last resort
@@ -106,39 +106,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     }
   }
 
-  /**
-   * Convert Supabase direct DB hostname to pooler hostname (for IPv4 support)
-   * Supabase direct connections are IPv6-only, but pooler supports IPv4
-   * Returns multiple pooler options to try
-   */
-  private getSupabasePoolerOptions(
-    host: string,
-  ): Array<{ host: string; port: number; type: string }> {
-    // Pattern: db.{project-ref}.supabase.co
-    const supabaseDirectPattern = /^db\.([a-z0-9]+)\.supabase\.co$/i;
-    const match = host.match(supabaseDirectPattern);
 
-    if (match) {
-      const projectRef = match[1];
-      // Try multiple pooler formats:
-      // 1. Transaction pooler: {project-ref}.pooler.supabase.com:6543
-      // 2. Session pooler: {project-ref}.pooler.supabase.com:5432
-      return [
-        {
-          host: `${projectRef}.pooler.supabase.com`,
-          port: 6543,
-          type: 'transaction',
-        },
-        {
-          host: `${projectRef}.pooler.supabase.com`,
-          port: 5432,
-          type: 'session',
-        },
-      ];
-    }
-
-    return [];
-  }
 
   /**
    * Create or get connection pool
@@ -158,43 +126,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     let sshTunnel: SSHClient | undefined;
     let actualHost = credentials.host;
     let actualPort = credentials.port;
-    let actualUsername = credentials.username;
-
-    // Check if this is a Supabase pooler hostname and fix it if needed
-    const isSupabasePoolerHost = /^aws-\d+-[a-z0-9-]+$/i.test(actualHost);
-    let isSupabasePooler = false;
-
-    if (!credentials.sshTunnelEnabled) {
-      // Fix incomplete Supabase pooler hostname (e.g., "aws-1-ap-southeast-2" -> "aws-1-ap-southeast-2.pooler.supabase.com")
-      if (
-        isSupabasePoolerHost &&
-        !actualHost.includes('.pooler.supabase.com')
-      ) {
-        actualHost = `${actualHost}.pooler.supabase.com`;
-        isSupabasePooler = true;
-        // Fix username format for Supabase pooler (should be postgres.{project-ref})
-        if (!actualUsername.includes('.')) {
-          actualUsername = `postgres.${actualUsername}`;
-        }
-      } else {
-        // Try to convert Supabase direct DB to pooler for IPv4 support
-        const poolerOptions = this.getSupabasePoolerOptions(credentials.host);
-        // Use the first pooler option (transaction pooler) for persistent connections
-        if (poolerOptions.length > 0) {
-          const poolerOption = poolerOptions[0];
-          isSupabasePooler = true;
-          actualHost = poolerOption.host;
-          actualPort = poolerOption.port;
-
-          // Log the conversion for debugging
-          this.events.emit('hostname-converted', {
-            original: `${credentials.host}:${credentials.port}`,
-            converted: `${poolerOption.host}:${poolerOption.port}`,
-            type: poolerOption.type,
-          });
-        }
-      }
-    }
+    const actualUsername = credentials.username;
 
     if (credentials.sshTunnelEnabled) {
       sshTunnel = await this.createSSHTunnel(credentials);
@@ -208,8 +140,8 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     // This prevents IPv6 connectivity issues (EHOSTUNREACH)
     const resolvedHost = await this.resolveToIPv4(actualHost);
 
-    // SSL is enabled if explicitly configured OR if using Supabase pooler (which requires SSL)
-    const shouldUseSSL = credentials.sslEnabled === true || isSupabasePooler;
+    // SSL is enabled if explicitly configured
+    const shouldUseSSL = credentials.sslEnabled === true;
 
     // Build pool configuration
     const poolConfig: PoolConfig = {
@@ -224,11 +156,11 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       connectionTimeoutMillis: CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
       ssl: shouldUseSSL
         ? {
-            rejectUnauthorized: credentials.sslCaCert ? true : false, // Only reject if CA cert is provided
-            ca: credentials.sslCaCert
-              ? Buffer.from(credentials.sslCaCert)
-              : undefined,
-          }
+          rejectUnauthorized: credentials.sslCaCert ? true : false, // Only reject if CA cert is provided
+          ca: credentials.sslCaCert
+            ? Buffer.from(credentials.sslCaCert)
+            : undefined,
+        }
         : false,
     };
 
@@ -348,7 +280,6 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       // Create SSH tunnel if needed
       let actualHost = config.host;
       let actualPort = config.port || CONNECTION_DEFAULTS.PORT;
-      let isSupabasePooler = false;
 
       if (config.sshTunnel?.enabled) {
         sshTunnel = await this.createSSHTunnel({
@@ -368,42 +299,16 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         actualPort = (sshTunnel as { localPort?: number }).localPort || 5432;
       }
 
-      // Check if this is a Supabase connection and fix hostname/username if needed
-      const isSupabaseDirect = /^db\.([a-z0-9]+)\.supabase\.co$/i.test(
-        config.host,
-      );
-      const isSupabasePoolerHost = /^aws-\d+-[a-z0-9-]+$/i.test(actualHost);
-      let actualUsername = config.username;
-      let isSupabaseConnection = false;
-
-      // Fix incomplete Supabase pooler hostname (e.g., "aws-1-ap-southeast-2" -> "aws-1-ap-southeast-2.pooler.supabase.com")
-      if (
-        isSupabasePoolerHost &&
-        !actualHost.includes('.pooler.supabase.com')
-      ) {
-        actualHost = `${actualHost}.pooler.supabase.com`;
-        isSupabaseConnection = true;
-        isSupabasePooler = true;
-        // Fix username format for Supabase pooler (should be postgres.{project-ref})
-        // If username doesn't start with "postgres.", try to add it
-        // But we need the project ref - extract from username if it's just the project ref
-        if (!actualUsername.includes('.')) {
-          // Username is likely just the project ref, add "postgres." prefix
-          actualUsername = `postgres.${actualUsername}`;
-        } else if (!actualUsername.startsWith('postgres.')) {
-          // Username has a dot but doesn't start with postgres., might be wrong format
-          // Keep as-is but log a warning
-          console.warn(
-            `[PostgreSQL Connection] Supabase username format might be incorrect. Expected format: postgres.{project-ref}, got: ${actualUsername}`,
-          );
-        }
-      }
+      const actualUsername = config.username;
 
       // Resolve hostname to IPv4 address to force IPv4 connections
       // This prevents IPv6 connectivity issues (EHOSTUNREACH)
       // For Supabase direct connections, they're IPv6-only, so resolution will return hostname
+      // Resolve hostname to IPv4 address to force IPv4 connections
+      // This prevents IPv6 connectivity issues (EHOSTUNREACH)
+      // For Supabase direct connections, they're IPv6-only, so resolution will return hostname
       let resolvedHost: string;
-      let shouldUseSSL = config.ssl?.enabled === true || isSupabaseConnection;
+      const shouldUseSSL = config.ssl?.enabled === true;
 
       try {
         resolvedHost = await this.resolveToIPv4(actualHost);
@@ -431,13 +336,13 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
           connectionTimeoutMillis: connectionTimeout,
           ssl: shouldUseSSL
             ? {
-                rejectUnauthorized: config.ssl?.caCert
-                  ? config.ssl.rejectUnauthorized !== false
-                  : false,
-                ca: config.ssl?.caCert
-                  ? Buffer.from(config.ssl.caCert)
-                  : undefined,
-              }
+              rejectUnauthorized: config.ssl?.caCert
+                ? config.ssl.rejectUnauthorized !== false
+                : false,
+              ca: config.ssl?.caCert
+                ? Buffer.from(config.ssl.caCert)
+                : undefined,
+            }
             : false,
         });
 
@@ -459,119 +364,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
           client.release();
         }
       } catch (error) {
-        // If Supabase direct connection failed with IPv6 error and we haven't tried pooler yet
-        if (
-          isSupabaseDirect &&
-          !config.sshTunnel?.enabled &&
-          !isSupabasePooler
-        ) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          const isIPv6Error =
-            errorMessage.includes('EHOSTUNREACH') ||
-            errorMessage.includes('IPv6') ||
-            (error instanceof Error &&
-              (error as { code?: string }).code === 'EHOSTUNREACH');
-
-          // If it's an IPv6 error, try pooler (but only if pooler hostname resolves)
-          if (isIPv6Error) {
-            // Clean up failed pool
-            if (pool) {
-              await pool.end();
-              pool = undefined;
-            }
-
-            // Try multiple pooler options
-            const poolerOptions = this.getSupabasePoolerOptions(config.host);
-            let poolerSuccess = false;
-
-            for (const poolerOption of poolerOptions) {
-              try {
-                // Check if pooler hostname resolves
-                const poolerResolved = await this.resolveToIPv4(
-                  poolerOption.host,
-                );
-
-                // Pooler hostname resolves, try to connect
-                isSupabasePooler = true;
-                actualHost = poolerOption.host;
-                actualPort = poolerOption.port;
-                resolvedHost = poolerResolved;
-                shouldUseSSL = true; // Pooler requires SSL
-
-                // Clean up any existing pool (from previous iteration)
-                if (pool) {
-                  const poolToClose: Pool = pool;
-                  pool = undefined;
-                  await poolToClose.end();
-                }
-
-                // Create new pool with pooler
-                pool = new Pool({
-                  host: resolvedHost,
-                  port: actualPort,
-                  database: config.database,
-                  user: actualUsername, // Use corrected username for Supabase
-                  password: config.password,
-                  max: 1,
-                  connectionTimeoutMillis: connectionTimeout,
-                  ssl: {
-                    rejectUnauthorized: false, // Pooler doesn't require CA cert
-                  },
-                });
-
-                // Test connection with pooler
-                const client = await pool.connect();
-                try {
-                  const result = await client.query('SELECT version()');
-
-                  const version =
-                    (result.rows[0] as { version?: string })?.version ||
-                    'Unknown';
-                  const responseTimeMs = Date.now() - startTime;
-
-                  poolerSuccess = true;
-                  return {
-                    success: true,
-                    version,
-                    responseTimeMs,
-                  };
-                } finally {
-                  client.release();
-                }
-              } catch {
-                // This pooler option failed, try next one
-                if (pool) {
-                  await pool.end();
-                  pool = undefined;
-                }
-                continue;
-              }
-            }
-
-            // All pooler options failed - this should never happen if poolerSuccess is true
-            // But TypeScript needs this check to understand the control flow
-            if (!poolerSuccess) {
-              throw new Error(
-                `Supabase direct connection (${config.host}) is IPv6-only and not accessible from this server. ` +
-                  `Pooler connections are not available for this project. ` +
-                  `Please use the connection string from your Supabase dashboard (Settings → Database → Connection String) ` +
-                  `which includes the correct pooler hostname, or enable IPv6 support on your server.`,
-              );
-            }
-            // If we reach here, poolerSuccess is true and we should have returned
-            // This should never happen, but TypeScript needs it for type checking
-            throw new Error(
-              'Unexpected state: pooler connection succeeded but did not return',
-            );
-          } else {
-            // Not an IPv6 error, re-throw
-            throw error;
-          }
-        } else {
-          // Not a Supabase connection or already tried pooler, re-throw
-          throw error;
-        }
+        throw error;
       }
     } catch (error) {
       // Properly extract and return error message

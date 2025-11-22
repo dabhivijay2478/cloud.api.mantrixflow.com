@@ -89,19 +89,19 @@ export class TestConnectionDto {
     description: 'SSL configuration',
     type: SSLConfigDto,
     required: false,
+    nullable: true,
   })
-  @IsObject()
   @IsOptional()
-  ssl?: SSLConfigDto;
+  ssl?: SSLConfigDto | null;
 
   @ApiProperty({
     description: 'SSH tunnel configuration',
     type: SSHTunnelConfigDto,
     required: false,
+    nullable: true,
   })
-  @IsObject()
   @IsOptional()
-  sshTunnel?: SSHTunnelConfigDto;
+  sshTunnel?: SSHTunnelConfigDto | null;
 
   @ApiProperty({
     description: 'Connection timeout in milliseconds',

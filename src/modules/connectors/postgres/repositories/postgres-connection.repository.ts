@@ -19,7 +19,7 @@ export class PostgresConnectionRepository {
   constructor(
     @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
     private readonly encryptionService: EncryptionService,
-  ) {}
+  ) { }
 
   /**
    * Create connection with encrypted credentials
@@ -94,11 +94,24 @@ export class PostgresConnectionRepository {
         'Error message:',
         error instanceof Error ? error.message : String(error),
       );
+      // Log error code if available (Postgres error)
+      const errorCode = (error as { code?: string })?.code;
+      if (errorCode) {
+        console.error('Error code:', errorCode);
+      }
+
       console.error('Error details:', JSON.stringify(error, null, 2));
       console.error(
         'Connection data that failed:',
         JSON.stringify(connectionData, null, 2),
       );
+
+      // Re-throw with more context if it's a known Postgres error
+      if (errorCode) {
+        throw new Error(
+          `Database error (${errorCode}): ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+      }
 
       throw new Error(
         `Failed to save connection to database: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -115,9 +128,9 @@ export class PostgresConnectionRepository {
   ): Promise<PostgresConnection | null> {
     const conditions = orgId
       ? and(
-          eq(postgresConnections.id, id),
-          eq(postgresConnections.orgId, orgId),
-        )
+        eq(postgresConnections.id, id),
+        eq(postgresConnections.orgId, orgId),
+      )
       : eq(postgresConnections.id, id);
 
     const [connection] = await this.db
@@ -143,11 +156,25 @@ export class PostgresConnectionRepository {
    * Count connections for organization
    */
   async countByOrgId(orgId: string): Promise<number> {
-    const result = await this.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(postgresConnections)
-      .where(eq(postgresConnections.orgId, orgId));
-    return result[0]?.count || 0;
+    try {
+      console.log('🔍 countByOrgId called with orgId:', orgId);
+      console.log('📦 Database instance:', this.db ? 'EXISTS' : 'NULL');
+
+      const result = await this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(postgresConnections)
+        .where(eq(postgresConnections.orgId, orgId));
+
+      console.log('✅ countByOrgId query succeeded:', result);
+      return result[0]?.count || 0;
+    } catch (error) {
+      console.error('❌ Failed to count connections for orgId:', orgId);
+      console.error('Error type:', (error as any)?.constructor?.name);
+      console.error('Error code:', (error as any)?.code);
+      console.error('Error message:', (error as Error)?.message);
+      console.error('Full error:', error);
+      throw error;
+    }
   }
 
   /**
