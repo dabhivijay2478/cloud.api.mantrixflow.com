@@ -52,37 +52,81 @@ export const triggerTypeEnum = pgEnum('trigger_type', [
 /**
  * PostgreSQL Pipelines Table
  * Stores pipeline configurations for data synchronization
+ * 
+ * Structure:
+ * - Basic Info: id, orgId, userId, name, description
+ * - Source Configuration: sourceType, sourceConnectionId, sourceConfig, sourceSchema, sourceTable, sourceQuery
+ * - Destination Configuration: destinationConnectionId, destinationSchema, destinationTable, destinationTableExists
+ * - Schema Mapping: columnMappings, transformations
+ * - Write Configuration: writeMode, upsertKey
+ * - Sync Configuration: syncMode, incrementalColumn, lastSyncValue, syncFrequency, nextSyncAt
+ * - Execution Status: status, lastRunAt, lastRunStatus, lastError
+ * - Statistics: totalRowsProcessed, totalRunsSuccessful, totalRunsFailed
+ * - Metadata: createdAt, updatedAt, deletedAt
  */
 export const postgresPipelines = pgTable('postgres_pipelines', {
+    // ============================================================================
+    // BASIC INFORMATION
+    // ============================================================================
     id: uuid('id').primaryKey().defaultRandom(),
     orgId: uuid('org_id').notNull(),
     userId: uuid('user_id').notNull(),
     name: varchar('name', { length: 255 }).notNull(),
     description: text('description'),
 
-    // Source configuration
-    sourceType: varchar('source_type', { length: 100 }).notNull(), // 'postgres', 'stripe', 'salesforce', etc.
+    // ============================================================================
+    // SOURCE CONFIGURATION
+    // Defines where data is read from
+    // ============================================================================
+    /** Source type: 'postgres', 'stripe', 'salesforce', 'google_sheets', etc. */
+    sourceType: varchar('source_type', { length: 100 }).notNull(),
+    
+    /** Source connection ID (for PostgreSQL sources) */
     sourceConnectionId: uuid('source_connection_id').references(
         () => postgresConnections.id,
         { onDelete: 'cascade' },
-    ), // If source is postgres
-    sourceConfig: jsonb('source_config').$type<SourceConfig>(), // If source is external
+    ),
+    
+    /** Source configuration (for external sources like Stripe, Salesforce) */
+    sourceConfig: jsonb('source_config').$type<SourceConfig>(),
+    
+    /** Source database schema name (e.g., 'public', 'sales', 'analytics') */
     sourceSchema: varchar('source_schema', { length: 255 }),
+    
+    /** Source table name */
     sourceTable: varchar('source_table', { length: 255 }),
-    sourceQuery: text('source_query'), // Custom SQL for source
+    
+    /** Custom SQL query for source (alternative to table-based reads) */
+    sourceQuery: text('source_query'),
 
-    // Destination configuration (PostgreSQL)
+    // ============================================================================
+    // DESTINATION CONFIGURATION
+    // Defines where data is written to (always PostgreSQL)
+    // ============================================================================
+    /** Destination connection ID (PostgreSQL connection) */
     destinationConnectionId: uuid('destination_connection_id')
         .notNull()
         .references(() => postgresConnections.id, { onDelete: 'cascade' }),
+    
+    /** Destination database schema name (default: 'public') */
     destinationSchema: varchar('destination_schema', { length: 255 }).default(
         'public',
     ),
+    
+    /** Destination table name */
     destinationTable: varchar('destination_table', { length: 255 }).notNull(),
+    
+    /** Whether destination table already exists */
     destinationTableExists: boolean('destination_table_exists').default(false),
 
-    // Schema mapping
+    // ============================================================================
+    // SCHEMA MAPPING & TRANSFORMATIONS
+    // Maps source columns to destination columns and applies transformations
+    // ============================================================================
+    /** Column mappings from source to destination */
     columnMappings: jsonb('column_mappings').$type<ColumnMapping[]>(),
+    
+    /** Data transformations to apply during pipeline execution */
     transformations: jsonb('transformations').$type<Transformation[]>(),
 
     // Write mode

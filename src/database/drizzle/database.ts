@@ -5,7 +5,7 @@
 
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { ConfigService } from '@nestjs/config';
-import * as schema from './schema/postgres-connectors.schema';
+import * as schema from '../schemas';
 
 export const createDrizzleDatabase = (configService: ConfigService) => {
   const connectionString = configService.get<string>('DATABASE_URL');

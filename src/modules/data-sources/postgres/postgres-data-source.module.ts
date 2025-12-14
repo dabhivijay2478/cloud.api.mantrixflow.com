@@ -24,10 +24,10 @@ import { PostgresSyncService } from './services/postgres-sync.service';
 import { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
 
 // Common services
-import { EncryptionService } from '../../../../common/encryption/encryption.service';
+import { EncryptionService } from '../../../common/encryption/encryption.service';
 
 // Database
-import { createDrizzleDatabase } from '../../../../database/drizzle/database';
+import { createDrizzleDatabase } from '../../../database/drizzle/database';
 
 @Module({
   imports: [

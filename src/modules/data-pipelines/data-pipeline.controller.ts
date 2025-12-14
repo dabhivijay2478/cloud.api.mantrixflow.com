@@ -38,7 +38,7 @@ import {
   createSuccessResponse,
   createListResponse,
   createDeleteResponse,
-} from '../../../common/dto/api-response.dto';
+} from '../../common/dto/api-response.dto';
 
 // TODO: Create and use actual auth guards
 // @UseGuards(JwtAuthGuard, OrgGuard)

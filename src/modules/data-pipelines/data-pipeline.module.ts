@@ -25,7 +25,7 @@ import { PostgresPipelineProcessor } from './shared/jobs/postgres-pipeline.proce
 import { PostgresDataSourceModule } from '../data-sources/postgres/postgres-data-source.module';
 
 // Database
-import { createDrizzleDatabase } from '../../../database/drizzle/database';
+import { createDrizzleDatabase } from '../../database/drizzle/database';
 
 @Module({
   imports: [

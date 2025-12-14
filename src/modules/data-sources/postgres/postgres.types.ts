@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import type { PostgresConnection as PostgresConnectionSchema } from '../../../../database/drizzle/schema/postgres-connectors.schema';
+import type { PostgresConnection as PostgresConnectionSchema } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
 
 /**
  * Re-export PostgresConnection from schema for convenience

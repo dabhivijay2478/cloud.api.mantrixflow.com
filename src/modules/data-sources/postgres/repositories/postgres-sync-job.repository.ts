@@ -9,7 +9,7 @@ import {
   postgresSyncJobs,
   PostgresSyncJob,
   NewPostgresSyncJob,
-} from '../../../../database/drizzle/schema/postgres-connectors.schema';
+} from '../../../../database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 
 @Injectable()

@@ -52,7 +52,7 @@ import {
   createSuccessResponse,
   createListResponse,
   createDeleteResponse,
-} from '../../../../common/dto/api-response.dto';
+} from '../../../common/dto/api-response.dto';
 
 // TODO: Create and use actual auth guards
 // @UseGuards(JwtAuthGuard, OrgGuard)
@@ -758,7 +758,7 @@ export class PostgresDataSourceController {
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
-      const discovery = await this.postgresService.discoverSchema(
+      const discovery = await this.postgresDataSourceService.discoverSchema(
         id,
         finalOrgId,
       );

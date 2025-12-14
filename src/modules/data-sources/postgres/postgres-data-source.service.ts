@@ -29,7 +29,7 @@ import {
   TableInfo,
   SchemaInfo,
 } from './postgres.types';
-import { NewPostgresConnection } from '../../../../database/drizzle/schema/postgres-connectors.schema';
+import { NewPostgresConnection } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
 
 @Injectable()
 export class PostgresDataSourceService {

@@ -9,7 +9,7 @@ import {
   postgresConnections,
   PostgresConnection,
   NewPostgresConnection,
-} from '../../../../database/drizzle/schema/postgres-connectors.schema';
+} from '../../../../database/schemas/data-sources/connections/postgres-connections.schema';
 import { EncryptionService } from '../../../../common/encryption/encryption.service';
 import { DecryptedConnectionCredentials } from '../postgres.types';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
