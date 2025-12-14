@@ -23,11 +23,10 @@ async function runMigrations() {
   console.log('🔄 Starting database migrations...');
   console.log(`📦 Database: ${dbUrl.split('@')[1] || 'unknown'}`);
 
-  // Use require for postgres to handle CommonJS properly
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-  const postgres = require('postgres');
+  // Import postgres using dynamic import for ESM compatibility
+  const postgres = await import('postgres');
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
-  const client = postgres(dbUrl, { max: 1 });
+  const client = postgres.default(dbUrl, { max: 1 });
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const db = drizzle(client);
 
