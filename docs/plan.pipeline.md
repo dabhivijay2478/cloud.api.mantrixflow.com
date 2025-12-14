@@ -236,15 +236,15 @@ IMPORTANT
 
 Critical Next Step: The pipeline schema needs to be registered with Drizzle
 
-Issue: The pnpm db:generate command didn't detect the new schema because it's not imported in the main schema file.
+Issue: The bun run db:generate command didn't detect the new schema because it's not imported in the main schema file.
 
 Solution:
 
 Check if there's a main schema index file (e.g., src/database/drizzle/schema/index.ts)
 Import and export the pipeline schema:
 export * from './postgres-pipeline.schema';
-Run pnpm db:generate to create migration
-Run pnpm db:migrate to apply migration
+Run bun run db:generate to create migration
+Run bun run db:migrate to apply migration
 2. Controller Implementation
 Current State: Endpoints are defined but return stub responses
 
@@ -725,15 +725,15 @@ IMPORTANT
 
 Critical Next Step: The pipeline schema needs to be registered with Drizzle
 
-Issue: The pnpm db:generate command didn't detect the new schema because it's not imported in the main schema file.
+Issue: The bun run db:generate command didn't detect the new schema because it's not imported in the main schema file.
 
 Solution:
 
 Check if there's a main schema index file (e.g., src/database/drizzle/schema/index.ts)
 Import and export the pipeline schema:
 export * from './postgres-pipeline.schema';
-Run pnpm db:generate to create migration
-Run pnpm db:migrate to apply migration
+Run bun run db:generate to create migration
+Run bun run db:migrate to apply migration
 2. Controller Implementation
 Current State: Endpoints are defined but return stub responses
 
@@ -1003,7 +1003,7 @@ Option 1: Comment Out Imports Temporarily
 Until the TypeScript resolution is fixed, you can run the app without building:
 
 # Skip build and run directly
-pnpm start:dev
+bun run start:dev
 The app will work at runtime because the files exist - it's only a compile-time issue.
 
 Option 2: Use ts-node Paths
@@ -1054,7 +1054,7 @@ destinationConnectionId: Destination database connection ID
 📝 Quick Test
 1. Start the API
 cd /Users/vijay.d/vijay.d/Vapps/incomplete/ai-bi/apps/api
-pnpm start:dev  # Skip build, run directly
+bun run start:dev  # Skip build, run directly
 2. Create a Pipeline
 curl -X POST http://localhost:3000/api/connectors/postgres/pipelines \
   -H "Content-Type: application/json" \
@@ -1144,7 +1144,7 @@ Custom Query
   "syncFrequency": "1hour"
 }
 🔍 Troubleshooting
-Build fails: Use pnpm start:dev instead of pnpm build
+Build fails: Use bun run start:dev instead of bun run build
 
 Pipeline not executing: Check connection IDs are valid
 

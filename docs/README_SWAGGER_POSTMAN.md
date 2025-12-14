@@ -10,7 +10,7 @@ Swagger/OpenAPI documentation and Postman collection generation are now configur
 
 Start your server:
 ```bash
-pnpm start:dev
+bun run start:dev
 ```
 
 Then open in your browser:
@@ -22,7 +22,7 @@ http://localhost:8000/api/docs
 
 While the server is running, in another terminal:
 ```bash
-pnpm swagger:generate
+bun run swagger:generate
 ```
 
 The collection will be saved to:
@@ -152,8 +152,8 @@ Currently using placeholder authentication. To add real JWT auth:
 - Verify `openapi-to-postmanv2` is installed
 
 ### Build errors
-- Run `pnpm install` to ensure all dependencies are installed
-- Check TypeScript compilation: `pnpm build`
+- Run `bun install` to ensure all dependencies are installed
+- Check TypeScript compilation: `bun run build`
 
 ## Next Steps
 

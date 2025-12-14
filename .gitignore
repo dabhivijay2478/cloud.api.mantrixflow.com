@@ -3,6 +3,9 @@
 /node_modules
 /build
 
+# Bun
+bun.lockb
+
 # Logs
 logs
 *.log
@@ -11,6 +14,7 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+bun-debug.log*
 
 # OS
 .DS_Store

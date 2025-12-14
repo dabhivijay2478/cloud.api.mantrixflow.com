@@ -57,12 +57,12 @@ To generate a Postman collection for testing:
 
 1. Start the development server:
    ```bash
-   pnpm start:dev
+   bun run start:dev
    ```
 
 2. In another terminal, generate the Postman collection:
    ```bash
-   pnpm swagger:generate
+   bun run swagger:generate
    ```
 
 3. The collection will be saved to:

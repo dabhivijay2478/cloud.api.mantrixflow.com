@@ -10,37 +10,37 @@ The following scripts are available in `package.json`:
 
 ### Generate Migrations
 ```bash
-pnpm db:generate
+bun run db:generate
 ```
 Generates migration files based on schema changes. Run this after modifying the schema.
 
 ### Apply Migrations
 ```bash
-pnpm db:migrate
+bun run db:migrate
 ```
 Applies all pending migrations to the database using the custom migration runner.
 
 ### Push Schema (Direct)
 ```bash
-pnpm db:push
+bun run db:push
 ```
 Directly pushes schema changes to the database without generating migration files. Useful for development.
 
 ### Drizzle Studio
 ```bash
-pnpm db:studio
+bun run db:studio
 ```
 Opens Drizzle Studio - a visual database browser and query tool.
 
 ### Check Schema
 ```bash
-pnpm db:check
+bun run db:check
 ```
 Checks for schema drift between your code and database.
 
 ### Drop Schema (⚠️ Dangerous)
 ```bash
-pnpm db:drop
+bun run db:drop
 ```
 Drops all tables. Use with caution!
 
@@ -68,13 +68,13 @@ The following tables have been created in your database:
 ### Making Schema Changes
 
 1. Edit `src/database/drizzle/schema/postgres-connectors.schema.ts`
-2. Generate migration: `pnpm db:generate`
+2. Generate migration: `bun run db:generate`
 3. Review the generated SQL in `src/database/drizzle/migrations/`
-4. Apply migration: `pnpm db:migrate`
+4. Apply migration: `bun run db:migrate`
 
 ### Quick Development
 
-For rapid development, you can use `pnpm db:push` to directly sync schema changes without generating migration files.
+For rapid development, you can use `bun run db:push` to directly sync schema changes without generating migration files.
 
 ## Environment Variables
 

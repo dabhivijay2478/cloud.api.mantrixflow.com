@@ -354,7 +354,7 @@ async function generatePostmanCollection() {
     console.log(`   File: postman/${fileName}`);
   } catch (error) {
     console.error('❌ Error generating Postman collection:', error);
-    console.log('\n💡 Make sure the server is running: pnpm start:dev');
+    console.log('\n💡 Make sure the server is running: bun run start:dev');
     process.exit(1);
   }
 }

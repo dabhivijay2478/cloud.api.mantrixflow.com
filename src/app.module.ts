@@ -3,7 +3,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PostgresModule } from './modules/connectors/postgres/postgres.module';
+import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
+import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 
 @Module({
   imports: [
@@ -24,7 +25,8 @@ import { PostgresModule } from './modules/connectors/postgres/postgres.module';
         },
       }),
     }),
-    PostgresModule,
+    PostgresDataSourceModule,
+    DataPipelineModule,
   ],
   controllers: [AppController],
   providers: [AppService],
