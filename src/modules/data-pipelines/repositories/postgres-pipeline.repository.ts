@@ -13,13 +13,26 @@ import type {
     NewPostgresPipeline,
     PostgresPipelineRun,
     NewPostgresPipelineRun,
+    PipelineSourceSchema,
+    PipelineDestinationSchema,
 } from '@db/schema';
 
 // Import table definitions (runtime values)
 import {
     postgresPipelines,
-    postgresPipelineRuns
+    postgresPipelineRuns,
+    pipelineSourceSchemas,
+    pipelineDestinationSchemas,
 } from '@db/schema';
+
+/**
+ * Pipeline with loaded schemas
+ */
+export interface PipelineWithSchemas {
+    pipeline: PostgresPipeline;
+    sourceSchema: PipelineSourceSchema;
+    destinationSchema: PipelineDestinationSchema;
+}
 
 @Injectable()
 export class PostgresPipelineRepository {
@@ -59,6 +72,61 @@ export class PostgresPipelineRepository {
             .limit(1);
 
         return pipeline || null;
+    }
+
+    /**
+     * Find pipeline by ID with schemas loaded
+     */
+    async findByIdWithSchemas(
+        id: string,
+        orgId?: string,
+    ): Promise<PipelineWithSchemas | null> {
+        const pipeline = await this.findById(id, orgId);
+        if (!pipeline) {
+            return null;
+        }
+
+        // Load source schema
+        const [sourceSchema] = await this.db
+            .select()
+            .from(pipelineSourceSchemas)
+            .where(
+                and(
+                    eq(pipelineSourceSchemas.id, pipeline.sourceSchemaId),
+                    isNull(pipelineSourceSchemas.deletedAt),
+                ),
+            )
+            .limit(1);
+
+        if (!sourceSchema) {
+            throw new NotFoundException(
+                `Source schema ${pipeline.sourceSchemaId} not found`,
+            );
+        }
+
+        // Load destination schema
+        const [destinationSchema] = await this.db
+            .select()
+            .from(pipelineDestinationSchemas)
+            .where(
+                and(
+                    eq(pipelineDestinationSchemas.id, pipeline.destinationSchemaId),
+                    isNull(pipelineDestinationSchemas.deletedAt),
+                ),
+            )
+            .limit(1);
+
+        if (!destinationSchema) {
+            throw new NotFoundException(
+                `Destination schema ${pipeline.destinationSchemaId} not found`,
+            );
+        }
+
+        return {
+            pipeline,
+            sourceSchema,
+            destinationSchema,
+        };
     }
 
     /**

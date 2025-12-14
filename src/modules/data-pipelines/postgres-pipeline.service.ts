@@ -13,7 +13,9 @@ import { PostgresConnectionPoolService } from '../data-sources/postgres/services
 import { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
 import { PostgresDestinationService } from './emitters/postgres-destination.service';
 import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
-import { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
+import { PostgresPipelineRepository, PipelineWithSchemas } from './repositories/postgres-pipeline.repository';
+import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
+import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
 import { PostgresConnectionRepository } from '../data-sources/postgres/repositories/postgres-connection.repository';
 import {
     PipelineRunResult,
@@ -23,7 +25,7 @@ import {
     ColumnMapping,
     Transformation,
 } from '../data-sources/postgres/postgres.types';
-import type { PostgresPipeline } from '@db/schema';
+import type { PostgresPipeline, PipelineSourceSchema, PipelineDestinationSchema } from '@db/schema';
 
 @Injectable()
 export class PostgresPipelineService {
@@ -31,6 +33,8 @@ export class PostgresPipelineService {
 
     constructor(
         private readonly pipelineRepository: PostgresPipelineRepository,
+        private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
+        private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
         private readonly connectionRepository: PostgresConnectionRepository,
         private readonly connectionPool: PostgresConnectionPoolService,
         private readonly queryExecutor: PostgresQueryExecutorService,
@@ -39,15 +43,86 @@ export class PostgresPipelineService {
     ) { }
 
     /**
+     * Create pipeline with source and destination schemas
+     */
+    async createPipeline(data: {
+        orgId: string;
+        userId: string;
+        name: string;
+        description?: string;
+        sourceType: string;
+        sourceConnectionId?: string;
+        sourceConfig?: any;
+        sourceSchema?: string;
+        sourceTable?: string;
+        sourceQuery?: string;
+        destinationConnectionId: string;
+        destinationSchema?: string;
+        destinationTable: string;
+        columnMappings?: any[];
+        transformations?: any[];
+        writeMode?: string;
+        upsertKey?: string[];
+        syncMode?: string;
+        incrementalColumn?: string;
+        syncFrequency?: string;
+    }): Promise<PostgresPipeline> {
+        // 1. Create source schema
+        const sourceSchema = await this.sourceSchemaRepository.create({
+            orgId: data.orgId,
+            userId: data.userId,
+            sourceType: data.sourceType,
+            sourceConnectionId: data.sourceConnectionId,
+            sourceConfig: data.sourceConfig,
+            sourceSchema: data.sourceSchema,
+            sourceTable: data.sourceTable,
+            sourceQuery: data.sourceQuery,
+            name: `Source for ${data.name}`,
+        });
+
+        // 2. Create destination schema
+        const destinationSchema = await this.destinationSchemaRepository.create({
+            orgId: data.orgId,
+            userId: data.userId,
+            destinationConnectionId: data.destinationConnectionId,
+            destinationSchema: data.destinationSchema || 'public',
+            destinationTable: data.destinationTable,
+            destinationTableExists: false,
+            columnMappings: data.columnMappings,
+            writeMode: (data.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+            upsertKey: data.upsertKey,
+            name: `Destination for ${data.name}`,
+        });
+
+        // 3. Create pipeline with schema references
+        const pipeline = await this.pipelineRepository.create({
+            orgId: data.orgId,
+            userId: data.userId,
+            name: data.name,
+            description: data.description,
+            sourceSchemaId: sourceSchema.id,
+            destinationSchemaId: destinationSchema.id,
+            transformations: data.transformations,
+            syncMode: data.syncMode || 'full',
+            incrementalColumn: data.incrementalColumn,
+            syncFrequency: data.syncFrequency || 'manual',
+        });
+
+        return pipeline;
+    }
+
+    /**
      * Execute full pipeline: source → transform → destination
      */
     async executePipeline(pipelineId: string): Promise<PipelineRunResult> {
         this.logger.log(`Executing pipeline ${pipelineId}`);
 
-        const pipeline = await this.pipelineRepository.findById(pipelineId);
-        if (!pipeline) {
+        const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+        if (!pipelineWithSchemas) {
             throw new NotFoundException(`Pipeline ${pipelineId} not found`);
         }
+
+        const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
         if (pipeline.status !== 'active') {
             throw new BadRequestException(
@@ -74,6 +149,7 @@ export class PostgresPipelineService {
             this.logger.log(`[${run.id}] Step 1: Reading from source`);
             const sourceData = await this.readFromSource(
                 pipeline,
+                sourceSchema,
                 pipeline.lastSyncValue,
             );
 
@@ -83,7 +159,7 @@ export class PostgresPipelineService {
             );
             const transformedData = await this.transformData(
                 sourceData.rows,
-                pipeline.columnMappings || [],
+                destinationSchema.columnMappings || [],
                 pipeline.transformations || [],
             );
 
@@ -94,6 +170,7 @@ export class PostgresPipelineService {
             const writeResult = await this.writeToDestination(
                 transformedData,
                 pipeline,
+                destinationSchema,
             );
 
             // Step 4: Update pipeline state
@@ -164,22 +241,23 @@ export class PostgresPipelineService {
      */
     private async readFromSource(
         pipeline: PostgresPipeline,
+        sourceSchema: PipelineSourceSchema,
         lastSyncValue?: string | null,
     ): Promise<{ rows: any[]; totalRows: number }> {
-        if (pipeline.sourceType !== 'postgres') {
+        if (sourceSchema.sourceType !== 'postgres') {
             throw new BadRequestException(
-                `Source type ${pipeline.sourceType} not yet supported`,
+                `Source type ${sourceSchema.sourceType} not yet supported`,
             );
         }
 
-        if (!pipeline.sourceConnectionId) {
+        if (!sourceSchema.sourceConnectionId) {
             throw new BadRequestException('Source connection ID is required');
         }
 
-        const pool = this.connectionPool.getPool(pipeline.sourceConnectionId);
+        const pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
         if (!pool) {
             throw new BadRequestException(
-                `Source connection pool not found for ${pipeline.sourceConnectionId}`,
+                `Source connection pool not found for ${sourceSchema.sourceConnectionId}`,
             );
         }
 
@@ -189,13 +267,13 @@ export class PostgresPipelineService {
             let query: string;
             const params: any[] = [];
 
-            if (pipeline.sourceQuery) {
+            if (sourceSchema.sourceQuery) {
                 // Use custom query
-                query = pipeline.sourceQuery;
-            } else if (pipeline.sourceTable) {
+                query = sourceSchema.sourceQuery;
+            } else if (sourceSchema.sourceTable) {
                 // Build query from table
-                const schema = pipeline.sourceSchema || 'public';
-                const table = pipeline.sourceTable;
+                const schema = sourceSchema.sourceSchema || 'public';
+                const table = sourceSchema.sourceTable;
 
                 if (pipeline.syncMode === 'incremental' && pipeline.incrementalColumn) {
                     // Incremental sync
@@ -303,15 +381,16 @@ export class PostgresPipelineService {
     private async writeToDestination(
         transformedData: any[],
         pipeline: PostgresPipeline,
+        destinationSchema: PipelineDestinationSchema,
     ): Promise<{
         rowsWritten: number;
         rowsSkipped: number;
         rowsFailed: number;
     }> {
-        const pool = this.connectionPool.getPool(pipeline.destinationConnectionId);
+        const pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
         if (!pool) {
             throw new BadRequestException(
-                `Destination connection pool not found for ${pipeline.destinationConnectionId}`,
+                `Destination connection pool not found for ${destinationSchema.destinationConnectionId}`,
             );
         }
 
@@ -323,43 +402,42 @@ export class PostgresPipelineService {
             // Check if table exists
             const tableExists = await this.destinationService.tableExists(
                 client,
-                pipeline.destinationSchema ?? 'public',
-                pipeline.destinationTable,
+                destinationSchema.destinationSchema ?? 'public',
+                destinationSchema.destinationTable,
             );
 
             // Create table if not exists
-            if (!tableExists && pipeline.columnMappings) {
+            if (!tableExists && destinationSchema.columnMappings) {
                 await this.destinationService.createDestinationTable(
                     client,
-                    pipeline.destinationSchema ?? 'public',
-                    pipeline.destinationTable,
-                    pipeline.columnMappings,
+                    destinationSchema.destinationSchema ?? 'public',
+                    destinationSchema.destinationTable,
+                    destinationSchema.columnMappings,
                 );
 
-                await this.pipelineRepository.update(pipeline.id, {
-                    destinationTableExists: true,
-                });
+                // Update destination schema
+                // Note: We could update the destinationSchema record here if needed
             }
 
             // Validate schema if table exists
-            if (tableExists && pipeline.columnMappings) {
+            if (tableExists && destinationSchema.columnMappings) {
                 const validation = await this.destinationService.validateSchema(
                     client,
-                    pipeline.destinationSchema ?? 'public',
-                    pipeline.destinationTable,
-                    pipeline.columnMappings,
+                    destinationSchema.destinationSchema ?? 'public',
+                    destinationSchema.destinationTable,
+                    destinationSchema.columnMappings,
                 );
 
                 if (!validation.valid) {
                     // Add missing columns
-                    if (validation.missingColumns.length > 0) {
-                        const missingMappings = pipeline.columnMappings.filter((m) =>
-                            validation.missingColumns.includes(m.destinationColumn),
+                    if (validation.missingColumns && validation.missingColumns.length > 0) {
+                        const missingMappings = destinationSchema.columnMappings.filter((m) =>
+                            validation.missingColumns!.includes(m.destinationColumn),
                         );
                         await this.destinationService.addMissingColumns(
                             client,
-                            pipeline.destinationSchema ?? 'public',
-                            pipeline.destinationTable,
+                            destinationSchema.destinationSchema ?? 'public',
+                            destinationSchema.destinationTable,
                             missingMappings,
                         );
                     }
@@ -367,13 +445,14 @@ export class PostgresPipelineService {
             }
 
             // Write data
+            const writeMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
             const result = await this.destinationService.writeData(
                 client,
-                pipeline.destinationSchema ?? 'public',
-                pipeline.destinationTable,
+                destinationSchema.destinationSchema ?? 'public',
+                destinationSchema.destinationTable,
                 transformedData,
-                pipeline.writeMode ?? 'append',
-                pipeline.upsertKey || undefined,
+                writeMode,
+                destinationSchema.upsertKey || undefined,
             );
 
             await client.query('COMMIT');
@@ -391,34 +470,37 @@ export class PostgresPipelineService {
      * Validate pipeline configuration before execution
      */
     async validatePipeline(pipelineId: string): Promise<ValidationResult> {
-        const pipeline = await this.pipelineRepository.findById(pipelineId);
-        if (!pipeline) {
+        const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+        if (!pipelineWithSchemas) {
             throw new NotFoundException(`Pipeline ${pipelineId} not found`);
         }
+
+        const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
         const errors: string[] = [];
         const warnings: string[] = [];
 
         // Validate source configuration
-        if (pipeline.sourceType === 'postgres') {
-            if (!pipeline.sourceConnectionId) {
+        if (sourceSchema.sourceType === 'postgres') {
+            if (!sourceSchema.sourceConnectionId) {
                 errors.push('Source connection ID is required for postgres source');
             }
-            if (!pipeline.sourceTable && !pipeline.sourceQuery) {
+            if (!sourceSchema.sourceTable && !sourceSchema.sourceQuery) {
                 errors.push('Either source table or source query must be specified');
             }
         }
 
         // Validate destination configuration
-        if (!pipeline.destinationConnectionId) {
+        if (!destinationSchema.destinationConnectionId) {
             errors.push('Destination connection ID is required');
         }
-        if (!pipeline.destinationTable) {
+        if (!destinationSchema.destinationTable) {
             errors.push('Destination table is required');
         }
 
         // Validate write mode
-        if (pipeline.writeMode === 'upsert' && (!pipeline.upsertKey || pipeline.upsertKey.length === 0)) {
+        const writeMode = destinationSchema.writeMode as 'append' | 'upsert' | 'replace';
+        if (writeMode === 'upsert' && (!destinationSchema.upsertKey || destinationSchema.upsertKey.length === 0)) {
             errors.push('Upsert key is required for upsert write mode');
         }
 
@@ -428,7 +510,7 @@ export class PostgresPipelineService {
         }
 
         // Validate column mappings
-        if (!pipeline.columnMappings || pipeline.columnMappings.length === 0) {
+        if (!destinationSchema.columnMappings || destinationSchema.columnMappings.length === 0) {
             warnings.push('No column mappings defined. Auto-mapping recommended.');
         }
 
@@ -445,21 +527,23 @@ export class PostgresPipelineService {
     async dryRunPipeline(pipelineId: string): Promise<DryRunResult> {
         this.logger.log(`Dry run for pipeline ${pipelineId}`);
 
-        const pipeline = await this.pipelineRepository.findById(pipelineId);
-        if (!pipeline) {
+        const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+        if (!pipelineWithSchemas) {
             throw new NotFoundException(`Pipeline ${pipelineId} not found`);
         }
+
+        const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
         const startTime = Date.now();
 
         // Read sample data from source
-        const sourceData = await this.readFromSource(pipeline, null);
+        const sourceData = await this.readFromSource(pipeline, sourceSchema, null);
         const sampleRows = sourceData.rows.slice(0, 10);
 
         // Transform sample data
         const transformedSample = await this.transformData(
             sampleRows,
-            pipeline.columnMappings || [],
+            destinationSchema.columnMappings || [],
             pipeline.transformations || [],
         );
 
@@ -468,7 +552,7 @@ export class PostgresPipelineService {
         return {
             sourceRowCount: sourceData.totalRows,
             sampleRows: transformedSample,
-            destinationSchemaPreview: pipeline.columnMappings || [],
+            destinationSchemaPreview: destinationSchema.columnMappings || [],
             estimatedDuration,
         };
     }
@@ -491,24 +575,26 @@ export class PostgresPipelineService {
         pipelineId: string,
         dropTable: boolean = false,
     ): Promise<void> {
-        const pipeline = await this.pipelineRepository.findById(pipelineId);
-        if (!pipeline) {
+        const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+        if (!pipelineWithSchemas) {
             throw new NotFoundException(`Pipeline ${pipelineId} not found`);
         }
 
+        const { destinationSchema } = pipelineWithSchemas;
+
         // Optionally drop destination table
-        if (dropTable && pipeline.destinationTableExists) {
+        if (dropTable && destinationSchema.destinationTableExists) {
             const pool = this.connectionPool.getPool(
-                pipeline.destinationConnectionId,
+                destinationSchema.destinationConnectionId,
             );
             if (pool) {
                 const client = await pool.connect();
                 try {
                     await client.query(
-                        `DROP TABLE IF EXISTS "${pipeline.destinationSchema}"."${pipeline.destinationTable}"`,
+                        `DROP TABLE IF EXISTS "${destinationSchema.destinationSchema}"."${destinationSchema.destinationTable}"`,
                     );
                     this.logger.log(
-                        `Dropped table ${pipeline.destinationSchema}.${pipeline.destinationTable}`,
+                        `Dropped table ${destinationSchema.destinationSchema}.${destinationSchema.destinationTable}`,
                     );
                 } finally {
                     client.release();

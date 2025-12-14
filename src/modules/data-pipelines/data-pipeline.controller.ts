@@ -80,8 +80,8 @@ export class DataPipelineController {
       const orgId = req.user?.orgId || 'default-org-id';
       const userId = req.user?.id || 'default-user-id';
 
-      // Create pipeline using repository directly (service method would be added later)
-      const pipeline = await this.pipelineService['pipelineRepository'].create({
+      // Create pipeline with schemas
+      const pipeline = await this.pipelineService.createPipeline({
         orgId,
         userId,
         name: dto.name,

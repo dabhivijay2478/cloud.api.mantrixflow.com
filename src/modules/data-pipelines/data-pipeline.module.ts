@@ -12,6 +12,8 @@ import { PostgresPipelineService } from './postgres-pipeline.service';
 
 // Repositories
 import { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
+import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
+import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
 
 // Services
 import { PostgresDestinationService } from './emitters/postgres-destination.service';
@@ -54,6 +56,8 @@ import { createDrizzleDatabase } from '../../database/drizzle/database';
 
     // Repositories
     PostgresPipelineRepository,
+    PipelineSourceSchemaRepository,
+    PipelineDestinationSchemaRepository,
 
     // Pipeline services
     PostgresDestinationService,
