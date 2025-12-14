@@ -15,6 +15,20 @@
       "when": 1763535179258,
       "tag": "0001_illegal_bloodaxe",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1764000000000,
+      "tag": "0002_separate_source_destination_schemas",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1764001000000,
+      "tag": "0003_remove_duplicate_schema_columns",
+      "breakpoints": true
     }
   ]
 }

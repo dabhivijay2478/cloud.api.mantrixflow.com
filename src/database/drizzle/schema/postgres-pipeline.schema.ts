@@ -55,8 +55,11 @@ export const triggerTypeEnum = pgEnum('trigger_type', [
  * 
  * Structure:
  * - Basic Info: id, orgId, userId, name, description
- * - Source Configuration: sourceType, sourceConnectionId, sourceConfig, sourceSchema, sourceTable, sourceQuery
- * - Destination Configuration: destinationConnectionId, destinationSchema, destinationTable, destinationTableExists
+ * - Source Configuration: sourceType, sourceConnectionId, sourceConfig, sourceTable, sourceQuery
+ * - Destination Configuration: destinationConnectionId, destinationTable, destinationTableExists
+ * 
+ * NOTE: sourceSchema and destinationSchema have been removed as they are now in separate schema tables.
+ * See: database/schemas/data-pipelines/source-schemas/ and destination-schemas/
  * - Schema Mapping: columnMappings, transformations
  * - Write Configuration: writeMode, upsertKey
  * - Sync Configuration: syncMode, incrementalColumn, lastSyncValue, syncFrequency, nextSyncAt
@@ -90,9 +93,6 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
     /** Source configuration (for external sources like Stripe, Salesforce) */
     sourceConfig: jsonb('source_config').$type<SourceConfig>(),
     
-    /** Source database schema name (e.g., 'public', 'sales', 'analytics') */
-    sourceSchema: varchar('source_schema', { length: 255 }),
-    
     /** Source table name */
     sourceTable: varchar('source_table', { length: 255 }),
     
@@ -107,11 +107,6 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
     destinationConnectionId: uuid('destination_connection_id')
         .notNull()
         .references(() => postgresConnections.id, { onDelete: 'cascade' }),
-    
-    /** Destination database schema name (default: 'public') */
-    destinationSchema: varchar('destination_schema', { length: 255 }).default(
-        'public',
-    ),
     
     /** Destination table name */
     destinationTable: varchar('destination_table', { length: 255 }).notNull(),
