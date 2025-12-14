@@ -18,6 +18,7 @@ import {
   BadRequestException,
   NotFoundException,
   HttpException,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -45,6 +46,7 @@ import {
   SyncJobResponseDto,
 } from './dto/create-sync-job.dto';
 import { UpdateConnectionDto } from './dto/update-connection.dto';
+import { SupabaseAuthGuard } from '../../../common/guards/supabase-auth.guard';
 import {
   ApiSuccessResponse,
   ApiListResponse,
@@ -54,18 +56,9 @@ import {
   createDeleteResponse,
 } from '../../../common/dto/api-response.dto';
 
-// TODO: Create and use actual auth guards
-// @UseGuards(JwtAuthGuard, OrgGuard)
-
-interface AuthenticatedRequest extends Request {
-  user?: {
-    id?: string;
-    orgId?: string;
-  };
-}
-
 @ApiTags('data-sources')
 @ApiBearerAuth('JWT-auth')
+@UseGuards(SupabaseAuthGuard)
 @Controller('api/data-sources/postgres')
 export class PostgresDataSourceController {
   constructor(
@@ -92,7 +85,7 @@ export class PostgresDataSourceController {
     status: 400,
     description: 'Invalid connection parameters',
   })
-  async testConnection(@Body() dto: TestConnectionDto) {
+  async testConnection(@Body() dto: TestConnectionDto, @Request() _req: Request) {
     try {
       // Convert DTO to PostgresConnectionConfig
       const config: PostgresConnectionConfig = {
@@ -173,7 +166,7 @@ export class PostgresDataSourceController {
   })
   async createConnection(
     @Body() body: CreateConnectionDto,
-    @Request() req: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth

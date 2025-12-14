@@ -18,6 +18,7 @@ import {
   BadRequestException,
   NotFoundException,
   HttpException,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -31,6 +32,7 @@ import {
 import { PostgresPipelineService } from './postgres-pipeline.service';
 import { CreatePipelineDto, UpdatePipelineDto } from './dto/create-pipeline.dto';
 import { createErrorResponse } from '../data-sources/postgres/utils/error-mapper.util';
+import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import {
   ApiSuccessResponse,
   ApiListResponse,
@@ -40,18 +42,9 @@ import {
   createDeleteResponse,
 } from '../../common/dto/api-response.dto';
 
-// TODO: Create and use actual auth guards
-// @UseGuards(JwtAuthGuard, OrgGuard)
-
-interface AuthenticatedRequest extends Request {
-  user?: {
-    id?: string;
-    orgId?: string;
-  };
-}
-
 @ApiTags('data-pipelines')
 @ApiBearerAuth('JWT-auth')
+@UseGuards(SupabaseAuthGuard)
 @Controller('api/data-pipelines')
 export class DataPipelineController {
   constructor(
@@ -74,7 +67,7 @@ export class DataPipelineController {
   })
   async createPipeline(
     @Body() dto: CreatePipelineDto,
-    @Request() req: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const orgId = req.user?.orgId || 'default-org-id';
