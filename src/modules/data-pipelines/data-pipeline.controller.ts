@@ -20,6 +20,9 @@ import {
   HttpException,
   UseGuards,
 } from '@nestjs/common';
+import type { Request as ExpressRequest } from 'express';
+// Type declarations are imported via tsconfig
+type Request = ExpressRequest;
 import {
   ApiTags,
   ApiOperation,
@@ -131,8 +134,8 @@ export class DataPipelineController {
     description: 'List of pipelines',
   })
   async listPipelines(
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -174,8 +177,8 @@ export class DataPipelineController {
   })
   async getPipeline(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId;
@@ -222,8 +225,8 @@ export class DataPipelineController {
   async updatePipeline(
     @Param('id') id: string,
     @Body() updates: UpdatePipelineDto,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId;
@@ -270,9 +273,9 @@ export class DataPipelineController {
   })
   async deletePipeline(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('dropTable') dropTable?: boolean,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId;
@@ -305,7 +308,7 @@ export class DataPipelineController {
   })
   async executePipeline(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const result = await this.pipelineService.executePipeline(id);
@@ -345,7 +348,7 @@ export class DataPipelineController {
   })
   async dryRunPipeline(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const result = await this.pipelineService.dryRunPipeline(id);
@@ -384,7 +387,7 @@ export class DataPipelineController {
   })
   async pausePipeline(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       await this.pipelineService.togglePipeline(id, 'paused');
@@ -418,7 +421,7 @@ export class DataPipelineController {
   })
   async resumePipeline(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       await this.pipelineService.togglePipeline(id, 'active');
@@ -452,7 +455,7 @@ export class DataPipelineController {
   })
   async validatePipeline(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const result = await this.pipelineService.validatePipeline(id);
@@ -492,7 +495,7 @@ export class DataPipelineController {
   })
   async autoMapColumns(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const pipeline = await this.pipelineService['pipelineRepository'].findById(id);
@@ -545,9 +548,9 @@ export class DataPipelineController {
   })
   async getPipelineRuns(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('limit') limit?: number,
     @Query('offset') offset?: number,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const runs = await this.pipelineService['pipelineRepository'].findRunsByPipeline(
@@ -597,7 +600,7 @@ export class DataPipelineController {
   async getPipelineRun(
     @Param('id') id: string,
     @Param('runId') runId: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const run = await this.pipelineService['pipelineRepository'].findRunById(runId);
@@ -641,7 +644,7 @@ export class DataPipelineController {
   })
   async getPipelineStats(
     @Param('id') id: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       const stats = await this.pipelineService['pipelineRepository'].getStats(id);

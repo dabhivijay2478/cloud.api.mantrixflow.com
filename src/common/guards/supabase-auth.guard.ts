@@ -81,16 +81,3 @@ export class SupabaseAuthGuard implements CanActivate {
     return type === 'Bearer' ? token : null;
   }
 }
-
-// Extend Express Request type to include user
-declare global {
-  namespace Express {
-    interface Request {
-      user?: {
-        id: string;
-        email?: string;
-        orgId?: string;
-      };
-    }
-  }
-}

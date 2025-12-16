@@ -10,6 +10,8 @@ if (!process.env.DATABASE_URL) {
 
 export default {
   schema: [
+    './src/database/schemas/users/users.schema.ts',
+    './src/database/schemas/organizations/organizations.schema.ts',
     './src/database/schemas/data-sources/connections/postgres-connections.schema.ts',
     './src/database/schemas/data-sources/query-logs/postgres-query-logs.schema.ts',
     './src/database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema.ts',

@@ -6,6 +6,8 @@ import { AppService } from './app.service';
 import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
+import { UserModule } from './modules/users/user.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { OrganizationModule } from './modules/organizations/organization.module'
     PostgresDataSourceModule,
     DataPipelineModule,
     OrganizationModule,
+    UserModule,
+    OnboardingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

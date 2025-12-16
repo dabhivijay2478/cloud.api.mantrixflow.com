@@ -44,7 +44,47 @@ async function bootstrap() {
   });
 
   // Enable CORS for API access
-  app.enableCors();
+  // When using credentials: 'include', we must specify exact origins, not wildcard
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    process.env.FRONTEND_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+  ].filter(Boolean) as string[];
+
+  // CORS configuration - must specify exact origins when using credentials
+  // Cannot use wildcard '*' when credentials: true
+  app.enableCors({
+    origin: (origin, callback) => {
+      // For preflight OPTIONS requests, origin might be undefined
+      // We need to explicitly allow the origin, not return true (which defaults to *)
+      if (!origin) {
+        // In development, default to localhost:3000 for no-origin requests
+        if (process.env.NODE_ENV === 'development') {
+          return callback(null, 'http://localhost:3000');
+        }
+        return callback(new Error('Not allowed by CORS'));
+      }
+      
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) {
+        callback(null, origin); // Return the specific origin, not true
+      } else {
+        // In development, allow localhost with any port
+        if (process.env.NODE_ENV === 'development' && origin.startsWith('http://localhost:')) {
+          callback(null, origin); // Return the specific origin
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  });
 
   const port = process.env.PORT ?? 8000;
   await app.listen(port);

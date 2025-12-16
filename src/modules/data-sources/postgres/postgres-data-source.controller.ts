@@ -20,6 +20,9 @@ import {
   HttpException,
   UseGuards,
 } from '@nestjs/common';
+// Type declarations are imported via tsconfig
+import type { Request as ExpressRequest } from 'express';
+type Request = ExpressRequest;
 import {
   ApiTags,
   ApiOperation,
@@ -256,8 +259,8 @@ export class PostgresDataSourceController {
     description: 'Invalid organization ID format',
   })
   async listConnections(
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       // Use query parameter if provided, otherwise try to get from auth, otherwise throw error
@@ -331,8 +334,8 @@ export class PostgresDataSourceController {
   })
   async getConnection(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       // Use query parameter if provided, otherwise try to get from auth
@@ -411,7 +414,7 @@ export class PostgresDataSourceController {
     @Param('id') id: string,
     @Query('orgId') orgId: string,
     @Body() updates: UpdateConnectionDto,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       // Use query parameter if provided, otherwise try to get from auth
@@ -490,7 +493,7 @@ export class PostgresDataSourceController {
   async deleteConnection(
     @Param('id') id: string,
     @Query('orgId') orgId: string,
-    @Request() req?: AuthenticatedRequest,
+    @Request() req: Request,
   ) {
     try {
       // Use query parameter if provided, otherwise try to get from auth
@@ -541,8 +544,8 @@ export class PostgresDataSourceController {
   })
   async getDatabases(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -596,8 +599,8 @@ export class PostgresDataSourceController {
   })
   async getSchemas(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -669,9 +672,9 @@ export class PostgresDataSourceController {
   })
   async getTables(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('schema') schema: string = 'public',
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -745,9 +748,9 @@ export class PostgresDataSourceController {
   async getTableSchema(
     @Param('id') id: string,
     @Param('table') table: string,
+    @Request() req: Request,
     @Query('schema') schema: string = 'public',
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -813,8 +816,8 @@ export class PostgresDataSourceController {
   })
   async refreshSchema(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -885,8 +888,8 @@ export class PostgresDataSourceController {
   async executeQuery(
     @Param('id') id: string,
     @Body() body: ExecuteQueryDto,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -967,8 +970,8 @@ export class PostgresDataSourceController {
   async explainQuery(
     @Param('id') id: string,
     @Body() body: { query: string; params?: unknown[] },
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1034,8 +1037,8 @@ export class PostgresDataSourceController {
   async createSync(
     @Param('id') id: string,
     @Body() body: CreateSyncJobDto,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1101,8 +1104,8 @@ export class PostgresDataSourceController {
   })
   async getSyncJobs(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1166,8 +1169,8 @@ export class PostgresDataSourceController {
   async getSyncJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1238,8 +1241,8 @@ export class PostgresDataSourceController {
   async cancelSyncJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1370,8 +1373,8 @@ export class PostgresDataSourceController {
   })
   async getHealth(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1442,10 +1445,10 @@ export class PostgresDataSourceController {
   })
   async getQueryLogs(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('limit') limit: string = '100',
     @Query('offset') offset: string = '0',
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
@@ -1501,8 +1504,8 @@ export class PostgresDataSourceController {
   })
   async getMetrics(
     @Param('id') id: string,
+    @Request() req: Request,
     @Query('orgId') orgId?: string,
-    @Request() req?: AuthenticatedRequest,
   ) {
     try {
       const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';

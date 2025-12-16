@@ -15,6 +15,9 @@ import {
   HttpStatus,
   Request,
 } from '@nestjs/common';
+// Type declarations are imported via tsconfig
+import type { Request as ExpressRequest } from 'express';
+type Request = ExpressRequest;
 import {
   ApiTags,
   ApiOperation,
@@ -105,7 +108,8 @@ export class OrganizationController {
     status: 404,
     description: 'No current organization set',
   })
-  async getCurrentOrganization() {
+  async getCurrentOrganization(@Request() req: Request) {
+    const userId = req.user?.id;
     const organization = await this.organizationService.getCurrentOrganization();
     if (!organization) {
       return createSuccessResponse(null, 'No current organization set', 200);
