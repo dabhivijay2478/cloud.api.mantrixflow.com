@@ -71,15 +71,42 @@ export class DataPipelineController {
   async createPipeline(
     @Body() dto: CreatePipelineDto,
     @Request() req: Request,
+    @Query('orgId') orgIdParam?: string,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id';
-      const userId = req.user?.id || 'default-user-id';
+      const finalOrgId = orgIdParam || req?.user?.orgId;
+      const finalUserId = req?.user?.id;
+      
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+        );
+      }
+      
+      if (!finalUserId) {
+        throw new BadRequestException(
+          'User ID is required. Please ensure you are authenticated.',
+        );
+      }
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(finalOrgId)) {
+        throw new BadRequestException(
+          'Invalid Organization ID format. Must be a valid UUID v4.',
+        );
+      }
+      
+      if (!uuidRegex.test(finalUserId)) {
+        throw new BadRequestException(
+          'Invalid User ID format. Must be a valid UUID v4.',
+        );
+      }
 
       // Create pipeline with schemas
       const pipeline = await this.pipelineService.createPipeline({
-        orgId,
-        userId,
+        orgId: finalOrgId,
+        userId: finalUserId,
         name: dto.name,
         description: dto.description,
         sourceType: dto.sourceType,
@@ -98,6 +125,8 @@ export class DataPipelineController {
         syncMode: dto.syncMode || 'full',
         incrementalColumn: dto.incrementalColumn,
         syncFrequency: dto.syncFrequency || 'manual',
+        collectors: dto.collectors,
+        emitters: dto.emitters,
       });
 
       return createSuccessResponse(
@@ -110,7 +139,90 @@ export class DataPipelineController {
         },
       );
     } catch (error) {
+      // For pipeline creation errors, try to extract the actual PostgreSQL error
+      // Drizzle wraps PostgreSQL errors, so we need to check the cause
+      const drizzleError = error as any;
+      const pgError = drizzleError?.cause || drizzleError;
+      
+      // Check if it's a BadRequestException (from our service layer)
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      // Try to extract PostgreSQL error details
+      const pgErrorCode = pgError?.code;
+      const pgErrorDetail = pgError?.detail;
+      const pgErrorConstraint = pgError?.constraint;
+      const pgErrorMessage = pgError?.message || drizzleError?.message || 'Unknown error';
+      
+      // Log the actual error for debugging
+      console.error('Pipeline creation error:', {
+        errorCode: pgErrorCode,
+        errorDetail: pgErrorDetail,
+        errorConstraint: pgErrorConstraint,
+        errorMessage: pgErrorMessage,
+        fullError: error,
+      });
+      
+      // If we have a PostgreSQL error code, handle it specifically
+      if (pgErrorCode === '23503') {
+        // Foreign key constraint violation
+        throw new HttpException(
+          {
+            code: 'PG_CONSTRAINT_001',
+            message: `Foreign key constraint violation: ${pgErrorDetail || pgErrorMessage}`,
+            details: {
+              constraint: pgErrorConstraint,
+              detail: pgErrorDetail,
+            },
+            suggestion: 'The source or destination schema may not exist in the database. Please ensure all database migrations have been run.',
+          },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      
+      if (pgErrorCode === '23502') {
+        // NOT NULL constraint violation
+        throw new HttpException(
+          {
+            code: 'PG_CONSTRAINT_002',
+            message: `Required field is missing: ${pgErrorDetail || pgErrorMessage}`,
+            details: {
+              constraint: pgErrorConstraint,
+              detail: pgErrorDetail,
+            },
+            suggestion: 'Please check that all required fields are provided.',
+          },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      
+      if (pgErrorCode === '23505') {
+        // Unique constraint violation
+        throw new HttpException(
+          {
+            code: 'PG_CONSTRAINT_003',
+            message: `Unique constraint violation: ${pgErrorDetail || pgErrorMessage}`,
+            details: {
+              constraint: pgErrorConstraint,
+              detail: pgErrorDetail,
+            },
+            suggestion: 'A pipeline with this configuration may already exist.',
+          },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      
+      // For other errors, use the standard error response but include PostgreSQL details
       const errorResponse = createErrorResponse(error);
+      if (pgErrorCode || pgErrorDetail) {
+        errorResponse.error.details = {
+          ...errorResponse.error.details,
+          postgresErrorCode: pgErrorCode,
+          postgresErrorDetail: pgErrorDetail,
+          postgresErrorConstraint: pgErrorConstraint,
+        };
+      }
       throw new HttpException(errorResponse.error, errorResponse.statusCode);
     }
   }
@@ -135,10 +247,24 @@ export class DataPipelineController {
   })
   async listPipelines(
     @Request() req: Request,
-    @Query('orgId') orgId?: string,
+    @Query('orgId') orgIdParam?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgIdParam || req?.user?.orgId;
+      
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+        );
+      }
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(finalOrgId)) {
+        throw new BadRequestException(
+          'Invalid Organization ID format. Must be a valid UUID v4.',
+        );
+      }
 
       const pipelines = await this.pipelineService['pipelineRepository'].findByOrg(finalOrgId);
 
@@ -178,10 +304,24 @@ export class DataPipelineController {
   async getPipeline(
     @Param('id') id: string,
     @Request() req: Request,
-    @Query('orgId') orgId?: string,
+    @Query('orgId') orgIdParam?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId;
+      const finalOrgId = orgIdParam || req?.user?.orgId;
+      
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+        );
+      }
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(finalOrgId)) {
+        throw new BadRequestException(
+          'Invalid Organization ID format. Must be a valid UUID v4.',
+        );
+      }
 
       const pipeline = await this.pipelineService['pipelineRepository'].findById(id, finalOrgId);
 
@@ -231,6 +371,39 @@ export class DataPipelineController {
     try {
       const finalOrgId = orgId || req?.user?.orgId;
 
+      // If collectors/emitters are provided, update the transformations JSONB field
+      if (updates.collectors || updates.emitters) {
+        const existingPipeline = await this.pipelineService['pipelineRepository'].findById(id);
+        if (!existingPipeline) {
+          throw new NotFoundException(`Pipeline ${id} not found`);
+        }
+
+        // Build new transformations object
+        const existingTransformations = (existingPipeline.transformations as any) || {};
+        const newTransformations = {
+          ...existingTransformations,
+          collectors: updates.collectors || existingTransformations.collectors || [],
+          emitters: updates.emitters || existingTransformations.emitters || [],
+        };
+
+        // Update with transformations
+        const updated = await this.pipelineService['pipelineRepository'].update(id, {
+          ...updates,
+          transformations: newTransformations,
+        });
+
+        return createSuccessResponse(
+          updated,
+          'Pipeline updated successfully',
+          HttpStatus.OK,
+          {
+            pipelineId: updated.id,
+            updatedFields: Object.keys(updates),
+          },
+        );
+      }
+
+      // Regular update without transformations
       const updated = await this.pipelineService['pipelineRepository'].update(id, updates);
 
       return createSuccessResponse(

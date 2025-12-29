@@ -66,49 +66,392 @@ export class PostgresPipelineService {
         syncMode?: string;
         incrementalColumn?: string;
         syncFrequency?: string;
+        collectors?: Array<{
+            id: string;
+            sourceId: string;
+            selectedTables: string[];
+            transformers?: Array<{
+                id: string;
+                name: string;
+                collectorId?: string;
+                emitterId?: string;
+                fieldMappings?: Array<{ source: string; destination: string }>; // JSON array format
+            }>;
+        }>;
+        emitters?: Array<{
+            id: string;
+            transformId: string;
+            destinationId: string; // References existing connection (like collectors use sourceId)
+            destinationName: string;
+            destinationType: string;
+            connectionConfig?: Record<string, string>; // Optional, ignored - connection is referenced by destinationId
+        }>;
     }): Promise<PostgresPipeline> {
+        // Validate that destination connection exists and is accessible
+        try {
+            const destinationConnection = await this.connectionRepository.findById(
+                data.destinationConnectionId,
+                data.orgId,
+            );
+            if (!destinationConnection) {
+                throw new BadRequestException(
+                    `Destination connection ${data.destinationConnectionId} not found or not accessible. Please ensure the connection exists and you have access to it.`,
+                );
+            }
+            
+            // Check connection status
+            if (destinationConnection.status === 'error') {
+                this.logger.warn(
+                    `Destination connection ${destinationConnection.name} has error status. Last error: ${destinationConnection.lastError}`,
+                );
+                throw new BadRequestException(
+                    `Destination connection "${destinationConnection.name}" has an error status. Please test and fix the connection in the Data Sources page before creating a pipeline. Last error: ${destinationConnection.lastError || 'Unknown error'}`,
+                );
+            }
+            
+            this.logger.log(
+                `Validated destination connection: ${destinationConnection.name} (${data.destinationConnectionId})`,
+            );
+        } catch (error) {
+            if (error instanceof BadRequestException) {
+                throw error;
+            }
+            this.logger.error(
+                `Failed to validate destination connection: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            throw new BadRequestException(
+                `Failed to validate destination connection: ${error instanceof Error ? error.message : 'Unknown error'}. Please ensure the connection exists and is accessible.`,
+            );
+        }
+
+        // Validate source connection if provided
+        if (data.sourceConnectionId) {
+            try {
+                const sourceConnection = await this.connectionRepository.findById(
+                    data.sourceConnectionId,
+                    data.orgId,
+                );
+                if (!sourceConnection) {
+                    throw new BadRequestException(
+                        `Source connection ${data.sourceConnectionId} not found or not accessible`,
+                    );
+                }
+                this.logger.log(
+                    `Validated source connection: ${sourceConnection.name} (${data.sourceConnectionId})`,
+                );
+            } catch (error) {
+                if (error instanceof BadRequestException) {
+                    throw error;
+                }
+                this.logger.error(
+                    `Failed to validate source connection: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                throw new BadRequestException(
+                    `Failed to validate source connection: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                );
+            }
+        }
+
+        // Extract source schema and table from collectors if not provided
+        let sourceSchemaName = data.sourceSchema;
+        let sourceTableName = data.sourceTable;
+        
+        // If using collectors and source info is not provided, extract from first collector
+        if (data.collectors && data.collectors.length > 0 && !sourceTableName) {
+            const firstCollector = data.collectors[0];
+            if (firstCollector.selectedTables && firstCollector.selectedTables.length > 0) {
+                // Parse schema-qualified table name (e.g., "company.companies" -> schema: "company", table: "companies")
+                const firstTable = firstCollector.selectedTables[0];
+                if (firstTable.includes('.')) {
+                    const [schema, table] = firstTable.split('.');
+                    sourceSchemaName = sourceSchemaName || schema;
+                    sourceTableName = table;
+                } else {
+                    // If no schema prefix, use default schema or provided schema
+                    sourceTableName = firstTable;
+                }
+            }
+        }
+
         // 1. Create source schema
-        const sourceSchema = await this.sourceSchemaRepository.create({
-            orgId: data.orgId,
-            userId: data.userId,
-            sourceType: data.sourceType,
-            sourceConnectionId: data.sourceConnectionId,
-            sourceConfig: data.sourceConfig,
-            sourceSchema: data.sourceSchema,
-            sourceTable: data.sourceTable,
-            sourceQuery: data.sourceQuery,
-            name: `Source for ${data.name}`,
-        });
+        let sourceSchema: PipelineSourceSchema;
+        try {
+            sourceSchema = await this.sourceSchemaRepository.create({
+                orgId: data.orgId,
+                userId: data.userId,
+                sourceType: data.sourceType,
+                sourceConnectionId: data.sourceConnectionId,
+                sourceConfig: data.sourceConfig,
+                sourceSchema: sourceSchemaName,
+                sourceTable: sourceTableName,
+                sourceQuery: data.sourceQuery,
+                name: `Source for ${data.name}`,
+            });
+            if (!sourceSchema?.id) {
+                throw new BadRequestException('Failed to create source schema - no ID returned');
+            }
+            this.logger.log(`Created source schema: ${sourceSchema.id}`);
+        } catch (error) {
+            this.logger.error(
+                `Failed to create source schema: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            throw new BadRequestException(
+                `Failed to create source schema: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+        }
 
         // 2. Create destination schema
-        const destinationSchema = await this.destinationSchemaRepository.create({
-            orgId: data.orgId,
-            userId: data.userId,
-            destinationConnectionId: data.destinationConnectionId,
-            destinationSchema: data.destinationSchema || 'public',
-            destinationTable: data.destinationTable,
-            destinationTableExists: false,
-            columnMappings: data.columnMappings,
-            writeMode: (data.writeMode as 'append' | 'upsert' | 'replace') || 'append',
-            upsertKey: data.upsertKey,
-            name: `Destination for ${data.name}`,
-        });
+        // Check if transformers have destinationTable specified (existing table)
+        // If destinationTable is in format "schema.table", extract it
+        let destinationTableName = data.destinationTable;
+        let destinationSchemaName = data.destinationSchema || 'public';
+        let destinationTableExists = false; // Default to false (will create new table)
+        
+        // Extract destination table from transformers if specified
+        if (data.collectors) {
+            const transformerWithTable = data.collectors
+                .flatMap((c: any) => c.transformers || [])
+                .find((t: any) => t.destinationTable);
+            
+            if (transformerWithTable?.destinationTable) {
+                const tableParts = transformerWithTable.destinationTable.includes('.')
+                    ? transformerWithTable.destinationTable.split('.')
+                    : ['public', transformerWithTable.destinationTable];
+                destinationSchemaName = tableParts[0] || 'public';
+                destinationTableName = tableParts[1] || tableParts[0];
+                destinationTableExists = true; // User selected existing table
+            }
+        }
+        
+        let destinationSchema: PipelineDestinationSchema;
+        try {
+            destinationSchema = await this.destinationSchemaRepository.create({
+                orgId: data.orgId,
+                userId: data.userId,
+                destinationConnectionId: data.destinationConnectionId,
+                destinationSchema: destinationSchemaName,
+                destinationTable: destinationTableName,
+                destinationTableExists: destinationTableExists, // Set based on whether user selected existing table
+                columnMappings: data.columnMappings,
+                writeMode: (data.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+                upsertKey: data.upsertKey,
+                name: `Destination for ${data.name}`,
+            });
+            if (!destinationSchema?.id) {
+                throw new BadRequestException('Failed to create destination schema - no ID returned');
+            }
+            this.logger.log(`Created destination schema: ${destinationSchema.id}`);
+        } catch (error) {
+            this.logger.error(
+                `Failed to create destination schema: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            throw new BadRequestException(
+                `Failed to create destination schema: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+        }
 
         // 3. Create pipeline with schema references
-        const pipeline = await this.pipelineRepository.create({
-            orgId: data.orgId,
-            userId: data.userId,
-            name: data.name,
-            description: data.description,
-            sourceSchemaId: sourceSchema.id,
-            destinationSchemaId: destinationSchema.id,
-            transformations: data.transformations,
-            syncMode: data.syncMode || 'full',
-            incrementalColumn: data.incrementalColumn,
-            syncFrequency: data.syncFrequency || 'manual',
-        });
+        // Store collectors, transformers, and emitters in transformations JSONB field
+        // Format: { transformations: [...], collectors: [...], emitters: [...] }
+        
+        // Extract all transformers from collectors and convert to legacy transformations format
+        const legacyTransformations: Transformation[] = [];
+        if (data.collectors) {
+            this.logger.log(
+                `Extracting transformers from ${data.collectors.length} collectors`,
+            );
+            data.collectors.forEach((collector: any) => {
+                if (collector.transformers && Array.isArray(collector.transformers)) {
+                    this.logger.log(
+                        `Collector ${collector.id} has ${collector.transformers.length} transformers`,
+                    );
+                    collector.transformers.forEach((transformer: any) => {
+                        // Convert transformer fieldMappings to legacy Transformation format
+                        if (transformer.fieldMappings && Array.isArray(transformer.fieldMappings)) {
+                            this.logger.log(
+                                `Transformer ${transformer.id} has ${transformer.fieldMappings.length} field mappings`,
+                            );
+                            transformer.fieldMappings.forEach((mapping: { source: string; destination: string }) => {
+                                legacyTransformations.push({
+                                    sourceColumn: mapping.source.includes('.') 
+                                        ? mapping.source.split('.').pop() || mapping.source
+                                        : mapping.source,
+                                    destinationColumn: mapping.destination,
+                                    transformType: 'rename',
+                                    transformConfig: {},
+                                });
+                            });
+                        } else {
+                            this.logger.warn(
+                                `Transformer ${transformer.id} has no fieldMappings or fieldMappings is not an array`,
+                            );
+                        }
+                    });
+                } else {
+                    this.logger.warn(
+                        `Collector ${collector.id} has no transformers or transformers is not an array`,
+                    );
+                }
+            });
+        }
+        
+        // Merge with any existing transformations
+        const allTransformations = [
+            ...(data.transformations || []),
+            ...legacyTransformations,
+        ];
+        
+        this.logger.log(
+            `Storing ${allTransformations.length} transformations in pipeline config (${legacyTransformations.length} from collectors, ${(data.transformations || []).length} from data)`,
+        );
+        
+        const pipelineConfig: any = {};
+        
+        // Only include transformations if there are any
+        if (allTransformations.length > 0) {
+            pipelineConfig.transformations = allTransformations;
+        }
+        
+        if (data.collectors) {
+            pipelineConfig.collectors = data.collectors;
+        }
+        
+        if (data.emitters) {
+            pipelineConfig.emitters = data.emitters;
+        }
+        
+        // Validate destinationConnectionId is provided (required for legacy column)
+        if (!data.destinationConnectionId) {
+            throw new BadRequestException(
+                'destinationConnectionId is required. Please ensure emitters are configured with valid destination connections.',
+            );
+        }
+        
+        try {
+            // Verify schemas exist before creating pipeline
+            const sourceSchemaExists = await this.sourceSchemaRepository.findById(sourceSchema.id);
+            if (!sourceSchemaExists) {
+                throw new BadRequestException(
+                    `Source schema ${sourceSchema.id} was not created successfully`,
+                );
+            }
 
-        return pipeline;
+            const destinationSchemaExists = await this.destinationSchemaRepository.findById(destinationSchema.id);
+            if (!destinationSchemaExists) {
+                throw new BadRequestException(
+                    `Destination schema ${destinationSchema.id} was not created successfully`,
+                );
+            }
+
+            this.logger.log(
+                `Creating pipeline with source schema: ${sourceSchema.id}, destination schema: ${destinationSchema.id}, destination connection: ${data.destinationConnectionId}`,
+            );
+
+            const pipeline = await this.pipelineRepository.create({
+                orgId: data.orgId,
+                userId: data.userId,
+                name: data.name,
+                description: data.description,
+                sourceType: data.sourceType, // Required by database table (legacy column)
+                sourceSchemaId: sourceSchema.id,
+                destinationSchemaId: destinationSchema.id,
+                destinationConnectionId: data.destinationConnectionId, // Legacy column - required during migration
+                destinationTable: data.destinationTable, // Legacy column - required during migration
+                transformations: pipelineConfig, // Store full config including collectors/emitters
+                syncMode: data.syncMode || 'full',
+                incrementalColumn: data.incrementalColumn,
+                syncFrequency: data.syncFrequency || 'manual',
+            });
+
+            this.logger.log(`Successfully created pipeline: ${pipeline.id}`);
+            return pipeline;
+        } catch (error) {
+            // Enhanced error logging - extract actual PostgreSQL error from Drizzle
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            
+            // Drizzle errors wrap PostgreSQL errors - try to extract the actual error
+            let pgErrorCode: string | undefined;
+            let pgErrorDetail: string | undefined;
+            let pgErrorConstraint: string | undefined;
+            let pgErrorMessage: string = errorMessage;
+
+            // Check if it's a Drizzle error with nested cause
+            const drizzleError = error as any;
+            if (drizzleError?.cause) {
+                const cause = drizzleError.cause;
+                pgErrorCode = cause?.code;
+                pgErrorDetail = cause?.detail;
+                pgErrorConstraint = cause?.constraint;
+                if (cause?.message) {
+                    pgErrorMessage = cause.message;
+                }
+            } else {
+                // Try direct properties
+                pgErrorCode = drizzleError?.code;
+                pgErrorDetail = drizzleError?.detail;
+                pgErrorConstraint = drizzleError?.constraint;
+            }
+
+            this.logger.error(
+                `Failed to create pipeline: ${errorMessage}`,
+                error instanceof Error ? error.stack : undefined,
+            );
+            this.logger.error(
+                `Source schema ID: ${sourceSchema.id}, Destination schema ID: ${destinationSchema.id}`,
+            );
+            // Log the full error structure for debugging
+            this.logger.error(
+                `PostgreSQL error code: ${pgErrorCode}, Detail: ${pgErrorDetail}, Constraint: ${pgErrorConstraint}`,
+            );
+            this.logger.error(
+                `Full error object: ${JSON.stringify({
+                    message: errorMessage,
+                    code: pgErrorCode,
+                    detail: pgErrorDetail,
+                    constraint: pgErrorConstraint,
+                    errorType: error?.constructor?.name,
+                    errorKeys: Object.keys(drizzleError || {}),
+                    causeKeys: drizzleError?.cause ? Object.keys(drizzleError.cause) : undefined,
+                }, null, 2)}`,
+            );
+
+            // Check for foreign key constraint violations (23503)
+            if (pgErrorCode === '23503' || pgErrorMessage.includes('foreign key') || pgErrorConstraint?.includes('_fk')) {
+                throw new BadRequestException(
+                    `Database constraint violation: The source or destination schema may not exist in the database. ` +
+                    `Source schema ID: ${sourceSchema.id}, Destination schema ID: ${destinationSchema.id}. ` +
+                    `Constraint: ${pgErrorConstraint || 'unknown'}. ` +
+                    `Detail: ${pgErrorDetail || 'No additional details'}. ` +
+                    `This may indicate a database migration issue. Please ensure all migrations have been run.`,
+                );
+            }
+
+            // Check for not null constraint violations (23502)
+            if (pgErrorCode === '23502' || pgErrorMessage.includes('not null')) {
+                throw new BadRequestException(
+                    `Required field is missing. Error: ${pgErrorMessage}. ` +
+                    `Detail: ${pgErrorDetail || 'No additional details'}. ` +
+                    `Please check that all required fields are provided.`,
+                );
+            }
+
+            // Check for unique constraint violations (23505)
+            if (pgErrorCode === '23505' || pgErrorMessage.includes('unique constraint')) {
+                throw new BadRequestException(
+                    `Unique constraint violation: ${pgErrorMessage}. ` +
+                    `Detail: ${pgErrorDetail || 'No additional details'}. ` +
+                    `A pipeline with this configuration may already exist.`,
+                );
+            }
+
+            // Re-throw with more context
+            throw new BadRequestException(
+                `Failed to create pipeline: ${pgErrorMessage}. ` +
+                `Source schema: ${sourceSchema.id}, Destination schema: ${destinationSchema.id}. ` +
+                `PostgreSQL error code: ${pgErrorCode || 'unknown'}. ` +
+                `If this persists, please check database migrations and constraints.`,
+            );
+        }
     }
 
     /**
@@ -151,16 +494,161 @@ export class PostgresPipelineService {
                 pipeline,
                 sourceSchema,
                 pipeline.lastSyncValue,
+                run.id,
             );
 
             // Step 2: Transform data
             this.logger.log(
                 `[${run.id}] Step 2: Transforming ${sourceData.rows.length} rows`,
             );
+            
+            // Extract field mappings from transformers in pipeline configuration
+            const pipelineConfig = pipeline.transformations as any;
+            const collectors = pipelineConfig?.collectors || [];
+            const transformers = collectors.flatMap((c: any) => c.transformers || []);
+            
+            this.logger.log(
+                `[${run.id}] Found ${transformers.length} transformers, ${collectors.length} collectors`,
+            );
+            
+            // Build column mappings from transformer fieldMappings
+            let columnMappings: ColumnMapping[] = [];
+            if (transformers.length > 0 && transformers[0]?.fieldMappings && Array.isArray(transformers[0].fieldMappings) && transformers[0].fieldMappings.length > 0) {
+                // Use field mappings from transformers
+                const fieldMappings = transformers[0].fieldMappings as Array<{ source: string; destination: string }>;
+                this.logger.log(
+                    `[${run.id}] Using ${fieldMappings.length} field mappings from transformer`,
+                );
+                columnMappings = fieldMappings.map((fm) => {
+                    // Handle schema-qualified source column names (e.g., "company.companies.id" -> "id")
+                    // Extract just the column name from the source field
+                    const sourceColumn = fm.source.includes('.') 
+                        ? fm.source.split('.').pop() || fm.source
+                        : fm.source;
+                    
+                    return {
+                        sourceColumn: sourceColumn,
+                        destinationColumn: fm.destination,
+                        dataType: 'TEXT', // Default type, could be inferred from source schema
+                        nullable: true,
+                    };
+                });
+            } else if (destinationSchema.columnMappings && destinationSchema.columnMappings.length > 0) {
+                // Fall back to destination schema column mappings
+                this.logger.log(
+                    `[${run.id}] Using ${destinationSchema.columnMappings.length} column mappings from destination schema`,
+                );
+                columnMappings = destinationSchema.columnMappings;
+            } else {
+                // Last resort: use all source columns as-is
+                if (sourceData.rows.length > 0) {
+                    const sourceColumns = Object.keys(sourceData.rows[0]);
+                    this.logger.log(
+                        `[${run.id}] No field mappings found, using all ${sourceColumns.length} source columns as-is`,
+                    );
+                    columnMappings = sourceColumns.map((col) => ({
+                        sourceColumn: col,
+                        destinationColumn: col,
+                        dataType: 'TEXT',
+                        nullable: true,
+                    }));
+                }
+            }
+            
+            if (columnMappings.length === 0) {
+                this.logger.error(
+                    `[${run.id}] No column mappings found. Transformers: ${JSON.stringify(transformers)}, Destination schema mappings: ${JSON.stringify(destinationSchema.columnMappings)}`,
+                );
+                throw new BadRequestException(
+                    'No column mappings found. Please configure field mappings in the transformer.',
+                );
+            }
+            
+            this.logger.log(
+                `[${run.id}] Using ${columnMappings.length} column mappings: ${columnMappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`,
+            );
+            
+            // Extract transformations array from pipeline config
+            // pipeline.transformations is a JSONB object: { collectors: [], emitters: [], transformations: [] }
+            let legacyTransformations: Transformation[] = [];
+            
+            try {
+                if (pipeline.transformations) {
+                    if (Array.isArray(pipeline.transformations)) {
+                        // Legacy format: transformations is directly an array
+                        legacyTransformations = pipeline.transformations;
+                        this.logger.log(
+                            `[${run.id}] Found legacy transformations array format with ${legacyTransformations.length} items`,
+                        );
+                    } else if (typeof pipeline.transformations === 'object') {
+                        // New format: transformations is an object with collectors/emitters/transformations
+                        const pipelineConfig = pipeline.transformations as any;
+                        
+                        // First, try to get transformations array from the config
+                        if (pipelineConfig.transformations !== undefined) {
+                            if (Array.isArray(pipelineConfig.transformations)) {
+                                legacyTransformations = pipelineConfig.transformations;
+                                this.logger.log(
+                                    `[${run.id}] Found ${legacyTransformations.length} transformations in pipeline config`,
+                                );
+                            } else {
+                                this.logger.warn(
+                                    `[${run.id}] pipelineConfig.transformations is not an array: ${typeof pipelineConfig.transformations}`,
+                                );
+                            }
+                        }
+                        
+                        // If transformations array is empty, extract from collectors
+                        if (legacyTransformations.length === 0) {
+                            const collectors = pipelineConfig?.collectors || [];
+                            this.logger.log(
+                                `[${run.id}] Extracting transformations from ${collectors.length} collectors`,
+                            );
+                            collectors.forEach((collector: any) => {
+                                if (collector.transformers && Array.isArray(collector.transformers)) {
+                                    collector.transformers.forEach((transformer: any) => {
+                                        if (transformer.fieldMappings && Array.isArray(transformer.fieldMappings)) {
+                                            transformer.fieldMappings.forEach((mapping: { source: string; destination: string }) => {
+                                                legacyTransformations.push({
+                                                    sourceColumn: mapping.source.includes('.') 
+                                                        ? mapping.source.split('.').pop() || mapping.source
+                                                        : mapping.source,
+                                                    destinationColumn: mapping.destination,
+                                                    transformType: 'rename',
+                                                    transformConfig: {},
+                                                });
+                                            });
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    }
+                }
+            } catch (error) {
+                this.logger.error(
+                    `[${run.id}] Error extracting transformations: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                // Fall back to empty array
+                legacyTransformations = [];
+            }
+            
+            // Ensure it's always an array
+            if (!Array.isArray(legacyTransformations)) {
+                this.logger.warn(
+                    `[${run.id}] legacyTransformations is not an array, converting to empty array. Type: ${typeof legacyTransformations}`,
+                );
+                legacyTransformations = [];
+            }
+            
+            this.logger.log(
+                `[${run.id}] Using ${legacyTransformations.length} legacy transformations`,
+            );
+            
             const transformedData = await this.transformData(
                 sourceData.rows,
-                destinationSchema.columnMappings || [],
-                pipeline.transformations || [],
+                columnMappings,
+                legacyTransformations,
             );
 
             // Step 3: Write to destination
@@ -171,6 +659,8 @@ export class PostgresPipelineService {
                 transformedData,
                 pipeline,
                 destinationSchema,
+                run.id,
+                columnMappings, // Pass column mappings so table can be created if needed
             );
 
             // Step 4: Update pipeline state
@@ -243,6 +733,7 @@ export class PostgresPipelineService {
         pipeline: PostgresPipeline,
         sourceSchema: PipelineSourceSchema,
         lastSyncValue?: string | null,
+        runId?: string,
     ): Promise<{ rows: any[]; totalRows: number }> {
         if (sourceSchema.sourceType !== 'postgres') {
             throw new BadRequestException(
@@ -254,10 +745,32 @@ export class PostgresPipelineService {
             throw new BadRequestException('Source connection ID is required');
         }
 
-        const pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
+        // Get or create connection pool
+        let pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
         if (!pool) {
-            throw new BadRequestException(
-                `Source connection pool not found for ${sourceSchema.sourceConnectionId}`,
+            // Pool doesn't exist, create it
+            const logPrefix = runId ? `[${runId}]` : '';
+            this.logger.log(
+                `${logPrefix} Creating connection pool for source connection ${sourceSchema.sourceConnectionId}`,
+            );
+            const connection = await this.connectionRepository.findById(
+                sourceSchema.sourceConnectionId,
+                pipeline.orgId,
+            );
+            if (!connection) {
+                throw new BadRequestException(
+                    `Source connection ${sourceSchema.sourceConnectionId} not found`,
+                );
+            }
+            if (connection.status !== 'active') {
+                throw new BadRequestException(
+                    `Source connection is not active (status: ${connection.status})`,
+                );
+            }
+            const credentials = this.connectionRepository.decryptCredentials(connection);
+            pool = await this.connectionPool.createPool(
+                sourceSchema.sourceConnectionId,
+                credentials,
             );
         }
 
@@ -314,11 +827,21 @@ export class PostgresPipelineService {
     private async transformData(
         sourceData: any[],
         mappings: ColumnMapping[],
-        transformations: Transformation[],
+        transformations: Transformation[] | any,
     ): Promise<any[]> {
         if (sourceData.length === 0) return [];
 
-        return sourceData.map((row) => {
+        if (mappings.length === 0) {
+            this.logger.warn('No column mappings provided, returning source data as-is');
+            return sourceData;
+        }
+
+        // Ensure transformations is an array
+        const transformationsArray = Array.isArray(transformations) 
+            ? transformations 
+            : [];
+
+        const transformed = sourceData.map((row, rowIndex) => {
             const transformedRow: any = {};
 
             // Apply column mappings
@@ -326,8 +849,8 @@ export class PostgresPipelineService {
                 let value = row[mapping.sourceColumn];
 
                 // Apply transformations for this column
-                const transformation = transformations.find(
-                    (t) => t.sourceColumn === mapping.sourceColumn,
+                const transformation = transformationsArray.find(
+                    (t: Transformation) => t.sourceColumn === mapping.sourceColumn,
                 );
 
                 if (transformation) {
@@ -337,8 +860,27 @@ export class PostgresPipelineService {
                 transformedRow[mapping.destinationColumn] = value;
             });
 
+            // Log first row for debugging
+            if (rowIndex === 0) {
+                this.logger.log(
+                    `First transformed row keys: ${Object.keys(transformedRow).join(', ')}`,
+                );
+            }
+
             return transformedRow;
         });
+
+        // Validate that transformed rows have at least one column
+        if (transformed.length > 0 && Object.keys(transformed[0]).length === 0) {
+            this.logger.error(
+                `Transformed data is empty. Mappings: ${JSON.stringify(mappings)}, First source row keys: ${Object.keys(sourceData[0] || {}).join(', ')}`,
+            );
+            throw new BadRequestException(
+                'Transformed data is empty. Please check your field mappings.',
+            );
+        }
+
+        return transformed;
     }
 
     /**
@@ -382,15 +924,39 @@ export class PostgresPipelineService {
         transformedData: any[],
         pipeline: PostgresPipeline,
         destinationSchema: PipelineDestinationSchema,
+        runId?: string,
+        columnMappings?: ColumnMapping[],
     ): Promise<{
         rowsWritten: number;
         rowsSkipped: number;
         rowsFailed: number;
     }> {
-        const pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
+        // Get or create connection pool
+        let pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
         if (!pool) {
-            throw new BadRequestException(
-                `Destination connection pool not found for ${destinationSchema.destinationConnectionId}`,
+            // Pool doesn't exist, create it
+            const logPrefix = runId ? `[${runId}]` : '';
+            this.logger.log(
+                `${logPrefix} Creating connection pool for destination connection ${destinationSchema.destinationConnectionId}`,
+            );
+            const connection = await this.connectionRepository.findById(
+                destinationSchema.destinationConnectionId,
+                pipeline.orgId,
+            );
+            if (!connection) {
+                throw new BadRequestException(
+                    `Destination connection ${destinationSchema.destinationConnectionId} not found`,
+                );
+            }
+            if (connection.status !== 'active') {
+                throw new BadRequestException(
+                    `Destination connection is not active (status: ${connection.status})`,
+                );
+            }
+            const credentials = this.connectionRepository.decryptCredentials(connection);
+            pool = await this.connectionPool.createPool(
+                destinationSchema.destinationConnectionId,
+                credentials,
             );
         }
 
@@ -406,32 +972,78 @@ export class PostgresPipelineService {
                 destinationSchema.destinationTable,
             );
 
+            // Use provided column mappings or fall back to destinationSchema.columnMappings
+            // If neither exists, generate from transformed data
+            let finalColumnMappings = columnMappings || destinationSchema.columnMappings || [];
+            if (finalColumnMappings.length === 0 && transformedData.length > 0) {
+                const logPrefix = runId ? `[${runId}]` : '';
+                this.logger.log(
+                    `${logPrefix} No column mappings available, generating from transformed data`,
+                );
+                // Generate column mappings from first row of transformed data
+                const firstRow = transformedData[0];
+                const columns = Object.keys(firstRow);
+                finalColumnMappings = columns.map((col) => ({
+                    sourceColumn: col,
+                    destinationColumn: col,
+                    dataType: 'TEXT', // Default type
+                    nullable: true,
+                }));
+                
+                // Update destination schema with generated mappings
+                await this.destinationSchemaRepository.update(destinationSchema.id, {
+                    columnMappings: finalColumnMappings as any,
+                });
+            }
+
             // Create table if not exists
-            if (!tableExists && destinationSchema.columnMappings) {
+            // Only create if destinationTableExists is false (user wants to create new table)
+            // If destinationTableExists is true, assume table should exist and don't create
+            const shouldCreateTable = !tableExists && destinationSchema.destinationTableExists === false;
+            
+            if (shouldCreateTable) {
+                const logPrefix = runId ? `[${runId}]` : '';
+                this.logger.log(
+                    `${logPrefix} Creating new destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} with ${finalColumnMappings.length} columns`,
+                );
                 await this.destinationService.createDestinationTable(
                     client,
                     destinationSchema.destinationSchema ?? 'public',
                     destinationSchema.destinationTable,
-                    destinationSchema.columnMappings,
+                    finalColumnMappings,
                 );
 
-                // Update destination schema
-                // Note: We could update the destinationSchema record here if needed
+                // Update destination schema to mark table as existing
+                await this.destinationSchemaRepository.update(destinationSchema.id, {
+                    destinationTableExists: true,
+                    columnMappings: finalColumnMappings as any,
+                });
+            } else if (!tableExists && destinationSchema.destinationTableExists === true) {
+                // Table doesn't exist but user selected an existing table
+                const logPrefix = runId ? `[${runId}]` : '';
+                throw new BadRequestException(
+                    `Destination table "${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}" does not exist. Please create the table first or select a different table.`,
+                );
+            } else if (tableExists) {
+                const logPrefix = runId ? `[${runId}]` : '';
+                this.logger.log(
+                    `${logPrefix} Using existing destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}`,
+                );
             }
 
             // Validate schema if table exists
-            if (tableExists && destinationSchema.columnMappings) {
+            if (tableExists && finalColumnMappings.length > 0) {
                 const validation = await this.destinationService.validateSchema(
                     client,
                     destinationSchema.destinationSchema ?? 'public',
                     destinationSchema.destinationTable,
-                    destinationSchema.columnMappings,
+                    finalColumnMappings,
                 );
 
                 if (!validation.valid) {
                     // Add missing columns
                     if (validation.missingColumns && validation.missingColumns.length > 0) {
-                        const missingMappings = destinationSchema.columnMappings.filter((m) =>
+                        const missingMappings = finalColumnMappings.filter((m) =>
                             validation.missingColumns!.includes(m.destinationColumn),
                         );
                         await this.destinationService.addMissingColumns(

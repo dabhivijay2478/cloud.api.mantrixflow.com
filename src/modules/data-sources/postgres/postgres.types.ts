@@ -72,6 +72,7 @@ export interface PostgresConnectionConfig {
   connectionTimeout?: number; // milliseconds
   queryTimeout?: number; // milliseconds
   poolSize?: number;
+  options?: string; // Connection options (e.g., for Neon endpoint ID: "-c endpoint=<endpoint-id>")
 }
 
 /**
@@ -91,6 +92,7 @@ export interface DecryptedConnectionCredentials {
   sshUsername?: string;
   sshPrivateKey?: string;
   connectionPoolSize?: number;
+  options?: string; // Connection options (e.g., for Neon endpoint ID)
 }
 
 /**

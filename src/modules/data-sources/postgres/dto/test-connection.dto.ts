@@ -7,6 +7,7 @@ import {
   IsObject,
   Min,
   Max,
+  ValidateIf,
 } from 'class-validator';
 
 export class SSLConfigDto {
@@ -62,9 +63,24 @@ export class SSHTunnelConfigDto {
 }
 
 export class TestConnectionDto {
-  @ApiProperty({ description: 'PostgreSQL host', example: 'localhost' })
+  @ApiProperty({
+    description:
+      'PostgreSQL connection string (postgresql://user:password@host:port/database). If provided, individual connection fields are optional.',
+    example: 'postgresql://postgres:password123@localhost:5432/mydb',
+    required: false,
+  })
   @IsString()
-  host: string;
+  @IsOptional()
+  connectionString?: string;
+
+  @ApiProperty({
+    description: 'PostgreSQL host (required if connectionString is not provided)',
+    example: 'localhost',
+    required: false,
+  })
+  @ValidateIf((o) => !o.connectionString)
+  @IsString()
+  host?: string;
 
   @ApiProperty({ description: 'PostgreSQL port', example: 5432, default: 5432 })
   @IsNumber()
@@ -73,17 +89,32 @@ export class TestConnectionDto {
   @IsOptional()
   port?: number;
 
-  @ApiProperty({ description: 'Database name', example: 'mydb' })
+  @ApiProperty({
+    description: 'Database name (required if connectionString is not provided)',
+    example: 'mydb',
+    required: false,
+  })
+  @ValidateIf((o) => !o.connectionString)
   @IsString()
-  database: string;
+  database?: string;
 
-  @ApiProperty({ description: 'Database username', example: 'postgres' })
+  @ApiProperty({
+    description: 'Database username (required if connectionString is not provided)',
+    example: 'postgres',
+    required: false,
+  })
+  @ValidateIf((o) => !o.connectionString)
   @IsString()
-  username: string;
+  username?: string;
 
-  @ApiProperty({ description: 'Database password', example: 'password123' })
+  @ApiProperty({
+    description: 'Database password (required if connectionString is not provided)',
+    example: 'password123',
+    required: false,
+  })
+  @ValidateIf((o) => !o.connectionString)
   @IsString()
-  password: string;
+  password?: string;
 
   @ApiProperty({
     description: 'SSL configuration',
@@ -133,6 +164,16 @@ export class TestConnectionDto {
   @Max(10)
   @IsOptional()
   poolSize?: number;
+
+  @ApiProperty({
+    description: 'Database type: "neon", "supabase", or "other"',
+    example: 'other',
+    enum: ['neon', 'supabase', 'other'],
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  databaseType?: string;
 }
 
 export class TestConnectionResponseDto {

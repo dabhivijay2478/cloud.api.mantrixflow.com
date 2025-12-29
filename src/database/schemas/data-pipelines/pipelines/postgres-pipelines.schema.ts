@@ -62,6 +62,9 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   // SOURCE & DESTINATION SCHEMA REFERENCES
   // References to separate schema tables for better organization
   // ============================================================================
+  /** Source type (legacy column - kept for backward compatibility with database) */
+  sourceType: varchar('source_type', { length: 100 }),
+  
   /** Source schema ID (references pipeline_source_schemas) */
   sourceSchemaId: uuid('source_schema_id')
     .notNull()
@@ -71,6 +74,16 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   destinationSchemaId: uuid('destination_schema_id')
     .notNull()
     .references(() => pipelineDestinationSchemas.id, { onDelete: 'restrict' }),
+
+  // ============================================================================
+  // LEGACY COLUMNS (kept for backward compatibility during migration)
+  // These columns exist in the database but are being phased out
+  // ============================================================================
+  /** Destination connection ID (legacy - kept for backward compatibility, required during migration) */
+  destinationConnectionId: uuid('destination_connection_id').notNull(),
+  
+  /** Destination table name (legacy - kept for backward compatibility, required during migration) */
+  destinationTable: varchar('destination_table', { length: 255 }),
 
   // ============================================================================
   // TRANSFORMATIONS

@@ -216,6 +216,44 @@ export class CreatePipelineDto {
     @IsEnum(['manual', '15min', '1hour', '24hours'])
     @IsOptional()
     syncFrequency?: 'manual' | '15min' | '1hour' | '24hours';
+
+    // Collector configuration
+    @ApiPropertyOptional({
+        description: 'Collector configurations',
+        type: 'array',
+        isArray: true,
+    })
+    @IsArray()
+    @IsOptional()
+    collectors?: Array<{
+        id: string;
+        sourceId: string;
+        selectedTables: string[];
+        transformers?: Array<{
+            id: string;
+            name: string;
+            collectorId?: string;
+            emitterId?: string;
+            fieldMappings?: Array<{ source: string; destination: string }>; // JSON array format
+        }>;
+    }>;
+
+    // Emitter configuration
+    @ApiPropertyOptional({
+        description: 'Emitter configurations. Emitters use existing connections via destinationId - connectionConfig is ignored.',
+        type: 'array',
+        isArray: true,
+    })
+    @IsArray()
+    @IsOptional()
+    emitters?: Array<{
+        id: string;
+        transformId: string;
+        destinationId: string; // References existing connection (like collectors use sourceId)
+        destinationName: string;
+        destinationType: string;
+        connectionConfig?: Record<string, string>; // Optional, ignored - connection is referenced by destinationId
+    }>;
 }
 
 /**
@@ -298,4 +336,42 @@ export class UpdatePipelineDto {
     @IsEnum(['active', 'paused'])
     @IsOptional()
     status?: 'active' | 'paused';
+
+    // Collector configuration (for updating pipeline transformations)
+    @ApiPropertyOptional({
+        description: 'Collector configurations',
+        type: 'array',
+        isArray: true,
+    })
+    @IsArray()
+    @IsOptional()
+    collectors?: Array<{
+        id: string;
+        sourceId: string;
+        selectedTables: string[];
+        transformers?: Array<{
+            id: string;
+            name: string;
+            collectorId?: string;
+            emitterId?: string;
+            fieldMappings?: Array<{ source: string; destination: string }>; // JSON array format
+        }>;
+    }>;
+
+    // Emitter configuration (for updating pipeline transformations)
+    @ApiPropertyOptional({
+        description: 'Emitter configurations. Emitters use existing connections via destinationId - connectionConfig is ignored.',
+        type: 'array',
+        isArray: true,
+    })
+    @IsArray()
+    @IsOptional()
+    emitters?: Array<{
+        id: string;
+        transformId: string;
+        destinationId: string; // References existing connection (like collectors use sourceId)
+        destinationName: string;
+        destinationType: string;
+        connectionConfig?: Record<string, string>; // Optional, ignored - connection is referenced by destinationId
+    }>;
 }

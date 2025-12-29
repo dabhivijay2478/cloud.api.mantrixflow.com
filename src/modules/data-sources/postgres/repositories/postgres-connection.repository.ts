@@ -72,15 +72,20 @@ export class PostgresConnectionRepository {
 
     // Insert into database using Drizzle
     try {
-      console.log('Attempting to insert connection into database...');
-      console.log('Connection data keys:', Object.keys(connectionData));
+      console.log('[PostgresConnectionRepository.create] Attempting to insert connection into database...');
+      console.log('[PostgresConnectionRepository.create] Connection orgId:', connectionData.orgId);
+      console.log('[PostgresConnectionRepository.create] Connection userId:', connectionData.userId);
+      console.log('[PostgresConnectionRepository.create] Connection data keys:', Object.keys(connectionData));
 
       const [connection] = await this.db
         .insert(postgresConnections)
         .values(connectionData)
         .returning();
 
-      console.log('Connection saved successfully with ID:', connection.id);
+      console.log('[PostgresConnectionRepository.create] Connection saved successfully');
+      console.log('[PostgresConnectionRepository.create] Saved connection ID:', connection.id);
+      console.log('[PostgresConnectionRepository.create] Saved connection orgId:', connection.orgId);
+      console.log('[PostgresConnectionRepository.create] Saved connection userId:', connection.userId);
       return connection;
     } catch (error) {
       // Log the full error for debugging
@@ -146,10 +151,20 @@ export class PostgresConnectionRepository {
    * Find all connections for organization
    */
   async findByOrgId(orgId: string): Promise<PostgresConnection[]> {
-    return await this.db
+    console.log('[PostgresConnectionRepository.findByOrgId] Querying with orgId:', orgId);
+    const result = await this.db
       .select()
       .from(postgresConnections)
       .where(eq(postgresConnections.orgId, orgId));
+    console.log('[PostgresConnectionRepository.findByOrgId] Query result count:', result.length);
+    if (result.length === 0) {
+      // Debug: Check if there are any connections at all
+      const allConnections = await this.db.select().from(postgresConnections).limit(5);
+      console.log('[PostgresConnectionRepository.findByOrgId] Sample of all connections (first 5):', 
+        allConnections.map(c => ({ id: c.id, orgId: c.orgId, name: c.name }))
+      );
+    }
+    return result;
   }
 
   /**
@@ -242,8 +257,19 @@ export class PostgresConnectionRepository {
       );
     }
 
+    const decryptedHost = this.encryptionService.decrypt(connection.host);
+    
+    // Detect Neon databases and generate options with endpoint ID
+    let options: string | undefined;
+    if (decryptedHost.includes('.neon.tech')) {
+      // Extract endpoint ID (first part of hostname before first dot)
+      const endpointId = decryptedHost.split('.')[0];
+      // Format as URL-encoded options parameter
+      options = `endpoint%3D${encodeURIComponent(endpointId)}`;
+    }
+
     return {
-      host: this.encryptionService.decrypt(connection.host),
+      host: decryptedHost,
       port: connection.port,
       database: this.encryptionService.decrypt(connection.database),
       username: this.encryptionService.decrypt(connection.username),
@@ -264,6 +290,7 @@ export class PostgresConnectionRepository {
         ? this.encryptionService.decrypt(connection.sshPrivateKey)
         : undefined,
       connectionPoolSize: connection.connectionPoolSize,
+      options,
     };
   }
 }

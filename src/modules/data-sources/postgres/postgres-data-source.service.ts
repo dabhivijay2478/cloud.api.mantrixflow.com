@@ -71,9 +71,12 @@ export class PostgresDataSourceService {
     name: string,
     config: PostgresConnectionConfig,
   ): Promise<PostgresConnection> {
-    // Validate UUIDs - generate if invalid
-    const validOrgId = this.validateOrGenerateUUID(orgId);
-    const validUserId = this.validateOrGenerateUUID(userId);
+    // Validate UUIDs - throw error if invalid (don't generate new ones)
+    const validOrgId = this.validateUUID(orgId, 'Organization ID');
+    const validUserId = this.validateUUID(userId, 'User ID');
+    
+    console.log('[PostgresDataSourceService.createConnection] Using orgId:', validOrgId);
+    console.log('[PostgresDataSourceService.createConnection] Using userId:', validUserId);
 
     // Validate connection count
     const currentCount =
@@ -90,13 +93,30 @@ export class PostgresDataSourceService {
       throw new BadRequestException(validation.error);
     }
 
-    // Detect Supabase connections and auto-enable SSL
+    // Detect Neon and Supabase connections and auto-enable SSL
+    const isNeon = config.host.includes('.neon.tech');
     const isSupabase =
       config.host.includes('supabase.co') ||
       config.host.includes('supabase.com');
+    
+    // Don't auto-enable SSL for localhost/127.0.0.1 (development)
+    const isLocalhost = config.host === 'localhost' || config.host === '127.0.0.1' || config.host.startsWith('127.');
+    
     const sslEnabled =
+      !isLocalhost &&
       config.ssl?.enabled !== false &&
-      (isSupabase || config.ssl?.enabled === true);
+      (isNeon || isSupabase || config.ssl?.enabled === true);
+    
+    // For Neon databases, extract endpoint ID and add to options
+    if (isNeon && !config.options) {
+      const endpointId = config.host.split('.')[0];
+      config.options = `endpoint%3D${encodeURIComponent(endpointId)}`;
+    }
+    
+    // For localhost connections, ensure rejectUnauthorized is false if SSL is enabled
+    if (isLocalhost && config.ssl?.enabled && config.ssl.rejectUnauthorized !== false) {
+      config.ssl.rejectUnauthorized = false;
+    }
 
     // Save connection FIRST - this is the critical operation
     // Do NOT test connection before saving - save immediately
@@ -293,7 +313,10 @@ export class PostgresDataSourceService {
   async listConnections(orgId: string): Promise<PostgresConnection[]> {
     // Validate UUID - throw error if invalid (for queries)
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
-    return await this.connectionRepository.findByOrgId(validOrgId);
+    console.log('[PostgresDataSourceService.listConnections] Querying with orgId:', validOrgId);
+    const connections = await this.connectionRepository.findByOrgId(validOrgId);
+    console.log('[PostgresDataSourceService.listConnections] Repository returned:', connections.length, 'connections');
+    return connections;
   }
 
   /**

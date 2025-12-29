@@ -127,6 +127,9 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     let actualHost = credentials.host;
     let actualPort = credentials.port;
     const actualUsername = credentials.username;
+    
+    // Store original host before SSH tunnel changes it
+    const originalHost = credentials.host;
 
     if (credentials.sshTunnelEnabled) {
       sshTunnel = await this.createSSHTunnel(credentials);
@@ -136,16 +139,37 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       actualPort = (sshTunnel as { localPort?: number }).localPort || 5432;
     }
 
-    // Resolve hostname to IPv4 address to force IPv4 connections
+    // Check if this is a Neon database (has .neon.tech in hostname)
+    // Use original host, not actualHost (which might be localhost if SSH tunnel is used)
+    const isNeonHost = originalHost.includes('.neon.tech');
+    
+    // For Neon databases, use original hostname in connection string (don't resolve)
+    // For other databases, resolve hostname to IPv4 address to force IPv4 connections
     // This prevents IPv6 connectivity issues (EHOSTUNREACH)
-    const resolvedHost = await this.resolveToIPv4(actualHost);
+    let resolvedHost: string;
+    let hostForConnection: string;
+    
+    if (isNeonHost) {
+      // For Neon, always use the original hostname (not resolved, not localhost from SSH tunnel)
+      // This ensures SSL certificate validation works correctly
+      hostForConnection = originalHost;
+      resolvedHost = originalHost; // Keep for isLocalhost check
+    } else {
+      resolvedHost = await this.resolveToIPv4(actualHost);
+      hostForConnection = resolvedHost;
+    }
 
     // SSL is enabled if explicitly configured
     const shouldUseSSL = credentials.sslEnabled === true;
+    
+    // Don't reject unauthorized certificates for localhost (development)
+    // Check original host, not resolved host, to avoid false positives
+    const isLocalhost = originalHost === 'localhost' || originalHost === '127.0.0.1' || originalHost.startsWith('127.');
+    const shouldRejectUnauthorized = !isLocalhost && (credentials.sslCaCert ? true : false);
 
     // Build pool configuration
     const poolConfig: PoolConfig = {
-      host: resolvedHost,
+      host: hostForConnection,
       port: actualPort,
       database: credentials.database,
       user: actualUsername, // Use corrected username for Supabase
@@ -156,13 +180,62 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       connectionTimeoutMillis: CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
       ssl: shouldUseSSL
         ? {
-          rejectUnauthorized: credentials.sslCaCert ? true : false, // Only reject if CA cert is provided
+          rejectUnauthorized: shouldRejectUnauthorized,
           ca: credentials.sslCaCert
             ? Buffer.from(credentials.sslCaCert)
             : undefined,
         }
         : false,
     };
+
+    // Handle Neon endpoint ID if options are provided (for Neon databases)
+    if (credentials.options) {
+      // For Neon, options are passed as connection string parameters
+      // Construct a connection string with options
+      // Always use SSL for Neon (unless it's actually localhost)
+      const sslMode = isLocalhost ? 'disable' : (shouldUseSSL ? 'require' : 'prefer');
+      // Remove leading ? if present, and ensure proper encoding
+      let optionsParam = credentials.options.startsWith('?') ? credentials.options.slice(1) : credentials.options;
+      // Ensure options parameter is properly URL-encoded
+      if (!optionsParam.includes('%3D')) {
+        // If not already encoded, encode it
+        optionsParam = optionsParam.replace('=', '%3D');
+      }
+      // Use original hostname for Neon connections to ensure SSL certificate validation works
+      const connectionString = `postgresql://${encodeURIComponent(actualUsername)}:${encodeURIComponent(credentials.password)}@${hostForConnection}:${actualPort}/${encodeURIComponent(credentials.database)}?${optionsParam}${optionsParam.includes('sslmode') ? '' : `&sslmode=${sslMode}`}`;
+      
+      console.log('[PostgresConnectionPoolService] Neon connection string:', connectionString.replace(credentials.password, '***'));
+      
+      // Use connection string format for Neon databases
+      const neonPoolConfig: PoolConfig = {
+        connectionString,
+        max: credentials.connectionPoolSize ?? CONNECTION_DEFAULTS.MAX_POOL_SIZE,
+        min: 1,
+        idleTimeoutMillis: CONNECTION_DEFAULTS.IDLE_TIMEOUT_MS,
+        connectionTimeoutMillis: CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
+      };
+
+      // Create pool with connection string
+      const pool = new Pool(neonPoolConfig);
+      
+      // Set up error handling
+      pool.on('error', (err) => {
+        console.error(`[PostgresConnectionPoolService] Unexpected pool error for connection ${connectionId}:`, err);
+      });
+
+      // Store pool with metadata
+      this.pools.set(connectionId, {
+        pool,
+        connectionId,
+        createdAt: new Date(),
+        lastUsedAt: new Date(),
+        activeConnections: 0,
+        totalQueries: 0,
+        sshTunnel,
+      });
+
+      return pool;
+    }
 
     // Create pool
     const pool = new Pool(poolConfig);
@@ -276,7 +349,13 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     let pool: Pool | undefined;
     let sshTunnel: SSHClient | undefined;
 
+    // SSL is enabled if explicitly configured (declare outside try block for catch block access)
+    const shouldUseSSL = config.ssl?.enabled === true;
+
     try {
+      // Store original host before SSH tunnel changes it
+      const originalHost = config.host;
+      
       // Create SSH tunnel if needed
       let actualHost = config.host;
       let actualPort = config.port || CONNECTION_DEFAULTS.PORT;
@@ -301,23 +380,35 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
 
       const actualUsername = config.username;
 
-      // Resolve hostname to IPv4 address to force IPv4 connections
-      // This prevents IPv6 connectivity issues (EHOSTUNREACH)
-      // For Supabase direct connections, they're IPv6-only, so resolution will return hostname
-      // Resolve hostname to IPv4 address to force IPv4 connections
-      // This prevents IPv6 connectivity issues (EHOSTUNREACH)
-      // For Supabase direct connections, they're IPv6-only, so resolution will return hostname
+      // Check if this is a Neon database (has .neon.tech in hostname)
+      // Use original host from config, not actualHost (which might be localhost if SSH tunnel is used)
+      const isNeonHost = originalHost.includes('.neon.tech');
+      
+      // For Neon databases, use original hostname (don't resolve)
+      // For other databases, resolve hostname to IPv4 address to force IPv4 connections
       let resolvedHost: string;
-      const shouldUseSSL = config.ssl?.enabled === true;
-
-      try {
-        resolvedHost = await this.resolveToIPv4(actualHost);
-        // If resolution returned the hostname (not an IP), it means it's IPv6-only or DNS failed
-        // We'll try to connect anyway and handle IPv6 errors in the catch block
-      } catch {
-        // DNS resolution completely failed, use hostname and let connection attempt fail with clearer error
-        resolvedHost = actualHost;
+      let hostForConnection: string;
+      
+      if (isNeonHost) {
+        // For Neon, always use the original hostname (not resolved, not localhost from SSH tunnel)
+        // This ensures SSL certificate validation works correctly
+        hostForConnection = originalHost;
+        resolvedHost = originalHost; // Keep for isLocalhost check
+      } else {
+        try {
+          resolvedHost = await this.resolveToIPv4(actualHost);
+          // If resolution returned the hostname (not an IP), it means it's IPv6-only or DNS failed
+          // We'll try to connect anyway and handle IPv6 errors in the catch block
+        } catch {
+          // DNS resolution completely failed, use hostname and let connection attempt fail with clearer error
+          resolvedHost = actualHost;
+        }
+        hostForConnection = resolvedHost;
       }
+
+      // Don't reject unauthorized certificates for localhost (development)
+      // Check original host, not resolved host, to avoid false positives
+      const isLocalhost = originalHost === 'localhost' || originalHost === '127.0.0.1' || originalHost.startsWith('127.');
 
       // Use configured timeout or default
       const connectionTimeout =
@@ -325,26 +416,52 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
 
       // Try connection
       try {
-        // Create temporary pool for testing
-        pool = new Pool({
-          host: resolvedHost,
-          port: actualPort,
-          database: config.database,
-          user: actualUsername, // Use corrected username for Supabase
-          password: config.password,
-          max: 1,
-          connectionTimeoutMillis: connectionTimeout,
-          ssl: shouldUseSSL
-            ? {
-              rejectUnauthorized: config.ssl?.caCert
-                ? config.ssl.rejectUnauthorized !== false
-                : false,
-              ca: config.ssl?.caCert
-                ? Buffer.from(config.ssl.caCert)
-                : undefined,
-            }
-            : false,
-        });
+        // Handle Neon endpoint ID if options are provided
+        if (config.options) {
+          // Don't use SSL for localhost even if options are present
+          const sslMode = isLocalhost ? 'disable' : (shouldUseSSL ? 'require' : 'prefer');
+          // Remove leading ? if present, and ensure proper encoding
+          let optionsParam = config.options.startsWith('?') ? config.options.slice(1) : config.options;
+          // Ensure options parameter is properly URL-encoded
+          if (!optionsParam.includes('%3D')) {
+            // If not already encoded, encode it
+            optionsParam = optionsParam.replace('=', '%3D');
+          }
+          // Use original hostname for Neon connections to ensure SSL certificate validation works
+          const connectionString = `postgresql://${encodeURIComponent(actualUsername)}:${encodeURIComponent(config.password)}@${hostForConnection}:${actualPort}/${encodeURIComponent(config.database)}?${optionsParam}${optionsParam.includes('sslmode') ? '' : `&sslmode=${sslMode}`}`;
+          
+          console.log('[PostgresConnectionPoolService] Neon test connection string:', connectionString.replace(config.password, '***'));
+          
+          // Create temporary pool for testing with connection string
+          pool = new Pool({
+            connectionString,
+            max: 1,
+            connectionTimeoutMillis: connectionTimeout,
+          });
+        } else {
+          // Create temporary pool for testing
+          pool = new Pool({
+            host: hostForConnection,
+            port: actualPort,
+            database: config.database,
+            user: actualUsername, // Use corrected username for Supabase
+            password: config.password,
+            max: 1,
+            connectionTimeoutMillis: connectionTimeout,
+            ssl: shouldUseSSL
+              ? {
+                rejectUnauthorized: isLocalhost 
+                  ? false 
+                  : (config.ssl?.caCert
+                    ? config.ssl.rejectUnauthorized !== false
+                    : false),
+                ca: config.ssl?.caCert
+                  ? Buffer.from(config.ssl.caCert)
+                  : undefined,
+              }
+              : false,
+          });
+        }
 
         // Test connection
         const client = await pool.connect();
@@ -473,6 +590,29 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         return {
           success: false,
           error: 'Database does not exist. Please verify the database name.',
+        };
+      }
+
+      // Handle SSL-related errors
+      if (
+        errorMessage.includes('insecure') ||
+        errorMessage.includes('sslmode') ||
+        errorMessage.includes('SSL') ||
+        errorMessage.includes('TLS')
+      ) {
+        // If SSL is not enabled but the error suggests it's required
+        if (!shouldUseSSL) {
+          return {
+            success: false,
+            error:
+              'Connection requires SSL. Please enable SSL or use a connection string with sslmode=require (e.g., postgresql://user:pass@host:port/db?sslmode=require).',
+          };
+        }
+        // If SSL is enabled but still failing
+        return {
+          success: false,
+          error:
+            'SSL connection failed. Please verify your SSL configuration or try using a connection string with sslmode=require.',
         };
       }
 

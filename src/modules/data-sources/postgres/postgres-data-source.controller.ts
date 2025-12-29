@@ -35,6 +35,7 @@ import {
 import { PostgresDataSourceService } from './postgres-data-source.service';
 import { PostgresConnectionConfig } from './postgres.types';
 import { createErrorResponse } from './utils/error-mapper.util';
+import { parsePostgresConnectionString } from './utils/connection-string-parser.util';
 import {
   TestConnectionDto,
   TestConnectionResponseDto,
@@ -90,20 +91,84 @@ export class PostgresDataSourceController {
   })
   async testConnection(@Body() dto: TestConnectionDto, @Request() _req: Request) {
     try {
+      // Parse connection string if provided, otherwise use individual fields
+      let baseConfig: Partial<PostgresConnectionConfig> = {};
+
+      if (dto.connectionString) {
+        try {
+          const parsed = parsePostgresConnectionString(dto.connectionString);
+          baseConfig = {
+            host: parsed.host,
+            port: parsed.port,
+            database: parsed.database,
+            username: parsed.username,
+            password: parsed.password,
+            ssl: parsed.ssl,
+          };
+        } catch (error) {
+          throw new BadRequestException(
+            `Invalid connection string: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
+      }
+
+      // Individual fields override connection string values
+      // Validate that we have required fields
+      const host = dto.host || baseConfig.host;
+      const database = dto.database || baseConfig.database;
+      const username = dto.username || baseConfig.username;
+      const password = dto.password || baseConfig.password;
+
+      if (!host || !database || !username || !password) {
+        throw new BadRequestException(
+          'Either connectionString or all individual fields (host, database, username, password) must be provided',
+        );
+      }
+
+      // Detect Neon and Supabase connections using databaseType or hostname
+      const databaseType = dto.databaseType || (host.includes('.neon.tech') ? 'neon' : 
+        (host.includes('supabase.co') || host.includes('supabase.com') ? 'supabase' : 'other'));
+      const isNeon = databaseType === 'neon' || host.includes('.neon.tech');
+      const isSupabase = databaseType === 'supabase' || 
+        host.includes('supabase.co') || host.includes('supabase.com');
+      
+      // Don't auto-enable SSL for localhost/127.0.0.1 (development)
+      const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.');
+      
+      // Auto-enable SSL for Neon and Supabase if not explicitly disabled and not localhost
+      const shouldEnableSSL = !isLocalhost && (isNeon || isSupabase || dto.ssl?.enabled === true);
+      
+      // For localhost with SSL, don't reject unauthorized certificates
+      const shouldRejectUnauthorized = !isLocalhost && dto.ssl?.rejectUnauthorized !== false;
+      
+      // For Neon databases, extract endpoint ID and add to options
+      // Only add Neon options if it's actually a Neon host (not localhost)
+      let neonOptions: string | undefined;
+      if (isNeon && !isLocalhost && !baseConfig.options) {
+        const endpointId = host.split('.')[0];
+        neonOptions = `endpoint%3D${encodeURIComponent(endpointId)}`;
+      }
+
       // Convert DTO to PostgresConnectionConfig
       const config: PostgresConnectionConfig = {
-        host: dto.host,
-        port: dto.port || 5432,
-        database: dto.database,
-        username: dto.username,
-        password: dto.password,
-        ssl: dto.ssl?.enabled
+        host,
+        port: dto.port || baseConfig.port || 5432,
+        database,
+        username,
+        password,
+        ssl: shouldEnableSSL
+          ? {
+            enabled: true,
+            caCert: dto.ssl?.caCert,
+            rejectUnauthorized: shouldRejectUnauthorized,
+          }
+          : dto.ssl?.enabled !== undefined
           ? {
             enabled: dto.ssl.enabled,
             caCert: dto.ssl.caCert,
-            rejectUnauthorized: dto.ssl.rejectUnauthorized,
+            rejectUnauthorized: isLocalhost ? false : (dto.ssl.rejectUnauthorized !== false),
           }
-          : undefined,
+          : baseConfig.ssl,
         sshTunnel: dto.sshTunnel?.enabled
           ? {
             enabled: dto.sshTunnel.enabled,
@@ -116,6 +181,7 @@ export class PostgresDataSourceController {
         connectionTimeout: dto.connectionTimeout,
         queryTimeout: dto.queryTimeout,
         poolSize: dto.poolSize,
+        options: neonOptions || baseConfig.options, // Preserve options from connection string or add Neon endpoint ID
       };
       const testResult = await this.postgresDataSourceService.testConnection(config);
       return createSuccessResponse(
@@ -167,28 +233,147 @@ export class PostgresDataSourceController {
     status: 403,
     description: 'Maximum connections exceeded',
   })
+  @ApiQuery({
+    name: 'orgId',
+    description: 'Organization ID',
+    required: false,
+    type: String,
+  })
   async createConnection(
     @Body() body: CreateConnectionDto,
     @Request() req: Request,
+    @Query('orgId') orgIdParam?: string,
   ) {
     try {
-      const orgId = req.user?.orgId || 'default-org-id'; // TODO: Get from auth
-      const userId = req.user?.id || 'default-user-id'; // TODO: Get from auth
+      // Debug logging - check what we received
+      console.log('[createConnection] Query orgId param:', orgIdParam);
+      console.log('[createConnection] Query orgId param type:', typeof orgIdParam);
+      console.log('[createConnection] User orgId from auth:', req.user?.orgId);
+      console.log('[createConnection] Full request query:', JSON.stringify(req.query));
+      console.log('[createConnection] Request URL:', req.url);
+      
+      // Extract orgId from query parameter first, then from auth - REQUIRED
+      // Query parameter MUST take absolute precedence - this is the selected organization from UI
+      let orgId: string | undefined;
+      
+      // STRICT: Query parameter takes absolute precedence
+      if (orgIdParam) {
+        const trimmed = orgIdParam.trim();
+        if (trimmed.length > 0) {
+          orgId = trimmed;
+          console.log('[createConnection] ✅ Using orgId from query parameter (UI selection):', orgId);
+        } else {
+          console.warn('[createConnection] ⚠️ Query parameter orgId is empty string');
+        }
+      } else {
+        console.warn('[createConnection] ⚠️ No orgId query parameter provided');
+      }
+      
+      // Fallback to user auth orgId ONLY if query parameter was not provided
+      if (!orgId && req.user?.orgId) {
+        orgId = req.user.orgId;
+        console.log('[createConnection] ⚠️ Falling back to orgId from user auth:', orgId);
+      }
+      
+      if (!orgId) {
+        console.error('[createConnection] ❌ No orgId available - query param:', orgIdParam, 'user orgId:', req.user?.orgId);
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter (?orgId=...) or ensure you are authenticated with an organization.',
+        );
+      }
+      
+      const userId = req.user?.id;
+      if (!userId) {
+        throw new BadRequestException(
+          'User ID is required. Please ensure you are authenticated.',
+        );
+      }
+      
+      // Debug logging - final values being used
+      console.log('[createConnection] Final orgId being used:', orgId);
+      console.log('[createConnection] Final userId being used:', userId);
+      console.log('[createConnection] orgId source:', orgIdParam ? 'query parameter' : 'user auth');
+
+      // Parse connection string if provided, otherwise use individual fields
+      let baseConfig: Partial<PostgresConnectionConfig> = {};
+
+      if (body.config.connectionString) {
+        try {
+          const parsed = parsePostgresConnectionString(
+            body.config.connectionString,
+          );
+          baseConfig = {
+            host: parsed.host,
+            port: parsed.port,
+            database: parsed.database,
+            username: parsed.username,
+            password: parsed.password,
+            ssl: parsed.ssl,
+          };
+        } catch (error) {
+          throw new BadRequestException(
+            `Invalid connection string: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          );
+        }
+      }
+
+      // Individual fields override connection string values
+      // Validate that we have required fields (either from connection string or individual fields)
+      const host = body.config.host || baseConfig.host;
+      const database = body.config.database || baseConfig.database;
+      const username = body.config.username || baseConfig.username;
+      const password = body.config.password || baseConfig.password;
+
+      if (!host || !database || !username || !password) {
+        throw new BadRequestException(
+          'Either connectionString or all individual fields (host, database, username, password) must be provided',
+        );
+      }
+
+      // Detect Neon and Supabase connections using databaseType or hostname
+      const databaseType = body.config.databaseType || (host.includes('.neon.tech') ? 'neon' : 
+        (host.includes('supabase.co') || host.includes('supabase.com') ? 'supabase' : 'other'));
+      const isNeon = databaseType === 'neon' || host.includes('.neon.tech');
+      const isSupabase = databaseType === 'supabase' || 
+        host.includes('supabase.co') || host.includes('supabase.com');
+      
+      // Don't auto-enable SSL for localhost/127.0.0.1 (development)
+      const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.');
+      
+      // Auto-enable SSL for Neon and Supabase if not explicitly disabled and not localhost
+      const shouldEnableSSL = !isLocalhost && (isNeon || isSupabase || body.config.ssl?.enabled === true);
+      
+      // For localhost with SSL, don't reject unauthorized certificates
+      const shouldRejectUnauthorized = !isLocalhost && body.config.ssl?.rejectUnauthorized !== false;
+      
+      // For Neon databases, extract endpoint ID and add to options
+      // Only add Neon options if it's actually a Neon host (not localhost)
+      let neonOptions: string | undefined;
+      if (isNeon && !isLocalhost && !baseConfig.options) {
+        const endpointId = host.split('.')[0];
+        neonOptions = `endpoint%3D${encodeURIComponent(endpointId)}`;
+      }
 
       // Convert DTO to PostgresConnectionConfig
       const config: PostgresConnectionConfig = {
-        host: body.config.host,
-        port: body.config.port || 5432,
-        database: body.config.database,
-        username: body.config.username,
-        password: body.config.password,
-        ssl: body.config.ssl?.enabled
+        host,
+        port: body.config.port || baseConfig.port || 5432,
+        database,
+        username,
+        password,
+        ssl: shouldEnableSSL
+          ? {
+            enabled: true,
+            caCert: body.config.ssl?.caCert,
+            rejectUnauthorized: shouldRejectUnauthorized,
+          }
+          : body.config.ssl?.enabled !== undefined
           ? {
             enabled: body.config.ssl.enabled,
             caCert: body.config.ssl.caCert,
-            rejectUnauthorized: body.config.ssl.rejectUnauthorized,
+            rejectUnauthorized: isLocalhost ? false : (body.config.ssl.rejectUnauthorized !== false),
           }
-          : undefined,
+          : baseConfig.ssl,
         sshTunnel: body.config.sshTunnel?.enabled
           ? {
             enabled: body.config.sshTunnel.enabled,
@@ -201,6 +386,7 @@ export class PostgresDataSourceController {
         connectionTimeout: body.config.connectionTimeout,
         queryTimeout: body.config.queryTimeout,
         poolSize: body.config.poolSize,
+        options: neonOptions || baseConfig.options, // Preserve options from connection string or add Neon endpoint ID
       };
 
       const connection = await this.postgresDataSourceService.createConnection(
@@ -270,8 +456,17 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
         );
       }
+      
+      // Debug logging
+      console.log('[listConnections] Query orgId:', orgId);
+      console.log('[listConnections] User orgId:', req?.user?.orgId);
+      console.log('[listConnections] Final orgId:', finalOrgId);
+      
       const connections =
         await this.postgresDataSourceService.listConnections(finalOrgId);
+      
+      console.log('[listConnections] Found connections:', connections.length);
+      
       return createListResponse(
         connections,
         `Found ${connections.length} connection(s)`,
@@ -548,7 +743,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const schema = await this.postgresDataSourceService.discoverSchema(id, finalOrgId);
       return createSuccessResponse(
         schema.databases,
@@ -603,7 +803,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const schemasWithTables =
         await this.postgresDataSourceService.discoverSchemasWithTables(id, finalOrgId);
 
@@ -673,19 +878,40 @@ export class PostgresDataSourceController {
   async getTables(
     @Param('id') id: string,
     @Request() req: Request,
-    @Query('schema') schema: string = 'public',
+    @Query('schema') schema?: string,
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
-      const tables = await this.postgresDataSourceService.discoverTablesForSchema(
-        id,
-        finalOrgId,
-        schema,
-      );
+      // Extract orgId from query parameter first, then from auth - REQUIRED
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
+      
+      // If schema is not provided, return all tables from all schemas
+      let tables;
+      if (!schema || schema.trim().length === 0) {
+        // Get all schemas with their tables
+        const schemasWithTables = await this.postgresDataSourceService.discoverSchemasWithTables(
+          id,
+          finalOrgId,
+        );
+        // Flatten all tables from all schemas
+        tables = schemasWithTables.flatMap(s => s.tables || []);
+      } else {
+        // Get tables from specific schema
+        tables = await this.postgresDataSourceService.discoverTablesForSchema(
+          id,
+          finalOrgId,
+          schema,
+        );
+      }
+      
       return createListResponse(
         tables,
-        `Found ${tables.length} table(s)${schema ? ` in schema "${schema}"` : ''}`,
+        `Found ${tables.length} table(s)${schema ? ` in schema "${schema}"` : ' across all schemas'}`,
         {
           total: tables.length,
           limit: tables.length,
@@ -753,7 +979,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const discovery = await this.postgresDataSourceService.discoverSchema(
         id,
         finalOrgId,
@@ -820,7 +1051,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const schema = await this.postgresDataSourceService.discoverSchema(
         id,
         finalOrgId,
@@ -892,8 +1128,18 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
-      const userId = req?.user?.id || 'default-user-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
+      const userId = req?.user?.id;
+      if (!userId) {
+        throw new BadRequestException(
+          'User ID is required. Please ensure you are authenticated.',
+        );
+      }
       const result = await this.postgresDataSourceService.executeQuery(
         id,
         finalOrgId,
@@ -974,7 +1220,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const plan = await this.postgresDataSourceService.explainQuery(
         id,
@@ -1041,7 +1292,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const syncJob = await this.postgresDataSourceService.createSyncJob(
         id,
@@ -1108,7 +1364,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const syncJobs = await this.postgresDataSourceService.getSyncJobs(id, finalOrgId);
       return createListResponse(
         syncJobs,
@@ -1173,7 +1434,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const syncJob = await this.postgresDataSourceService.getSyncJob(
         id,
@@ -1245,7 +1511,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       await this.postgresDataSourceService.cancelSyncJob(id, jobId, finalOrgId);
       return createSuccessResponse(
         { jobId, connectionId: id },
@@ -1377,7 +1648,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const health = await this.postgresDataSourceService.getConnectionHealth(
         id,
         finalOrgId,
@@ -1451,7 +1727,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const logs = await this.postgresDataSourceService.getQueryLogs(
         id,
         finalOrgId,
@@ -1508,7 +1789,12 @@ export class PostgresDataSourceController {
     @Query('orgId') orgId?: string,
   ) {
     try {
-      const finalOrgId = orgId || req?.user?.orgId || 'default-org-id';
+      const finalOrgId = orgId || req?.user?.orgId;
+      if (!finalOrgId) {
+        throw new BadRequestException(
+          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
+        );
+      }
       const metrics = await this.postgresDataSourceService.getConnectionMetrics(
         id,
         finalOrgId,

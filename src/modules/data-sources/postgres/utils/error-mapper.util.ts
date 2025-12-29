@@ -44,31 +44,88 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
     };
   }
 
-  // Map PostgreSQL errors
-  const pgErrorCode = mapPostgresError(error);
+  // Extract actual PostgreSQL error from Drizzle errors
+  // Drizzle wraps PostgreSQL errors in a 'cause' property
+  let actualError = error;
+  const drizzleError = error as any;
+  if (drizzleError?.cause) {
+    actualError = drizzleError.cause;
+  }
+
+  // Check for direct PostgreSQL error codes first (before mapping)
+  const pgError = actualError as { code?: string; detail?: string; constraint?: string };
+  if (pgError?.code) {
+    // This is a direct PostgreSQL error - use the code directly
+    const pgErrorCode = pgError.code;
+    
+    // Map known PostgreSQL error codes
+    if (pgErrorCode === '23503') {
+      // Foreign key constraint violation
+      return {
+        code: 'PG_CONSTRAINT_001',
+        message: `Foreign key constraint violation: ${pgError.detail || 'Referenced record does not exist'}`,
+        details: {
+          postgresErrorCode: pgErrorCode,
+          constraint: pgError.constraint,
+          detail: pgError.detail,
+        },
+        suggestion: 'The referenced record may not exist. Please check that all related records exist in the database.',
+      };
+    }
+    
+    if (pgErrorCode === '23502') {
+      // NOT NULL constraint violation
+      return {
+        code: 'PG_CONSTRAINT_002',
+        message: `Required field is missing: ${pgError.detail || 'NOT NULL constraint violation'}`,
+        details: {
+          postgresErrorCode: pgErrorCode,
+          constraint: pgError.constraint,
+          detail: pgError.detail,
+        },
+        suggestion: 'Please check that all required fields are provided.',
+      };
+    }
+    
+    if (pgErrorCode === '23505') {
+      // Unique constraint violation
+      return {
+        code: 'PG_CONSTRAINT_003',
+        message: `Unique constraint violation: ${pgError.detail || 'Duplicate value'}`,
+        details: {
+          postgresErrorCode: pgErrorCode,
+          constraint: pgError.constraint,
+          detail: pgError.detail,
+        },
+        suggestion: 'A record with this value may already exist.',
+      };
+    }
+  }
+
+  // Map PostgreSQL errors using the error mapper
+  const pgErrorCode = mapPostgresError(actualError);
 
   const message = getErrorMessage(
     pgErrorCode,
-    errorObj.message as string | undefined,
+    (actualError as { message?: string })?.message || errorObj.message as string | undefined,
   );
 
-  // Extract additional details
+  // Extract additional details from the actual error
+  const actualErrorObj = actualError as Record<string, unknown>;
   const details: Record<string, unknown> = {};
 
-  if (errorObj.hint) details.hint = errorObj.hint;
-
-  if (errorObj.position) details.position = errorObj.position;
-
-  if (errorObj.where) details.where = errorObj.where;
-
-  if (errorObj.schema) details.schema = errorObj.schema;
-
-  if (errorObj.table) details.table = errorObj.table;
-
-  if (errorObj.column) details.column = errorObj.column;
+  if (actualErrorObj.hint) details.hint = actualErrorObj.hint;
+  if (actualErrorObj.position) details.position = actualErrorObj.position;
+  if (actualErrorObj.where) details.where = actualErrorObj.where;
+  if (actualErrorObj.schema) details.schema = actualErrorObj.schema;
+  if (actualErrorObj.table) details.table = actualErrorObj.table;
+  if (actualErrorObj.column) details.column = actualErrorObj.column;
+  if (actualErrorObj.detail) details.detail = actualErrorObj.detail;
+  if (actualErrorObj.constraint) details.constraint = actualErrorObj.constraint;
+  if (actualErrorObj.code) details.postgresErrorCode = actualErrorObj.code;
 
   // Generate suggestion based on error code
-  const suggestion = generateSuggestion(pgErrorCode, error);
+  const suggestion = generateSuggestion(pgErrorCode, actualError);
 
   return {
     code: pgErrorCode,
