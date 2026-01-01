@@ -1396,7 +1396,15 @@ export class PostgresPipelineService {
         pipelineId: string,
         status: 'active' | 'paused',
     ): Promise<void> {
-        await this.pipelineRepository.update(pipelineId, { status });
+        const updateData: any = { status };
+        
+        // When pausing, also reset migration state to pending
+        if (status === 'paused') {
+            updateData.migrationState = 'pending';
+            this.logger.log(`Pipeline ${pipelineId} paused - resetting migration state to pending`);
+        }
+        
+        await this.pipelineRepository.update(pipelineId, updateData);
         this.logger.log(`Pipeline ${pipelineId} ${status}`);
     }
 

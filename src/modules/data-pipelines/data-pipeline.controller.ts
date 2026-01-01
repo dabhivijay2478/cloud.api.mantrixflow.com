@@ -561,12 +561,22 @@ export class DataPipelineController {
   async pausePipeline(
     @Param('id') id: string,
     @Request() req: Request,
+    @Query('orgId') orgIdParam?: string,
   ) {
     try {
+      const finalOrgId = orgIdParam || req?.user?.orgId;
+      
       await this.pipelineService.togglePipeline(id, 'paused');
+      
+      // Fetch and return the updated pipeline to ensure frontend has latest state
+      const updatedPipeline = await this.pipelineService['pipelineRepository'].findById(id, finalOrgId);
+      
+      if (!updatedPipeline) {
+        throw new NotFoundException(`Pipeline ${id} not found`);
+      }
 
       return createSuccessResponse(
-        { id, status: 'paused' },
+        updatedPipeline,
         'Pipeline paused successfully',
       );
     } catch (error) {
@@ -595,12 +605,22 @@ export class DataPipelineController {
   async resumePipeline(
     @Param('id') id: string,
     @Request() req: Request,
+    @Query('orgId') orgIdParam?: string,
   ) {
     try {
+      const finalOrgId = orgIdParam || req?.user?.orgId;
+      
       await this.pipelineService.togglePipeline(id, 'active');
+      
+      // Fetch and return the updated pipeline to ensure frontend has latest state
+      const updatedPipeline = await this.pipelineService['pipelineRepository'].findById(id, finalOrgId);
+      
+      if (!updatedPipeline) {
+        throw new NotFoundException(`Pipeline ${id} not found`);
+      }
 
       return createSuccessResponse(
-        { id, status: 'active' },
+        updatedPipeline,
         'Pipeline resumed successfully',
       );
     } catch (error) {
