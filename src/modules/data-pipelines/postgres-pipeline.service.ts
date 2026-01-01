@@ -9,6 +9,7 @@ import {
     NotFoundException,
     BadRequestException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PostgresConnectionPoolService } from '../data-sources/postgres/services/postgres-connection-pool.service';
 import { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
 import { PostgresDestinationService } from './emitters/postgres-destination.service';
@@ -177,16 +178,16 @@ export class PostgresPipelineService {
         let sourceSchema: PipelineSourceSchema;
         try {
             sourceSchema = await this.sourceSchemaRepository.create({
-                orgId: data.orgId,
-                userId: data.userId,
-                sourceType: data.sourceType,
-                sourceConnectionId: data.sourceConnectionId,
-                sourceConfig: data.sourceConfig,
+            orgId: data.orgId,
+            userId: data.userId,
+            sourceType: data.sourceType,
+            sourceConnectionId: data.sourceConnectionId,
+            sourceConfig: data.sourceConfig,
                 sourceSchema: sourceSchemaName,
                 sourceTable: sourceTableName,
-                sourceQuery: data.sourceQuery,
-                name: `Source for ${data.name}`,
-            });
+            sourceQuery: data.sourceQuery,
+            name: `Source for ${data.name}`,
+        });
             if (!sourceSchema?.id) {
                 throw new BadRequestException('Failed to create source schema - no ID returned');
             }
@@ -226,17 +227,17 @@ export class PostgresPipelineService {
         let destinationSchema: PipelineDestinationSchema;
         try {
             destinationSchema = await this.destinationSchemaRepository.create({
-                orgId: data.orgId,
-                userId: data.userId,
-                destinationConnectionId: data.destinationConnectionId,
+            orgId: data.orgId,
+            userId: data.userId,
+            destinationConnectionId: data.destinationConnectionId,
                 destinationSchema: destinationSchemaName,
                 destinationTable: destinationTableName,
                 destinationTableExists: destinationTableExists, // Set based on whether user selected existing table
-                columnMappings: data.columnMappings,
-                writeMode: (data.writeMode as 'append' | 'upsert' | 'replace') || 'append',
-                upsertKey: data.upsertKey,
-                name: `Destination for ${data.name}`,
-            });
+            columnMappings: data.columnMappings,
+            writeMode: (data.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+            upsertKey: data.upsertKey,
+            name: `Destination for ${data.name}`,
+        });
             if (!destinationSchema?.id) {
                 throw new BadRequestException('Failed to create destination schema - no ID returned');
             }
@@ -346,25 +347,25 @@ export class PostgresPipelineService {
             this.logger.log(
                 `Creating pipeline with source schema: ${sourceSchema.id}, destination schema: ${destinationSchema.id}, destination connection: ${data.destinationConnectionId}`,
             );
-
-            const pipeline = await this.pipelineRepository.create({
-                orgId: data.orgId,
-                userId: data.userId,
-                name: data.name,
-                description: data.description,
+        
+        const pipeline = await this.pipelineRepository.create({
+            orgId: data.orgId,
+            userId: data.userId,
+            name: data.name,
+            description: data.description,
                 sourceType: data.sourceType, // Required by database table (legacy column)
-                sourceSchemaId: sourceSchema.id,
-                destinationSchemaId: destinationSchema.id,
+            sourceSchemaId: sourceSchema.id,
+            destinationSchemaId: destinationSchema.id,
                 destinationConnectionId: data.destinationConnectionId, // Legacy column - required during migration
                 destinationTable: data.destinationTable, // Legacy column - required during migration
-                transformations: pipelineConfig, // Store full config including collectors/emitters
-                syncMode: data.syncMode || 'full',
-                incrementalColumn: data.incrementalColumn,
-                syncFrequency: data.syncFrequency || 'manual',
-            });
+            transformations: pipelineConfig, // Store full config including collectors/emitters
+            syncMode: data.syncMode || 'full',
+            incrementalColumn: data.incrementalColumn,
+            syncFrequency: data.syncFrequency || 'manual',
+        });
 
             this.logger.log(`Successfully created pipeline: ${pipeline.id}`);
-            return pipeline;
+        return pipeline;
         } catch (error) {
             // Enhanced error logging - extract actual PostgreSQL error from Drizzle
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -473,7 +474,7 @@ export class PostgresPipelineService {
             );
         }
 
-        // Create pipeline run record
+        // Create pipeline run record first
         const run = await this.pipelineRepository.createRun({
             pipelineId: pipeline.id,
             orgId: pipeline.orgId,
@@ -483,6 +484,17 @@ export class PostgresPipelineService {
             triggerType: 'manual',
             runMetadata: { batchSize: 1000 },
         });
+
+        // Update pipeline migration state to 'running'
+        this.logger.log(
+            `[${run.id}] Setting pipeline migration state to 'running'`,
+        );
+        const runningPipeline = await this.pipelineRepository.update(pipeline.id, {
+            migrationState: 'running',
+        } as any);
+        this.logger.log(
+            `[${run.id}] Pipeline migration state set to: ${runningPipeline.migrationState}`,
+        );
 
         const startTime = Date.now();
         const errors: PipelineError[] = [];
@@ -515,10 +527,14 @@ export class PostgresPipelineService {
             let columnMappings: ColumnMapping[] = [];
             if (transformers.length > 0 && transformers[0]?.fieldMappings && Array.isArray(transformers[0].fieldMappings) && transformers[0].fieldMappings.length > 0) {
                 // Use field mappings from transformers
-                const fieldMappings = transformers[0].fieldMappings as Array<{ source: string; destination: string }>;
+                const fieldMappings = transformers[0].fieldMappings as Array<{ source: string; destination: string; isPrimaryKey?: boolean }>;
+                const primaryKeyField = transformers[0].primaryKeyField || fieldMappings.find(fm => fm.isPrimaryKey)?.destination;
+                
                 this.logger.log(
-                    `[${run.id}] Using ${fieldMappings.length} field mappings from transformer`,
+                    `[${run.id}] Using ${fieldMappings.length} field mappings from transformer${primaryKeyField ? ` with primary key: ${primaryKeyField}` : ''}`,
                 );
+                // Ensure only ONE primary key is set
+                let primaryKeySet = false;
                 columnMappings = fieldMappings.map((fm) => {
                     // Handle schema-qualified source column names (e.g., "company.companies.id" -> "id")
                     // Extract just the column name from the source field
@@ -526,13 +542,69 @@ export class PostgresPipelineService {
                         ? fm.source.split('.').pop() || fm.source
                         : fm.source;
                     
+                    // Check if this is marked as primary key or is the primary key field
+                    // Only set ONE primary key - the first one found
+                    let isPrimaryKey = false;
+                    if (!primaryKeySet) {
+                        isPrimaryKey = fm.isPrimaryKey || fm.destination === primaryKeyField || 
+                                      (fm.destination.toLowerCase() === 'id' && !primaryKeyField);
+                        if (isPrimaryKey) {
+                            primaryKeySet = true;
+                            this.logger.log(
+                                `[${run.id}] Setting '${fm.destination}' as primary key`,
+                            );
+                        }
+                    }
+                    
+                    // Check if this is an ID field (destination column is 'id' or ends with '_id')
+                    const isIdField = fm.destination.toLowerCase() === 'id' || 
+                                     fm.destination.toLowerCase().endsWith('_id');
+                    
                     return {
                         sourceColumn: sourceColumn,
                         destinationColumn: fm.destination,
-                        dataType: 'TEXT', // Default type, could be inferred from source schema
-                        nullable: true,
+                        dataType: isIdField || isPrimaryKey ? 'UUID' : 'TEXT', // Use UUID for ID/primary key fields
+                        nullable: !isPrimaryKey, // Primary key fields should not be nullable
+                        isPrimaryKey: isPrimaryKey, // Use explicit primary key flag
                     };
                 });
+                
+                // Ensure 'id' field exists in mappings - if not, add it
+                const hasIdField = columnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
+                if (!hasIdField) {
+                    // Try to find an ID field in source data
+                    const sourceIdField = sourceData.rows.length > 0 
+                        ? Object.keys(sourceData.rows[0]).find(col => 
+                            col.toLowerCase() === 'id' || col.toLowerCase().endsWith('_id')
+                          )
+                        : null;
+                    
+                    if (sourceIdField) {
+                        columnMappings.unshift({
+                            sourceColumn: sourceIdField,
+                            destinationColumn: 'id',
+                            dataType: 'UUID',
+                            nullable: false,
+                            isPrimaryKey: true,
+                        });
+                        this.logger.log(
+                            `[${run.id}] Added missing 'id' field mapping from source column '${sourceIdField}'`,
+                        );
+                    } else {
+                        // Add a generated UUID column
+                        columnMappings.unshift({
+                            sourceColumn: 'id', // Will be generated
+                            destinationColumn: 'id',
+                            dataType: 'UUID',
+                            nullable: false,
+                            isPrimaryKey: true,
+                            defaultValue: 'gen_random_uuid()',
+                        });
+                        this.logger.log(
+                            `[${run.id}] Added generated UUID 'id' field as primary key`,
+                        );
+                    }
+                }
             } else if (destinationSchema.columnMappings && destinationSchema.columnMappings.length > 0) {
                 // Fall back to destination schema column mappings
                 this.logger.log(
@@ -645,11 +717,35 @@ export class PostgresPipelineService {
                 `[${run.id}] Using ${legacyTransformations.length} legacy transformations`,
             );
             
-            const transformedData = await this.transformData(
+            let transformedData = await this.transformData(
                 sourceData.rows,
                 columnMappings,
                 legacyTransformations,
             );
+            
+            // Ensure ID field exists in transformed data - add it if missing
+            const hasIdInMappings = columnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
+            if (hasIdInMappings && transformedData.length > 0) {
+                const idMapping = columnMappings.find(m => m.destinationColumn.toLowerCase() === 'id');
+                const hasIdInData = transformedData[0].hasOwnProperty('id') || transformedData[0].hasOwnProperty('ID');
+                
+                if (!hasIdInData && idMapping) {
+                    // Generate UUID for each row if ID is missing
+                    transformedData = transformedData.map((row, index) => {
+                        // Try to get ID from source if sourceColumn exists
+                        const sourceId = idMapping.sourceColumn && row[idMapping.sourceColumn] 
+                            ? row[idMapping.sourceColumn]
+                            : randomUUID();
+                        return {
+                            ...row,
+                            id: sourceId,
+                        };
+                    });
+                    this.logger.log(
+                        `[${run.id}] Added 'id' field to ${transformedData.length} transformed rows`,
+                    );
+                }
+            }
 
             // Step 3: Write to destination
             this.logger.log(
@@ -666,6 +762,39 @@ export class PostgresPipelineService {
             // Step 4: Update pipeline state
             const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
 
+            // Calculate last sync value for incremental sync
+            let lastSyncValue: string | null = pipeline.lastSyncValue || null;
+            if (pipeline.incrementalColumn && sourceData.rows.length > 0) {
+                // Find the max value of the incremental column
+                const incrementalCol = pipeline.incrementalColumn;
+                const maxValue = sourceData.rows.reduce((max, row) => {
+                    const value = row[incrementalCol];
+                    if (value !== null && value !== undefined) {
+                        // Convert to string for comparison
+                        const strValue = String(value);
+                        return max === null || strValue > max ? strValue : max;
+                    }
+                    return max;
+                }, null as string | null);
+                if (maxValue !== null) {
+                    lastSyncValue = maxValue;
+                    this.logger.log(
+                        `[${run.id}] Updated lastSyncValue for incremental column '${incrementalCol}': ${lastSyncValue}`,
+                    );
+                } else {
+                    this.logger.warn(
+                        `[${run.id}] No valid values found for incremental column '${incrementalCol}' in ${sourceData.rows.length} rows`,
+                    );
+                }
+            } else if (pipeline.incrementalColumn && sourceData.rows.length === 0) {
+                this.logger.log(
+                    `[${run.id}] No new rows found for incremental sync. Keeping lastSyncValue: ${lastSyncValue || 'null'}`,
+                );
+            }
+
+            // Determine if this is the first successful run
+            const isFirstSuccessfulRun = (pipeline.totalRunsSuccessful ?? 0) === 0;
+
             await this.pipelineRepository.updateRun(run.id, {
                 status: 'success',
                 rowsRead: sourceData.rows.length,
@@ -676,15 +805,52 @@ export class PostgresPipelineService {
                 durationSeconds,
             });
 
-            // Update pipeline statistics
-            await this.pipelineRepository.update(pipeline.id, {
+            // Update pipeline statistics and switch to incremental mode after first successful run
+            const updateData: any = {
                 lastRunAt: new Date(),
                 lastRunStatus: 'success',
+                migrationState: 'listing', // Switch to 'listing' state after successful migration
                 totalRowsProcessed:
                     (pipeline.totalRowsProcessed ?? 0) + writeResult.rowsWritten,
                 totalRunsSuccessful: (pipeline.totalRunsSuccessful ?? 0) + 1,
                 lastError: null,
-            });
+            };
+            
+            this.logger.log(
+                `[${run.id}] Updating pipeline state to 'listing' after successful migration`,
+            );
+
+            // After first successful run, automatically switch to incremental mode
+            if (isFirstSuccessfulRun && pipeline.syncMode === 'full') {
+                // Try to detect incremental column (prefer 'id', 'created_at', 'updated_at')
+                const possibleIncrementalColumns = ['id', 'created_at', 'updated_at', 'createdAt', 'updatedAt'];
+                const sourceColumns = sourceData.rows.length > 0 ? Object.keys(sourceData.rows[0]) : [];
+                const detectedIncrementalColumn = possibleIncrementalColumns.find(col => 
+                    sourceColumns.includes(col)
+                );
+
+                if (detectedIncrementalColumn) {
+                    updateData.syncMode = 'incremental';
+                    updateData.incrementalColumn = detectedIncrementalColumn;
+                    this.logger.log(
+                        `[${run.id}] First successful run completed. Automatically switching to incremental mode with column: ${detectedIncrementalColumn}`,
+                    );
+                } else {
+                    this.logger.warn(
+                        `[${run.id}] First successful run completed but could not detect incremental column. Staying in full sync mode.`,
+                    );
+                }
+            }
+
+            // Update lastSyncValue if we have one
+            if (lastSyncValue !== null) {
+                updateData.lastSyncValue = lastSyncValue;
+            }
+
+            const updatedPipeline = await this.pipelineRepository.update(pipeline.id, updateData);
+            this.logger.log(
+                `[${run.id}] Pipeline state updated. Migration state: ${updatedPipeline.migrationState}, Last run status: ${updatedPipeline.lastRunStatus}`,
+            );
 
             this.logger.log(
                 `[${run.id}] Pipeline execution completed successfully in ${durationSeconds}s`,
@@ -715,12 +881,19 @@ export class PostgresPipelineService {
                 durationSeconds,
             });
 
-            await this.pipelineRepository.update(pipeline.id, {
+            this.logger.log(
+                `[${run.id}] Setting pipeline migration state to 'pending' due to failure`,
+            );
+            const failedPipeline = await this.pipelineRepository.update(pipeline.id, {
                 lastRunAt: new Date(),
                 lastRunStatus: 'failed',
+                migrationState: 'pending', // Revert to 'pending' on failure
                 lastError: errorMessage,
                 totalRunsFailed: (pipeline.totalRunsFailed ?? 0) + 1,
-            });
+            } as any);
+            this.logger.log(
+                `[${run.id}] Pipeline migration state set to: ${failedPipeline.migrationState}`,
+            );
 
             throw error;
         }
@@ -758,7 +931,7 @@ export class PostgresPipelineService {
                 pipeline.orgId,
             );
             if (!connection) {
-                throw new BadRequestException(
+            throw new BadRequestException(
                     `Source connection ${sourceSchema.sourceConnectionId} not found`,
                 );
             }
@@ -789,7 +962,8 @@ export class PostgresPipelineService {
                 const table = sourceSchema.sourceTable;
 
                 if (pipeline.syncMode === 'incremental' && pipeline.incrementalColumn) {
-                    // Incremental sync
+                    // Incremental sync - use > to avoid re-processing the last value
+                    // ON CONFLICT on primary key will prevent any duplicates
                     if (lastSyncValue) {
                         query = `
               SELECT * FROM "${schema}"."${table}"
@@ -797,8 +971,15 @@ export class PostgresPipelineService {
               ORDER BY "${pipeline.incrementalColumn}" ASC
             `;
                         params.push(lastSyncValue);
+                        this.logger.log(
+                            `[${runId}] Incremental sync: fetching records where ${pipeline.incrementalColumn} > ${lastSyncValue}`,
+                        );
                     } else {
+                        // First incremental run - get all records
                         query = `SELECT * FROM "${schema}"."${table}" ORDER BY "${pipeline.incrementalColumn}" ASC`;
+                        this.logger.log(
+                            `[${runId}] First incremental sync: fetching all records ordered by ${pipeline.incrementalColumn}`,
+                        );
                     }
                 } else {
                     // Full sync
@@ -944,7 +1125,7 @@ export class PostgresPipelineService {
                 pipeline.orgId,
             );
             if (!connection) {
-                throw new BadRequestException(
+            throw new BadRequestException(
                     `Destination connection ${destinationSchema.destinationConnectionId} not found`,
                 );
             }
@@ -983,23 +1164,61 @@ export class PostgresPipelineService {
                 // Generate column mappings from first row of transformed data
                 const firstRow = transformedData[0];
                 const columns = Object.keys(firstRow);
-                finalColumnMappings = columns.map((col) => ({
-                    sourceColumn: col,
-                    destinationColumn: col,
-                    dataType: 'TEXT', // Default type
-                    nullable: true,
-                }));
+                finalColumnMappings = columns.map((col) => {
+                    const isIdField = col.toLowerCase() === 'id' || col.toLowerCase().endsWith('_id');
+                    return {
+                        sourceColumn: col,
+                        destinationColumn: col,
+                        dataType: isIdField ? 'UUID' : 'TEXT', // Use UUID for ID fields
+                        nullable: !isIdField, // ID fields should not be nullable
+                        isPrimaryKey: col.toLowerCase() === 'id', // Mark 'id' as primary key
+                    };
+                });
+                
+                // Ensure 'id' field exists - if not, add it
+                const hasIdField = finalColumnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
+                if (!hasIdField) {
+                    finalColumnMappings.unshift({
+                        sourceColumn: 'id',
+                        destinationColumn: 'id',
+                        dataType: 'UUID',
+                        nullable: false,
+                        isPrimaryKey: true,
+                        defaultValue: 'gen_random_uuid()',
+                    });
+                    this.logger.log(
+                        `${logPrefix} Added generated UUID 'id' field as primary key`,
+                    );
+                }
                 
                 // Update destination schema with generated mappings
                 await this.destinationSchemaRepository.update(destinationSchema.id, {
                     columnMappings: finalColumnMappings as any,
                 });
+            } else if (finalColumnMappings.length > 0) {
+                // Ensure 'id' field exists in mappings
+                const hasIdField = finalColumnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
+                if (!hasIdField) {
+                    finalColumnMappings.unshift({
+                        sourceColumn: 'id',
+                        destinationColumn: 'id',
+                        dataType: 'UUID',
+                        nullable: false,
+                        isPrimaryKey: true,
+                        defaultValue: 'gen_random_uuid()',
+                    });
+                    this.logger.log(
+                        `${runId ? `[${runId}]` : ''} Added generated UUID 'id' field as primary key to existing mappings`,
+                    );
+                }
             }
 
             // Create table if not exists
             // Only create if destinationTableExists is false (user wants to create new table)
             // If destinationTableExists is true, assume table should exist and don't create
-            const shouldCreateTable = !tableExists && destinationSchema.destinationTableExists === false;
+            // Also check if table name matches the pattern for auto-generated tables (pipeline_*)
+            const isAutoGeneratedTable = destinationSchema.destinationTable.startsWith('pipeline_');
+            const shouldCreateTable = !tableExists && (destinationSchema.destinationTableExists === false || isAutoGeneratedTable);
             
             if (shouldCreateTable) {
                 const logPrefix = runId ? `[${runId}]` : '';
@@ -1056,7 +1275,7 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Write data
+            // Write data with duplicate prevention enabled
             const writeMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
             const result = await this.destinationService.writeData(
                 client,
@@ -1065,6 +1284,7 @@ export class PostgresPipelineService {
                 transformedData,
                 writeMode,
                 destinationSchema.upsertKey || undefined,
+                true, // preventDuplicates = true
             );
 
             await client.query('COMMIT');

@@ -30,6 +30,15 @@ export const pipelineStatusEnum = pgEnum('pipeline_status', [
   'error',
 ]);
 
+/**
+ * Enum for migration state
+ */
+export const migrationStateEnum = pgEnum('migration_state', [
+  'pending',
+  'running',
+  'listing',
+]);
+
 // runStatusEnum is imported from pipeline-runs schema to avoid duplication
 
 /**
@@ -108,6 +117,7 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   lastRunAt: timestamp('last_run_at'),
   lastRunStatus: runStatusEnum('last_run_status'),
   lastError: text('last_error'),
+  migrationState: migrationStateEnum('migration_state').default('pending'), // 'pending', 'running', 'listing'
 
   // ============================================================================
   // STATISTICS

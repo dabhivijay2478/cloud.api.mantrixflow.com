@@ -79,9 +79,10 @@ export class PostgresDestinationService {
         data: any[],
         writeMode: 'append' | 'upsert' | 'replace',
         upsertKey?: string[],
+        preventDuplicates: boolean = true,
     ): Promise<WriteResult> {
         this.logger.log(
-            `Writing ${data.length} rows to ${schema}.${table} in ${writeMode} mode`,
+            `Writing ${data.length} rows to ${schema}.${table} in ${writeMode} mode${preventDuplicates ? ' (with duplicate prevention)' : ''}`,
         );
 
         if (data.length === 0) {
@@ -95,10 +96,11 @@ export class PostgresDestinationService {
 
         try {
             let rowsWritten = 0;
+            const totalRows = data.length;
 
             switch (writeMode) {
                 case 'append':
-                    rowsWritten = await this.appendData(client, schema, table, data);
+                    rowsWritten = await this.appendData(client, schema, table, data, preventDuplicates);
                     break;
                 case 'upsert':
                     if (!upsertKey || upsertKey.length === 0) {
@@ -121,9 +123,11 @@ export class PostgresDestinationService {
                     throw new BadRequestException(`Invalid write mode: ${writeMode}`);
             }
 
+            const rowsSkipped = totalRows - rowsWritten;
+
             return {
                 rowsWritten,
-                rowsSkipped: 0,
+                rowsSkipped: rowsSkipped > 0 ? rowsSkipped : 0,
                 rowsFailed: 0,
                 errors: [],
             };
@@ -136,24 +140,25 @@ export class PostgresDestinationService {
     }
 
     /**
-     * Append mode: Simple INSERT
+     * Append mode: Simple INSERT with duplicate prevention
      */
     private async appendData(
         client: PoolClient,
         schema: string,
         table: string,
         data: any[],
+        preventDuplicates: boolean = true,
     ): Promise<number> {
         let totalRowsWritten = 0;
 
         // Process in batches
         for (let i = 0; i < data.length; i += this.BATCH_SIZE) {
             const batch = data.slice(i, i + this.BATCH_SIZE);
-            const rowsWritten = await this.insertBatch(client, schema, table, batch);
+            const rowsWritten = await this.insertBatch(client, schema, table, batch, preventDuplicates);
             totalRowsWritten += rowsWritten;
 
             this.logger.debug(
-                `Inserted batch ${Math.floor(i / this.BATCH_SIZE) + 1}: ${rowsWritten} rows`,
+                `Inserted batch ${Math.floor(i / this.BATCH_SIZE) + 1}: ${rowsWritten} rows (${batch.length - rowsWritten} skipped as duplicates)`,
             );
         }
 
@@ -212,13 +217,38 @@ export class PostgresDestinationService {
     }
 
     /**
-     * Insert batch of rows
+     * Get primary key columns for a table
+     */
+    private async getPrimaryKeys(
+        client: PoolClient,
+        schema: string,
+        table: string,
+    ): Promise<string[]> {
+        const query = `
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            JOIN pg_class c ON c.oid = i.indrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE i.indisprimary
+            AND n.nspname = $1
+            AND c.relname = $2
+            ORDER BY a.attnum
+        `;
+
+        const result = await client.query(query, [schema, table]);
+        return result.rows.map((row) => row.attname);
+    }
+
+    /**
+     * Insert batch of rows with duplicate prevention
      */
     private async insertBatch(
         client: PoolClient,
         schema: string,
         table: string,
         batch: any[],
+        preventDuplicates: boolean = true,
     ): Promise<number> {
         if (batch.length === 0) return 0;
 
@@ -236,14 +266,43 @@ export class PostgresDestinationService {
             placeholders.push(`(${rowPlaceholders.join(', ')})`);
         });
 
-        const sql = `
+        let sql = `
       INSERT INTO ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(table)}
       (${columns.map((c) => this.quoteIdentifier(c)).join(', ')})
       VALUES ${placeholders.join(', ')}
     `;
 
-        await this.executeWithRetry(client, sql, values);
-        return batch.length;
+        // Add ON CONFLICT DO NOTHING to prevent duplicates if primary keys exist
+        if (preventDuplicates) {
+            try {
+                const primaryKeys = await this.getPrimaryKeys(client, schema, table);
+                if (primaryKeys.length > 0) {
+                    // Use only the first primary key (there should be only one)
+                    const primaryKey = primaryKeys[0];
+                    sql += `
+      ON CONFLICT (${this.quoteIdentifier(primaryKey)})
+      DO NOTHING
+    `;
+                    this.logger.debug(
+                        `Using primary key '${primaryKey}' for duplicate prevention on ${schema}.${table}`,
+                    );
+                } else {
+                    this.logger.warn(
+                        `No primary key found for ${schema}.${table} - duplicate prevention disabled. Please ensure a primary key is defined.`,
+                    );
+                }
+            } catch (error) {
+                // If we can't get primary keys, log warning but continue with regular insert
+                this.logger.warn(
+                    `Could not get primary keys for ${schema}.${table}: ${error instanceof Error ? error.message : 'Unknown error'}. Inserting without duplicate prevention.`,
+                );
+            }
+        }
+
+        const result = await this.executeWithRetry(client, sql, values);
+        // Return the number of rows actually inserted (affected rows)
+        // Note: With ON CONFLICT DO NOTHING, result.rowCount will be the number of rows inserted
+        return (result as any).rowCount || batch.length;
     }
 
     /**
@@ -292,18 +351,19 @@ export class PostgresDestinationService {
 
     /**
      * Execute query with retry logic
+     * Returns result with rowCount for duplicate detection
      */
     private async executeWithRetry(
         client: PoolClient,
         sql: string,
         params: any[],
-    ): Promise<void> {
+    ): Promise<any> {
         let lastError: Error | null = null;
 
         for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
             try {
-                await client.query(sql, params);
-                return;
+                const result = await client.query(sql, params);
+                return result;
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error('Unknown error');
                 this.logger.warn(
@@ -435,7 +495,37 @@ export class PostgresDestinationService {
         table: string,
         columns: ColumnMapping[],
     ): string {
-        const columnDefs = columns.map((col) => {
+        // Find the PRIMARY KEY column - ensure only ONE primary key
+        const primaryKeyColumn = columns.find(col => col.isPrimaryKey);
+        const hasIdColumn = columns.some(col => col.destinationColumn.toLowerCase() === 'id');
+        
+        const columnDefs: string[] = [];
+        let primaryKeyName: string | null = null;
+        
+        // If no primary key is explicitly marked, use 'id' if it exists, or mark the first column
+        if (!primaryKeyColumn) {
+            if (hasIdColumn) {
+                // Use 'id' as primary key
+                primaryKeyName = 'id';
+            } else {
+                // Find first column that could be a primary key (id-like fields)
+                const idLikeColumn = columns.find(col => 
+                    col.destinationColumn.toLowerCase().endsWith('_id') || 
+                    col.destinationColumn.toLowerCase() === 'id'
+                );
+                if (idLikeColumn) {
+                    primaryKeyName = idLikeColumn.destinationColumn;
+                } else if (columns.length > 0) {
+                    // Use first column as primary key as last resort
+                    primaryKeyName = columns[0].destinationColumn;
+                }
+            }
+        } else {
+            primaryKeyName = primaryKeyColumn.destinationColumn;
+        }
+        
+        // Add all columns
+        columns.forEach((col) => {
             let def = `${this.quoteIdentifier(col.destinationColumn)} ${col.dataType}`;
 
             if (!col.nullable) {
@@ -444,19 +534,26 @@ export class PostgresDestinationService {
 
             if (col.defaultValue) {
                 def += ` DEFAULT ${col.defaultValue}`;
+            } else if (col.destinationColumn === primaryKeyName && col.dataType === 'UUID') {
+                // Add default UUID generation for primary key UUID columns
+                def += ' DEFAULT gen_random_uuid()';
             }
 
-            return def;
+            // DO NOT add PRIMARY KEY in column definition - we'll add it as a constraint
+            columnDefs.push(def);
         });
 
-        // Add primary key constraint if any
-        const primaryKeys = columns
-            .filter((col) => col.isPrimaryKey)
-            .map((col) => col.destinationColumn);
-
-        if (primaryKeys.length > 0) {
+        // Add PRIMARY KEY constraint - ONLY ONE primary key
+        if (primaryKeyName) {
             columnDefs.push(
-                `PRIMARY KEY (${primaryKeys.map((k) => this.quoteIdentifier(k)).join(', ')})`,
+                `PRIMARY KEY (${this.quoteIdentifier(primaryKeyName)})`,
+            );
+            this.logger.log(
+                `Creating table ${schema}.${table} with primary key: ${primaryKeyName}`,
+            );
+        } else {
+            this.logger.warn(
+                `No primary key defined for table ${schema}.${table} - duplicate prevention may not work`,
             );
         }
 
