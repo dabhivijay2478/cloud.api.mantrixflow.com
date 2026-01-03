@@ -1784,10 +1784,20 @@ export class PostgresPipelineService {
     ): Promise<void> {
         const updateData: any = { status };
         
-        // When pausing, also reset migration state to pending
+        // When pausing, also reset migration state to pending and clear nextSyncAt
+        // This ensures the cron job will not process paused pipelines
         if (status === 'paused') {
             updateData.migrationState = 'pending';
-            this.logger.log(`Pipeline ${pipelineId} paused - resetting migration state to pending`);
+            updateData.nextSyncAt = null; // Clear next sync time to prevent cron from picking it up
+            this.logger.log(
+                `Pipeline ${pipelineId} paused - resetting migration state to pending and clearing nextSyncAt`,
+            );
+        } else if (status === 'active') {
+            // When resuming, set nextSyncAt to now so it will be checked soon
+            updateData.nextSyncAt = new Date();
+            this.logger.log(
+                `Pipeline ${pipelineId} resumed - setting nextSyncAt to now for immediate check`,
+            );
         }
         
         await this.pipelineRepository.update(pipelineId, updateData);

@@ -170,6 +170,23 @@ export class PostgresPipelineQueueService {
             // Process each pipeline: check for new records and migrate them
             for (const pipeline of activePipelines) {
                 try {
+                    // Double-check that pipeline is still active (safety check)
+                    // This prevents processing pipelines that were paused between query and processing
+                    if (pipeline.status !== 'active') {
+                        this.logger.debug(
+                            `Pipeline ${pipeline.id} is not active (status: ${pipeline.status}), skipping`,
+                        );
+                        continue;
+                    }
+
+                    // Double-check migration state (safety check)
+                    if (pipeline.migrationState !== 'running' && pipeline.migrationState !== 'listing') {
+                        this.logger.debug(
+                            `Pipeline ${pipeline.id} is not in continuous migration state (state: ${pipeline.migrationState}), skipping`,
+                        );
+                        continue;
+                    }
+
                     // Skip if pipeline doesn't have incremental column configured
                     if (!pipeline.incrementalColumn) {
                         this.logger.debug(
