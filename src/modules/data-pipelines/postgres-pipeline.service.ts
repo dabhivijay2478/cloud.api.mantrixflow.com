@@ -474,6 +474,44 @@ export class PostgresPipelineService {
             );
         }
 
+        // Validate and fix incremental column if it's a UUID
+        // UUIDs cannot be used for incremental sync as they are not sequential
+        if (pipeline.incrementalColumn && pipeline.syncMode === 'incremental') {
+            const fixedIncrementalColumn = await this.validateAndFixIncrementalColumn(
+                pipeline,
+                sourceSchema,
+            );
+            
+            if (fixedIncrementalColumn !== pipeline.incrementalColumn) {
+                this.logger.warn(
+                    `Pipeline ${pipelineId}: Incremental column '${pipeline.incrementalColumn}' is UUID-based and cannot be used. Switching to '${fixedIncrementalColumn || 'none'}'`,
+                );
+                
+                if (fixedIncrementalColumn) {
+                    // Update pipeline with the correct incremental column
+                    await this.pipelineRepository.update(pipeline.id, {
+                        incrementalColumn: fixedIncrementalColumn,
+                        lastSyncValue: null, // Reset lastSyncValue when switching columns
+                    } as any);
+                    pipeline.incrementalColumn = fixedIncrementalColumn;
+                    pipeline.lastSyncValue = null;
+                } else {
+                    // No suitable column found - disable incremental sync
+                    this.logger.error(
+                        `Pipeline ${pipelineId}: Cannot use UUID column '${pipeline.incrementalColumn}' for incremental sync and no timestamp column found. Disabling incremental sync.`,
+                    );
+                    await this.pipelineRepository.update(pipeline.id, {
+                        syncMode: 'full',
+                        incrementalColumn: null,
+                        lastSyncValue: null,
+                    } as any);
+                    pipeline.syncMode = 'full';
+                    pipeline.incrementalColumn = null;
+                    pipeline.lastSyncValue = null;
+                }
+            }
+        }
+
         // Create pipeline run record first
         const run = await this.pipelineRepository.createRun({
             pipelineId: pipeline.id,
@@ -763,23 +801,50 @@ export class PostgresPipelineService {
             const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
 
             // Calculate last sync value for incremental sync
+            // IMPORTANT: For timestamp columns, we need to handle edge cases where multiple records
+            // have the same timestamp. We update lastSyncValue to the max value found, so the next
+            // query using >= will catch any remaining records with that timestamp.
             let lastSyncValue: string | null = pipeline.lastSyncValue || null;
             if (pipeline.incrementalColumn && sourceData.rows.length > 0) {
-                // Find the max value of the incremental column
                 const incrementalCol = pipeline.incrementalColumn;
-                const maxValue = sourceData.rows.reduce((max, row) => {
+                const isTimestampColumn = incrementalCol.toLowerCase().includes('_at') || 
+                                         incrementalCol.toLowerCase().includes('at') ||
+                                         incrementalCol.toLowerCase() === 'updated' ||
+                                         incrementalCol.toLowerCase() === 'created' ||
+                                         incrementalCol.toLowerCase() === 'modified';
+
+                // Find the max value of the incremental column
+                // For timestamps, we need to properly compare date/time values
+                // For sequential IDs, we compare as strings/numbers
+                let maxValue: string | null = null;
+                
+                for (const row of sourceData.rows) {
                     const value = row[incrementalCol];
                     if (value !== null && value !== undefined) {
-                        // Convert to string for comparison
-                        const strValue = String(value);
-                        return max === null || strValue > max ? strValue : max;
+                        let strValue: string;
+                        
+                        if (isTimestampColumn && value instanceof Date) {
+                            // For Date objects, convert to ISO string for consistent comparison
+                            strValue = value.toISOString();
+                        } else if (isTimestampColumn && typeof value === 'string') {
+                            // For timestamp strings, ensure they're in a comparable format
+                            // PostgreSQL timestamps are already in ISO format, so use as-is
+                            strValue = value;
+                        } else {
+                            // For other types (numbers, sequential IDs), convert to string
+                            strValue = String(value);
+                        }
+                        
+                        if (maxValue === null || strValue > maxValue) {
+                            maxValue = strValue;
+                        }
                     }
-                    return max;
-                }, null as string | null);
+                }
+                
                 if (maxValue !== null) {
                     lastSyncValue = maxValue;
                     this.logger.log(
-                        `[${run.id}] Updated lastSyncValue for incremental column '${incrementalCol}': ${lastSyncValue}`,
+                        `[${run.id}] Updated lastSyncValue for incremental column '${incrementalCol}': ${lastSyncValue} (${isTimestampColumn ? 'timestamp' : 'sequential'})`,
                     );
                 } else {
                     this.logger.warn(
@@ -814,6 +879,9 @@ export class PostgresPipelineService {
                     (pipeline.totalRowsProcessed ?? 0) + writeResult.rowsWritten,
                 totalRunsSuccessful: (pipeline.totalRunsSuccessful ?? 0) + 1,
                 lastError: null,
+                // Schedule next check in 1 minute after successful migration
+                // This ensures we check for new records soon after migration completes
+                nextSyncAt: new Date(Date.now() + 60 * 1000),
             };
             
             this.logger.log(
@@ -821,23 +889,51 @@ export class PostgresPipelineService {
             );
 
             // After first successful run, automatically switch to incremental mode
+            // IMPORTANT: Prefer timestamp-based columns (updated_at, created_at) over UUIDs
+            // UUIDs are not sequential and cannot be reliably used for incremental sync
             if (isFirstSuccessfulRun && pipeline.syncMode === 'full') {
-                // Try to detect incremental column (prefer 'id', 'created_at', 'updated_at')
-                const possibleIncrementalColumns = ['id', 'created_at', 'updated_at', 'createdAt', 'updatedAt'];
+                // Priority order: timestamp columns first (most reliable), then sequential IDs, avoid UUIDs
+                // Timestamp columns are preferred because they represent actual time progression
+                const timestampColumns = ['updated_at', 'updatedAt', 'created_at', 'createdAt', 'modified_at', 'modifiedAt'];
+                const sequentialIdColumns = ['id', 'sequence_id', 'seq_id']; // Only if not UUID
                 const sourceColumns = sourceData.rows.length > 0 ? Object.keys(sourceData.rows[0]) : [];
-                const detectedIncrementalColumn = possibleIncrementalColumns.find(col => 
+                
+                // First, try to find a timestamp column
+                let detectedIncrementalColumn = timestampColumns.find(col => 
                     sourceColumns.includes(col)
                 );
+
+                // If no timestamp found, check for sequential ID (but verify it's not a UUID)
+                if (!detectedIncrementalColumn) {
+                    const idColumn = sequentialIdColumns.find(col => sourceColumns.includes(col));
+                    if (idColumn === 'id' && sourceData.rows.length > 0) {
+                        // Check if the ID column contains UUIDs (UUIDs are 36 chars with dashes)
+                        const sampleId = sourceData.rows[0][idColumn];
+                        const isUUID = typeof sampleId === 'string' && 
+                                      sampleId.length === 36 && 
+                                      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sampleId);
+                        
+                        if (!isUUID) {
+                            detectedIncrementalColumn = idColumn;
+                        } else {
+                            this.logger.warn(
+                                `[${run.id}] ID column appears to be UUID-based. UUIDs cannot be used for incremental sync. Please configure a timestamp column (updated_at, created_at) manually.`,
+                            );
+                        }
+                    } else if (idColumn) {
+                        detectedIncrementalColumn = idColumn;
+                    }
+                }
 
                 if (detectedIncrementalColumn) {
                     updateData.syncMode = 'incremental';
                     updateData.incrementalColumn = detectedIncrementalColumn;
                     this.logger.log(
-                        `[${run.id}] First successful run completed. Automatically switching to incremental mode with column: ${detectedIncrementalColumn}`,
+                        `[${run.id}] First successful run completed. Automatically switching to incremental mode with column: ${detectedIncrementalColumn} (${timestampColumns.includes(detectedIncrementalColumn) ? 'timestamp-based' : 'sequential ID'})`,
                     );
                 } else {
                     this.logger.warn(
-                        `[${run.id}] First successful run completed but could not detect incremental column. Staying in full sync mode.`,
+                        `[${run.id}] First successful run completed but could not detect a suitable incremental column. Please manually configure a timestamp column (updated_at, created_at) for incremental sync. Staying in full sync mode.`,
                     );
                 }
             }
@@ -896,6 +992,260 @@ export class PostgresPipelineService {
             );
 
             throw error;
+        }
+    }
+
+    /**
+     * Lightweight check if new records exist (for cron job)
+     * This is a fast existence check - the actual migration is queued separately
+     * to fetch and migrate ALL new records
+     */
+    async hasNewRecords(pipelineId: string): Promise<boolean> {
+        const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+        if (!pipelineWithSchemas) {
+            this.logger.warn(`Pipeline ${pipelineId} not found`);
+            return false;
+        }
+
+        const { pipeline, sourceSchema } = pipelineWithSchemas;
+
+        // Only check if pipeline is active and has incremental column configured
+        if (pipeline.status !== 'active') {
+            return false;
+        }
+
+        // Only check pipelines in 'running' or 'listing' state
+        if (pipeline.migrationState !== 'running' && pipeline.migrationState !== 'listing') {
+            return false;
+        }
+
+        if (!pipeline.incrementalColumn) {
+            return false;
+        }
+
+        if (sourceSchema.sourceType !== 'postgres' || !sourceSchema.sourceConnectionId || !sourceSchema.sourceTable) {
+            return false;
+        }
+
+        // Check if incremental column is UUID type - if so, skip (UUIDs can't be used for incremental sync)
+        try {
+            let pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
+            if (!pool) {
+                const connection = await this.connectionRepository.findById(
+                    sourceSchema.sourceConnectionId,
+                    pipeline.orgId,
+                );
+                if (!connection || connection.status !== 'active') {
+                    return false;
+                }
+                const credentials = this.connectionRepository.decryptCredentials(connection);
+                pool = await this.connectionPool.createPool(
+                    sourceSchema.sourceConnectionId,
+                    credentials,
+                );
+            }
+
+            const client = await pool.connect();
+
+            try {
+                const schema = sourceSchema.sourceSchema || 'public';
+                const table = sourceSchema.sourceTable;
+                const incrementalCol = pipeline.incrementalColumn;
+
+                // Check column type
+                const typeQuery = `
+                    SELECT c.data_type, c.udt_name
+                    FROM information_schema.columns c
+                    WHERE c.table_schema = $1
+                      AND c.table_name = $2
+                      AND c.column_name = $3
+                `;
+
+                const typeResult = await client.query(typeQuery, [schema, table, incrementalCol]);
+                
+                if (typeResult.rows.length > 0) {
+                    const dataType = (typeResult.rows[0].data_type || '').toLowerCase();
+                    const udtName = (typeResult.rows[0].udt_name || '').toLowerCase();
+                    const isUUID = dataType === 'uuid' || udtName === 'uuid';
+
+                    if (isUUID) {
+                        this.logger.warn(
+                            `Pipeline ${pipelineId}: Incremental column '${incrementalCol}' is UUID type. UUIDs cannot be used for incremental sync. Skipping check.`,
+                        );
+                        return false; // Skip UUID-based incremental columns
+                    }
+                }
+
+                const lastSyncValue = pipeline.lastSyncValue;
+
+                // Determine if this is a timestamp column
+                const isTimestampColumn = incrementalCol.toLowerCase().includes('_at') || 
+                                         incrementalCol.toLowerCase().includes('at') ||
+                                         incrementalCol.toLowerCase() === 'updated' ||
+                                         incrementalCol.toLowerCase() === 'created' ||
+                                         incrementalCol.toLowerCase() === 'modified';
+
+                let query: string;
+                const params: any[] = [];
+
+                if (lastSyncValue) {
+                    // For timestamp columns, use >= to catch records with same timestamp
+                    // For sequential IDs, use > to avoid re-processing
+                    const comparisonOp = isTimestampColumn ? '>=' : '>';
+                    // Lightweight check: count records (faster than fetching all)
+                    query = `
+                        SELECT COUNT(*) as count FROM "${schema}"."${table}"
+                        WHERE "${incrementalCol}" ${comparisonOp} $1
+                    `;
+                    params.push(lastSyncValue);
+                } else {
+                    // First run - check if table has any records
+                    query = `SELECT COUNT(*) as count FROM "${schema}"."${table}"`;
+                }
+
+                const result = await client.query(query, params);
+                const count = parseInt(result.rows[0]?.count || '0', 10);
+
+                return count > 0;
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            this.logger.error(
+                `Error checking for new records in pipeline ${pipelineId}: ${error.message}`,
+                error.stack,
+            );
+            return false;
+        }
+    }
+
+    /**
+     * Validate and fix incremental column
+     * If the incremental column is UUID type, try to find a timestamp column to use instead
+     * Returns the column name to use, or null if no suitable column found
+     */
+    private async validateAndFixIncrementalColumn(
+        pipeline: PostgresPipeline,
+        sourceSchema: PipelineSourceSchema,
+    ): Promise<string | null> {
+        if (!pipeline.incrementalColumn || !sourceSchema.sourceTable || !sourceSchema.sourceConnectionId) {
+            return pipeline.incrementalColumn || null;
+        }
+
+        try {
+            // Get connection pool
+            let pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
+            if (!pool) {
+                const connection = await this.connectionRepository.findById(
+                    sourceSchema.sourceConnectionId,
+                    pipeline.orgId,
+                );
+                if (!connection || connection.status !== 'active') {
+                    return pipeline.incrementalColumn; // Return original if can't check
+                }
+                const credentials = this.connectionRepository.decryptCredentials(connection);
+                pool = await this.connectionPool.createPool(
+                    sourceSchema.sourceConnectionId,
+                    credentials,
+                );
+            }
+
+            const client = await pool.connect();
+
+            try {
+                const schema = sourceSchema.sourceSchema || 'public';
+                const table = sourceSchema.sourceTable;
+                const incrementalCol = pipeline.incrementalColumn;
+
+                // Query column type from information_schema
+                const typeQuery = `
+                    SELECT 
+                        c.column_name,
+                        c.data_type,
+                        c.udt_name
+                    FROM information_schema.columns c
+                    WHERE c.table_schema = $1
+                      AND c.table_name = $2
+                      AND c.column_name = $3
+                `;
+
+                const typeResult = await client.query(typeQuery, [schema, table, incrementalCol]);
+                
+                if (typeResult.rows.length === 0) {
+                    this.logger.warn(
+                        `Column '${incrementalCol}' not found in table ${schema}.${table}`,
+                    );
+                    return pipeline.incrementalColumn; // Return original
+                }
+
+                const columnInfo = typeResult.rows[0];
+                const dataType = (columnInfo.data_type || '').toLowerCase();
+                const udtName = (columnInfo.udt_name || '').toLowerCase();
+
+                // Check if it's a UUID type
+                const isUUID = dataType === 'uuid' || udtName === 'uuid';
+
+                if (!isUUID) {
+                    // Column is not UUID, it's fine to use
+                    return pipeline.incrementalColumn;
+                }
+
+                // Column is UUID - need to find a timestamp column
+                this.logger.warn(
+                    `Incremental column '${incrementalCol}' is UUID type. UUIDs cannot be used for incremental sync. Searching for timestamp column...`,
+                );
+
+                // Find timestamp columns
+                const timestampQuery = `
+                    SELECT 
+                        c.column_name,
+                        c.data_type
+                    FROM information_schema.columns c
+                    WHERE c.table_schema = $1
+                      AND c.table_name = $2
+                      AND (
+                          c.data_type IN ('timestamp without time zone', 'timestamp with time zone', 'timestamp', 'timestamptz')
+                          OR c.udt_name IN ('timestamp', 'timestamptz')
+                          OR LOWER(c.column_name) LIKE '%_at'
+                          OR LOWER(c.column_name) IN ('updated_at', 'created_at', 'modified_at', 'updatedat', 'createdat', 'modifiedat')
+                      )
+                    ORDER BY 
+                      CASE 
+                        WHEN LOWER(c.column_name) = 'updated_at' THEN 1
+                        WHEN LOWER(c.column_name) = 'created_at' THEN 2
+                        WHEN LOWER(c.column_name) = 'modified_at' THEN 3
+                        WHEN LOWER(c.column_name) LIKE '%_at' THEN 4
+                        ELSE 5
+                      END,
+                      c.column_name
+                    LIMIT 1
+                `;
+
+                const timestampResult = await client.query(timestampQuery, [schema, table]);
+
+                if (timestampResult.rows.length > 0) {
+                    const timestampColumn = timestampResult.rows[0].column_name;
+                    this.logger.log(
+                        `Found timestamp column '${timestampColumn}' to use instead of UUID column '${incrementalCol}'`,
+                    );
+                    return timestampColumn;
+                }
+
+                // No timestamp column found
+                this.logger.error(
+                    `No timestamp column found in table ${schema}.${table}. Cannot use UUID column '${incrementalCol}' for incremental sync.`,
+                );
+                return null;
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            this.logger.error(
+                `Error validating incremental column: ${error.message}`,
+                error.stack,
+            );
+            // Return original column on error to avoid breaking the pipeline
+            return pipeline.incrementalColumn;
         }
     }
 
@@ -962,23 +1312,59 @@ export class PostgresPipelineService {
                 const table = sourceSchema.sourceTable;
 
                 if (pipeline.syncMode === 'incremental' && pipeline.incrementalColumn) {
-                    // Incremental sync - use > to avoid re-processing the last value
-                    // ON CONFLICT on primary key will prevent any duplicates
+                    // IMPORTANT: Validate that incremental column is not UUID type
+                    // UUIDs cannot be used for incremental sync as they are not sequential
+                    const incrementalCol = pipeline.incrementalColumn;
+                    
+                    // Check column type to ensure it's not UUID
+                    const typeCheckQuery = `
+                        SELECT c.data_type, c.udt_name
+                        FROM information_schema.columns c
+                        WHERE c.table_schema = $1
+                          AND c.table_name = $2
+                          AND c.column_name = $3
+                    `;
+                    const typeCheckResult = await client.query(typeCheckQuery, [schema, table, incrementalCol]);
+                    
+                    if (typeCheckResult.rows.length > 0) {
+                        const dataType = (typeCheckResult.rows[0].data_type || '').toLowerCase();
+                        const udtName = (typeCheckResult.rows[0].udt_name || '').toLowerCase();
+                        const isUUID = dataType === 'uuid' || udtName === 'uuid';
+                        
+                        if (isUUID) {
+                            throw new BadRequestException(
+                                `Cannot use UUID column '${incrementalCol}' for incremental sync. UUIDs are not sequential and cannot be reliably compared. The pipeline should have been automatically switched to a timestamp column. Please check pipeline configuration.`,
+                            );
+                        }
+                    }
+
+                    // Incremental sync - fetch ALL records greater than lastSyncValue
+                    // Use >= for timestamp columns to ensure we don't miss records with the same timestamp
+                    // For sequential IDs, use > to avoid re-processing
+                    const isTimestampColumn = incrementalCol.toLowerCase().includes('_at') || 
+                                             incrementalCol.toLowerCase().includes('at') ||
+                                             incrementalCol.toLowerCase() === 'updated' ||
+                                             incrementalCol.toLowerCase() === 'created' ||
+                                             incrementalCol.toLowerCase() === 'modified';
+                    
                     if (lastSyncValue) {
+                        // For timestamp columns, use >= to catch records with same timestamp
+                        // For sequential IDs, use > to avoid re-processing
+                        const comparisonOp = isTimestampColumn ? '>=' : '>';
                         query = `
               SELECT * FROM "${schema}"."${table}"
-              WHERE "${pipeline.incrementalColumn}" > $1
-              ORDER BY "${pipeline.incrementalColumn}" ASC
+              WHERE "${incrementalCol}" ${comparisonOp} $1
+              ORDER BY "${incrementalCol}" ASC
             `;
                         params.push(lastSyncValue);
                         this.logger.log(
-                            `[${runId}] Incremental sync: fetching records where ${pipeline.incrementalColumn} > ${lastSyncValue}`,
+                            `[${runId}] Incremental sync: fetching ALL records where ${incrementalCol} ${comparisonOp} ${lastSyncValue} (${isTimestampColumn ? 'timestamp-based' : 'sequential'})`,
                         );
                     } else {
                         // First incremental run - get all records
-                        query = `SELECT * FROM "${schema}"."${table}" ORDER BY "${pipeline.incrementalColumn}" ASC`;
+                        query = `SELECT * FROM "${schema}"."${table}" ORDER BY "${incrementalCol}" ASC`;
                         this.logger.log(
-                            `[${runId}] First incremental sync: fetching all records ordered by ${pipeline.incrementalColumn}`,
+                            `[${runId}] First incremental sync: fetching all records ordered by ${incrementalCol}`,
                         );
                     }
                 } else {

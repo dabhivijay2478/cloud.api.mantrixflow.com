@@ -8,6 +8,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PostgresPipelineRepository } from '../repositories/postgres-pipeline.repository';
+import { PostgresPipelineService } from '../postgres-pipeline.service';
 import { PipelineJobData } from './jobs/postgres-pipeline.processor';
 
 @Injectable()
@@ -18,6 +19,7 @@ export class PostgresPipelineQueueService {
         @InjectQueue('postgres-pipeline')
         private readonly pipelineQueue: Queue<PipelineJobData>,
         private readonly pipelineRepository: PostgresPipelineRepository,
+        private readonly pipelineService: PostgresPipelineService,
     ) { }
 
     /**
@@ -138,6 +140,97 @@ export class PostgresPipelineQueueService {
         // This would query pipelines that have syncFrequency set
         // and ensure they are scheduled in the queue
         // Implementation depends on your specific requirements
+    }
+
+    /**
+     * Cron job to check for new records and migrate them in active pipelines
+     * Runs every 1 minute to enable near-real-time incremental migration
+     * 
+     * IMPORTANT: This method actually migrates new records, not just checks for existence.
+     * It fetches ALL new records and processes them through the full pipeline.
+     */
+    @Cron('*/1 * * * *') // Every 1 minute
+    async checkForNewRecordsAndMigrate(): Promise<void> {
+        this.logger.debug('Checking for new records in active pipelines (continuous migration)...');
+
+        try {
+            // Find all active pipelines in 'running' or 'listing' state
+            // These are pipelines that should be continuously monitored and migrated
+            const activePipelines = await this.pipelineRepository.findActiveContinuousPipelines();
+
+            if (activePipelines.length === 0) {
+                this.logger.debug('No active continuous pipelines found');
+                return;
+            }
+
+            this.logger.log(
+                `Found ${activePipelines.length} active continuous pipelines to check for new records`,
+            );
+
+            // Process each pipeline: check for new records and migrate them
+            for (const pipeline of activePipelines) {
+                try {
+                    // Skip if pipeline doesn't have incremental column configured
+                    if (!pipeline.incrementalColumn) {
+                        this.logger.debug(
+                            `Pipeline ${pipeline.id} does not have incremental column configured, skipping`,
+                        );
+                        continue;
+                    }
+
+                    // Check if new records exist (lightweight check)
+                    // If found, queue migration job which will fetch and migrate ALL new records
+                    const hasNewRecords = await this.pipelineService.hasNewRecords(pipeline.id);
+
+                    if (hasNewRecords) {
+                        this.logger.log(
+                            `Pipeline ${pipeline.id}: New records detected, queuing incremental migration job`,
+                        );
+
+                        // Queue the migration job
+                        // executePipeline will fetch ALL new records (not just check existence)
+                        // and migrate them through the full pipeline
+                        await this.addPipelineJob(
+                            pipeline.id,
+                            'system',
+                            'scheduled',
+                            {
+                                reason: 'continuous_incremental_migration',
+                                checkedAt: new Date().toISOString(),
+                            },
+                        );
+
+                        // Schedule next check in 1 minute (aggressive checking when data is changing)
+                        const nextCheckIn1Min = new Date(Date.now() + 60 * 1000);
+                        await this.pipelineRepository.update(pipeline.id, {
+                            nextSyncAt: nextCheckIn1Min,
+                        } as any);
+                    } else {
+                        this.logger.debug(
+                            `Pipeline ${pipeline.id}: No new records found, scheduling next check in 5 minutes`,
+                        );
+
+                        // No new records found - schedule next check in 5 minutes to save resources
+                        // This reduces unnecessary database queries when data is not changing
+                        const nextCheckIn5Min = new Date(Date.now() + 5 * 60 * 1000);
+                        await this.pipelineRepository.update(pipeline.id, {
+                            nextSyncAt: nextCheckIn5Min,
+                        } as any);
+                    }
+                } catch (error) {
+                    this.logger.error(
+                        `Error processing pipeline ${pipeline.id} in continuous migration: ${error.message}`,
+                        error.stack,
+                    );
+                    // Continue with other pipelines even if one fails
+                }
+            }
+        } catch (error) {
+            this.logger.error(
+                `Error in checkForNewRecordsAndMigrate cron job: ${error.message}`,
+                error.stack,
+            );
+        }
     }
 
     /**

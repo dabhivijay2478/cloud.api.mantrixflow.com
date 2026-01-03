@@ -5,7 +5,7 @@
 
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { eq, and, isNull, desc } from 'drizzle-orm';
+import { eq, and, isNull, desc, inArray, or, lte } from 'drizzle-orm';
 
 // Import types
 import type {
@@ -143,6 +143,32 @@ export class PostgresPipelineRepository {
                 ),
             )
             .orderBy(desc(postgresPipelines.createdAt));
+    }
+
+    /**
+     * Find active pipelines that are in running or listing state
+     * These are pipelines that should be continuously monitored for new records
+     * Only returns pipelines that are due for checking (nextSyncAt is null or in the past)
+     * This optimizes resource usage by skipping pipelines that were recently checked
+     */
+    async findActiveContinuousPipelines(): Promise<PostgresPipeline[]> {
+        const now = new Date();
+        return await this.db
+            .select()
+            .from(postgresPipelines)
+            .where(
+                and(
+                    eq(postgresPipelines.status, 'active'),
+                    inArray(postgresPipelines.migrationState, ['running', 'listing']),
+                    isNull(postgresPipelines.deletedAt),
+                    // Only check pipelines where nextSyncAt is null or in the past
+                    // This allows us to skip pipelines that were recently checked and had no new records
+                    or(
+                        isNull(postgresPipelines.nextSyncAt),
+                        lte(postgresPipelines.nextSyncAt, now),
+                    ),
+                ),
+            );
     }
 
     /**
