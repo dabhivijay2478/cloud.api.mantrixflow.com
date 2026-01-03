@@ -206,9 +206,14 @@ export class PostgresPipelineService {
         // If destinationTable is in format "schema.table", extract it
         let destinationTableName = data.destinationTable;
         let destinationSchemaName = data.destinationSchema || 'public';
+        
+        // IMPORTANT: Determine if this is an existing table or a new table
+        // If destinationTable is provided and doesn't start with "pipeline_", it's likely an existing table
+        // If destinationTable starts with "pipeline_", it's an auto-generated name (new table)
+        // Also check transformers for destinationTable
         let destinationTableExists = false; // Default to false (will create new table)
         
-        // Extract destination table from transformers if specified
+        // First, check if transformers have destinationTable specified (existing table)
         if (data.collectors) {
             const transformerWithTable = data.collectors
                 .flatMap((c: any) => c.transformers || [])
@@ -220,8 +225,27 @@ export class PostgresPipelineService {
                     : ['public', transformerWithTable.destinationTable];
                 destinationSchemaName = tableParts[0] || 'public';
                 destinationTableName = tableParts[1] || tableParts[0];
-                destinationTableExists = true; // User selected existing table
+                destinationTableExists = true; // User selected existing table from transformer
+                this.logger.log(
+                    `Found destination table in transformer: ${destinationSchemaName}.${destinationTableName} (existing table)`,
+                );
             }
+        }
+        
+        // If no transformer table found, check if the provided destinationTable is an existing table
+        // Auto-generated tables start with "pipeline_", so if it doesn't start with that, it's likely existing
+        if (!destinationTableExists && destinationTableName && !destinationTableName.startsWith('pipeline_')) {
+            // Table name doesn't match auto-generated pattern - assume it's an existing table
+            destinationTableExists = true;
+            this.logger.log(
+                `Destination table '${destinationTableName}' does not match auto-generated pattern. Treating as existing table.`,
+            );
+        } else if (!destinationTableExists && destinationTableName && destinationTableName.startsWith('pipeline_')) {
+            // Auto-generated table name - will create new table
+            destinationTableExists = false;
+            this.logger.log(
+                `Destination table '${destinationTableName}' matches auto-generated pattern. Will create new table.`,
+            );
         }
         
         let destinationSchema: PipelineDestinationSchema;
@@ -347,6 +371,22 @@ export class PostgresPipelineService {
             this.logger.log(
                 `Creating pipeline with source schema: ${sourceSchema.id}, destination schema: ${destinationSchema.id}, destination connection: ${data.destinationConnectionId}`,
             );
+        
+        // IMPORTANT: Check for duplicate pipeline before creating
+        // Prevent duplicate creation by checking if a pipeline with the same name and orgId already exists
+        // This prevents duplicate pipelines from being created due to double-submission or retries
+        const existingPipeline = await this.pipelineRepository.findByNameAndOrgId(
+            data.name,
+            data.orgId,
+        );
+        
+        if (existingPipeline && !existingPipeline.deletedAt) {
+            this.logger.warn(
+                `Pipeline with name '${data.name}' already exists in org ${data.orgId}. Returning existing pipeline: ${existingPipeline.id}`,
+            );
+            // Return existing pipeline instead of creating a duplicate
+            return existingPipeline;
+        }
         
         const pipeline = await this.pipelineRepository.create({
             orgId: data.orgId,
@@ -1411,9 +1451,17 @@ export class PostgresPipelineService {
         const transformed = sourceData.map((row, rowIndex) => {
             const transformedRow: any = {};
 
-            // Apply column mappings
+            // IMPORTANT: Only migrate mapped fields - do NOT include unmapped source columns
+            // This ensures data migration strictly follows the field-to-field mapping configuration
             mappings.forEach((mapping) => {
                 let value = row[mapping.sourceColumn];
+
+                // Handle generated UUID for primary key if sourceColumn is 'id' and has defaultValue
+                if (mapping.sourceColumn === 'id' && mapping.defaultValue === 'gen_random_uuid()' && !value) {
+                    // Generate UUID if not present - this will be handled by database default
+                    // Just set to null/undefined and let database generate it
+                    value = undefined;
+                }
 
                 // Apply transformations for this column
                 const transformation = transformationsArray.find(
@@ -1424,6 +1472,7 @@ export class PostgresPipelineService {
                     value = this.applyTransformation(value, transformation);
                 }
 
+                // Only add the mapped field to transformed row
                 transformedRow[mapping.destinationColumn] = value;
             });
 
@@ -1599,14 +1648,20 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Create table if not exists
-            // Only create if destinationTableExists is false (user wants to create new table)
-            // If destinationTableExists is true, assume table should exist and don't create
-            // Also check if table name matches the pattern for auto-generated tables (pipeline_*)
+            // IMPORTANT: Do NOT create new tables if user selected an existing destination table
+            // Only create table if:
+            // 1. Table doesn't exist AND
+            // 2. destinationTableExists is explicitly false (user wants new table) AND
+            // 3. Table name is auto-generated (pipeline_*)
+            // If destinationTableExists is true, we MUST use the existing table and NOT create a new one
             const isAutoGeneratedTable = destinationSchema.destinationTable.startsWith('pipeline_');
-            const shouldCreateTable = !tableExists && (destinationSchema.destinationTableExists === false || isAutoGeneratedTable);
+            const shouldCreateTable = !tableExists && 
+                                     destinationSchema.destinationTableExists === false && 
+                                     isAutoGeneratedTable;
             
             if (shouldCreateTable) {
+                // Only create if user explicitly wants a new table (destinationTableExists = false)
+                // and it's an auto-generated table name
                 const logPrefix = runId ? `[${runId}]` : '';
                 this.logger.log(
                     `${logPrefix} Creating new destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} with ${finalColumnMappings.length} columns`,
@@ -1624,16 +1679,34 @@ export class PostgresPipelineService {
                     columnMappings: finalColumnMappings as any,
                 });
             } else if (!tableExists && destinationSchema.destinationTableExists === true) {
-                // Table doesn't exist but user selected an existing table
+                // Table doesn't exist but user selected an existing table - this is an error
                 const logPrefix = runId ? `[${runId}]` : '';
                 throw new BadRequestException(
                     `Destination table "${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}" does not exist. Please create the table first or select a different table.`,
                 );
             } else if (tableExists) {
+                // Table exists - use it (do NOT create a new one)
                 const logPrefix = runId ? `[${runId}]` : '';
                 this.logger.log(
                     `${logPrefix} Using existing destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}`,
                 );
+            } else if (!tableExists && destinationSchema.destinationTableExists === false && !isAutoGeneratedTable) {
+                // Table doesn't exist, user wants new table, but it's not auto-generated
+                // This shouldn't happen, but if it does, create the table
+                const logPrefix = runId ? `[${runId}]` : '';
+                this.logger.warn(
+                    `${logPrefix} Table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} does not exist and destinationTableExists is false. Creating table.`,
+                );
+                await this.destinationService.createDestinationTable(
+                    client,
+                    destinationSchema.destinationSchema ?? 'public',
+                    destinationSchema.destinationTable,
+                    finalColumnMappings,
+                );
+                await this.destinationSchemaRepository.update(destinationSchema.id, {
+                    destinationTableExists: true,
+                    columnMappings: finalColumnMappings as any,
+                });
             }
 
             // Validate schema if table exists
@@ -1661,16 +1734,40 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Write data with duplicate prevention enabled
-            const writeMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
+            // Determine write mode and upsert key
+            // If primary key is UUID, use upsert mode to update existing records
+            let writeMode: 'append' | 'upsert' | 'replace' = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
+            let upsertKey: string[] | undefined = destinationSchema.upsertKey || undefined;
+            
+            // Find primary key from column mappings
+            const primaryKeyMapping = finalColumnMappings.find(m => m.isPrimaryKey);
+            if (primaryKeyMapping && primaryKeyMapping.dataType === 'UUID') {
+                // If primary key is UUID, use upsert mode to update existing records
+                writeMode = 'upsert';
+                upsertKey = [primaryKeyMapping.destinationColumn];
+                const logPrefix = runId ? `[${runId}]` : '';
+                this.logger.log(
+                    `${logPrefix} Primary key '${primaryKeyMapping.destinationColumn}' is UUID type. Using upsert mode to update existing records.`,
+                );
+            } else if (primaryKeyMapping) {
+                // If primary key exists but is not UUID, still use upsert for consistency
+                writeMode = 'upsert';
+                upsertKey = [primaryKeyMapping.destinationColumn];
+                const logPrefix = runId ? `[${runId}]` : '';
+                this.logger.log(
+                    `${logPrefix} Primary key '${primaryKeyMapping.destinationColumn}' found. Using upsert mode.`,
+                );
+            }
+
+            // Write data with proper upsert behavior
             const result = await this.destinationService.writeData(
                 client,
                 destinationSchema.destinationSchema ?? 'public',
                 destinationSchema.destinationTable,
                 transformedData,
                 writeMode,
-                destinationSchema.upsertKey || undefined,
-                true, // preventDuplicates = true
+                upsertKey,
+                writeMode === 'append', // Only prevent duplicates in append mode
             );
 
             await client.query('COMMIT');

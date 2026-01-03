@@ -53,6 +53,27 @@ export class PostgresPipelineRepository {
     }
 
     /**
+     * Find pipeline by name and orgId (for duplicate prevention)
+     */
+    async findByNameAndOrgId(
+        name: string,
+        orgId: string,
+    ): Promise<PostgresPipeline | null> {
+        const results = await this.db
+            .select()
+            .from(postgresPipelines)
+            .where(
+                and(
+                    eq(postgresPipelines.name, name),
+                    eq(postgresPipelines.orgId, orgId),
+                ),
+            )
+            .limit(1);
+        
+        return results[0] || null;
+    }
+
+    /**
      * Find pipeline by ID
      */
     async findById(
