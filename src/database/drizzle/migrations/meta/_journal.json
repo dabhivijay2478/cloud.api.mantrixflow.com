@@ -8,6 +8,62 @@
       "when": 1763015626012,
       "tag": "0000_needy_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1763535179258,
+      "tag": "0001_illegal_bloodaxe",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1764000000000,
+      "tag": "0002_separate_source_destination_schemas",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1764001000000,
+      "tag": "0003_remove_duplicate_schema_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1764002000000,
+      "tag": "0004_add_users_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1764003000000,
+      "tag": "0005_add_organizations_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1764004000000,
+      "tag": "0006_add_migration_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1764005000000,
+      "tag": "0007_add_pipeline_run_job_tracking",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1764006000000,
+      "tag": "0008_add_organization_members_table",
+      "breakpoints": true
     }
   ]
 }

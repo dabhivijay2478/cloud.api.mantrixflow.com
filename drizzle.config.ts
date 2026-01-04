@@ -9,7 +9,18 @@ if (!process.env.DATABASE_URL) {
 }
 
 export default {
-  schema: './src/database/drizzle/schema/postgres-connectors.schema.ts',
+  schema: [
+    './src/database/schemas/users/users.schema.ts',
+    './src/database/schemas/organizations/organizations.schema.ts',
+    './src/database/schemas/organizations/organization-members.schema.ts',
+    './src/database/schemas/data-sources/connections/postgres-connections.schema.ts',
+    './src/database/schemas/data-sources/query-logs/postgres-query-logs.schema.ts',
+    './src/database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema.ts',
+    './src/database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema.ts',
+    './src/database/schemas/data-pipelines/destination-schemas/pipeline-destination-schemas.schema.ts',
+    './src/database/schemas/data-pipelines/pipelines/postgres-pipelines.schema.ts',
+    './src/database/schemas/data-pipelines/pipeline-runs/postgres-pipeline-runs.schema.ts',
+  ],
   out: './src/database/drizzle/migrations',
   dialect: 'postgresql',
   dbCredentials: {

@@ -16,6 +16,16 @@
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": false,
     "strictBindCallApply": false,
-    "noFallthroughCasesInSwitch": false
-  }
+    "noFallthroughCasesInSwitch": false,
+    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "paths": {
+      "@db/schema": [
+        "src/database/schemas"
+      ],
+      "@db/schema/*": [
+        "src/database/schemas/*"
+      ]
+    }
+  },
+  "include": ["src/**/*", "src/types/**/*.d.ts"]
 }

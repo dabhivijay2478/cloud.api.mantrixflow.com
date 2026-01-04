@@ -9,7 +9,7 @@ You are building a custom PostgreSQL connector for MantrixFlow, a Generative AI 
 ## Technology Stack
 - **Backend**: NestJS with Express (TypeScript)
 - **Database**: Supabase (PostgreSQL) for storing connector metadata
-- **Package Manager**: pnpm
+- **Package Manager**: bun
 - **ORM**: Drizzle ORM
 - **Frontend**: Next.js 14 App Router
 - **UI**: Shadcn/UI + Tailwind CSS
