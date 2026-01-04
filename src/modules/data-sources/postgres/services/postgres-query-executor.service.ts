@@ -4,11 +4,11 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
-import { QueryExecutionResult } from '../postgres.types';
-import { sanitizeQuery } from '../utils/query-sanitizer.util';
 import { QUERY_CONFIG } from '../constants/postgres.constants';
+import { QueryExecutionResult } from '../postgres.types';
 import { mapErrorToStandardized } from '../utils/error-mapper.util';
+import { sanitizeQuery } from '../utils/query-sanitizer.util';
+import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 /**
  * Rate limit tracking
@@ -22,9 +22,7 @@ interface RateLimitEntry {
 export class PostgresQueryExecutorService {
   private rateLimits = new Map<string, RateLimitEntry>();
 
-  constructor(
-    private readonly connectionPoolService: PostgresConnectionPoolService,
-  ) {}
+  constructor(private readonly connectionPoolService: PostgresConnectionPoolService) {}
 
   /**
    * Execute query
@@ -62,9 +60,7 @@ export class PostgresQueryExecutorService {
       // Extract column information
       const columns = result.fields.map((field) => ({
         name: field.name,
-        dataType: field.dataTypeID
-          ? this.getDataTypeName(field.dataTypeID)
-          : 'unknown',
+        dataType: field.dataTypeID ? this.getDataTypeName(field.dataTypeID) : 'unknown',
       }));
 
       return {
@@ -78,15 +74,7 @@ export class PostgresQueryExecutorService {
       const standardized = mapErrorToStandardized(error);
 
       // Log query failure
-      this.logQuery(
-        connectionId,
-        userId,
-        query,
-        executionTimeMs,
-        0,
-        'error',
-        standardized.message,
-      );
+      this.logQuery(connectionId, userId, query, executionTimeMs, 0, 'error', standardized.message);
 
       throw error;
     } finally {
@@ -99,11 +87,7 @@ export class PostgresQueryExecutorService {
   /**
    * Execute query with explain plan
    */
-  async explainQuery(
-    connectionId: string,
-    query: string,
-    params?: any[],
-  ): Promise<any> {
+  async explainQuery(connectionId: string, query: string, params?: any[]): Promise<any> {
     // Sanitize query
     const validation = sanitizeQuery(query);
     if (!validation.isValid) {

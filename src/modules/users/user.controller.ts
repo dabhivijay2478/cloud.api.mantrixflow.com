@@ -3,34 +3,24 @@
  * REST API endpoints for user management
  */
 
-import {
-  Controller,
-  Post,
-  Get,
-  Patch,
-  Body,
-  Param,
-  Request,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
+
 type Request = ExpressRequest;
+
 import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiParam,
-  ApiBody,
   ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
 } from '@nestjs/swagger';
-import { UserService } from './user.service';
-import { CreateUserDto } from './dto/create-user.dto';
+import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import {
-  ApiSuccessResponse,
-  createSuccessResponse,
-} from '../../common/dto/api-response.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UserService } from './user.service';
 
 @ApiTags('users')
 @ApiBearerAuth('JWT-auth')
@@ -160,11 +150,7 @@ export class UserController {
     if (!userId) {
       throw new Error('User not authenticated');
     }
-    const user = await this.userService.updateOnboarding(
-      userId,
-      data.completed,
-      data.step,
-    );
+    const user = await this.userService.updateOnboarding(userId, data.completed, data.step);
     return createSuccessResponse(user, 'Onboarding status updated successfully');
   }
 }

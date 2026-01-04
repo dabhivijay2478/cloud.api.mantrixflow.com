@@ -3,14 +3,9 @@
  * Verifies Supabase JWT tokens and extracts user information
  */
 
-import {
-  Injectable,
-  CanActivate,
-  ExecutionContext,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { Request } from 'express';
+import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
+import { Request } from 'express';
 
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
@@ -21,9 +16,7 @@ export class SupabaseAuthGuard implements CanActivate {
     const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      console.warn(
-        'Supabase environment variables not set. Auth guard will not verify tokens.',
-      );
+      console.warn('Supabase environment variables not set. Auth guard will not verify tokens.');
       return;
     }
 

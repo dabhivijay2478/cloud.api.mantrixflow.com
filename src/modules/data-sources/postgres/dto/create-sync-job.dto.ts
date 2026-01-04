@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class CreateSyncJobDto {
   @ApiProperty({ description: 'Table name to sync', example: 'users' })

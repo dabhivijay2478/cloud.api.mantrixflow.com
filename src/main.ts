@@ -1,7 +1,7 @@
-import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
-import { AppModule } from './app.module';
+import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -65,7 +65,7 @@ async function bootstrap() {
         }
         return callback(new Error('Not allowed by CORS'));
       }
-      
+
       // Check if origin is in allowed list
       if (allowedOrigins.includes(origin)) {
         callback(null, origin); // Return the specific origin, not true

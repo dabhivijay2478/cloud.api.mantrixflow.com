@@ -3,16 +3,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsString,
-  IsEmail,
-  IsEnum,
-  IsBoolean,
-  IsArray,
-  IsOptional,
-  MinLength,
-  MaxLength,
-} from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class InviteMemberDto {
   @ApiProperty({
@@ -85,4 +76,3 @@ export class UpdateMemberDto {
   @IsOptional()
   status?: 'invited' | 'accepted' | 'active' | 'inactive';
 }
-

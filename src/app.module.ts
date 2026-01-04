@@ -1,13 +1,13 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { BullModule } from '@nestjs/bullmq';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
+import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
 import { UserModule } from './modules/users/user.module';
-import { OnboardingModule } from './modules/onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -37,4 +37,4 @@ import { OnboardingModule } from './modules/onboarding/onboarding.module';
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}

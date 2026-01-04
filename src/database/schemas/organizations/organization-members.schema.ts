@@ -1,12 +1,4 @@
-import {
-  pgTable,
-  uuid,
-  varchar,
-  timestamp,
-  jsonb,
-  boolean,
-  pgEnum,
-} from 'drizzle-orm/pg-core';
+import { boolean, jsonb, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { users } from '../users/users.schema';
 import { organizations } from './organizations.schema';
 
@@ -74,4 +66,3 @@ export const organizationMembers = pgTable('organization_members', {
 // Type exports for TypeScript
 export type OrganizationMember = typeof organizationMembers.$inferSelect;
 export type NewOrganizationMember = typeof organizationMembers.$inferInsert;
-

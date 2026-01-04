@@ -5,29 +5,24 @@
 
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
-import { PostgresDataSourceController } from './postgres-data-source.controller';
-import { PostgresDataSourceService } from './postgres-data-source.service';
-import { PostgresValidator } from './postgres.validator';
-
-// Repositories
-import { PostgresConnectionRepository } from './repositories/postgres-connection.repository';
-import { PostgresSyncJobRepository } from './repositories/postgres-sync-job.repository';
-import { PostgresQueryLogRepository } from './repositories/postgres-query-log.repository';
-
-// Services
-import { PostgresConnectionPoolService } from './services/postgres-connection-pool.service';
-import { PostgresSchemaDiscoveryService } from './services/postgres-schema-discovery.service';
-import { PostgresQueryExecutorService } from './services/postgres-query-executor.service';
-import { PostgresSyncService } from './services/postgres-sync.service';
-import { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
-
 // Common services
 import { EncryptionService } from '../../../common/encryption/encryption.service';
-
 // Database
 import { createDrizzleDatabase } from '../../../database/drizzle/database';
+import { PostgresValidator } from './postgres.validator';
+import { PostgresDataSourceController } from './postgres-data-source.controller';
+import { PostgresDataSourceService } from './postgres-data-source.service';
+// Repositories
+import { PostgresConnectionRepository } from './repositories/postgres-connection.repository';
+import { PostgresQueryLogRepository } from './repositories/postgres-query-log.repository';
+import { PostgresSyncJobRepository } from './repositories/postgres-sync-job.repository';
+// Services
+import { PostgresConnectionPoolService } from './services/postgres-connection-pool.service';
+import { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
+import { PostgresQueryExecutorService } from './services/postgres-query-executor.service';
+import { PostgresSchemaDiscoveryService } from './services/postgres-schema-discovery.service';
+import { PostgresSyncService } from './services/postgres-sync.service';
 
 @Module({
   imports: [
@@ -73,4 +68,4 @@ import { createDrizzleDatabase } from '../../../database/drizzle/database';
     PostgresConnectionRepository,
   ],
 })
-export class PostgresDataSourceModule { }
+export class PostgresDataSourceModule {}

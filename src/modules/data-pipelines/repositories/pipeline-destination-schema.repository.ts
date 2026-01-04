@@ -3,14 +3,14 @@
  * Data access layer for destination schema entities
  */
 
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { eq, and, isNull } from 'drizzle-orm';
 import {
-  pipelineDestinationSchemas,
-  type PipelineDestinationSchema,
   type NewPipelineDestinationSchema,
+  type PipelineDestinationSchema,
+  pipelineDestinationSchemas,
 } from '@db/schema';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { and, eq, isNull } from 'drizzle-orm';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 @Injectable()
 export class PipelineDestinationSchemaRepository {
@@ -22,13 +22,8 @@ export class PipelineDestinationSchemaRepository {
   /**
    * Create new destination schema
    */
-  async create(
-    schema: NewPipelineDestinationSchema,
-  ): Promise<PipelineDestinationSchema> {
-    const [created] = await this.db
-      .insert(pipelineDestinationSchemas)
-      .values(schema)
-      .returning();
+  async create(schema: NewPipelineDestinationSchema): Promise<PipelineDestinationSchema> {
+    const [created] = await this.db.insert(pipelineDestinationSchemas).values(schema).returning();
     return created;
   }
 
@@ -40,10 +35,7 @@ export class PipelineDestinationSchemaRepository {
       .select()
       .from(pipelineDestinationSchemas)
       .where(
-        and(
-          eq(pipelineDestinationSchemas.id, id),
-          isNull(pipelineDestinationSchemas.deletedAt),
-        ),
+        and(eq(pipelineDestinationSchemas.id, id), isNull(pipelineDestinationSchemas.deletedAt)),
       )
       .limit(1);
 
@@ -70,4 +62,3 @@ export class PipelineDestinationSchemaRepository {
     return updated;
   }
 }
-

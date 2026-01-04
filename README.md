@@ -44,6 +44,43 @@ $ bun run start:dev
 $ bun run start:prod
 ```
 
+## Code Formatting and Linting
+
+This project uses [Biome](https://biomejs.dev/) for fast formatting and linting, along with Prettier for additional formatting options.
+
+### Biome
+
+Biome is configured to handle both code formatting and linting in a single, fast tool. The configuration is in `biome.json`.
+
+```bash
+# Format and lint all files (with auto-fix)
+$ bun run check
+
+# Check formatting and linting without making changes
+$ bun run check:ci
+
+# Format files only
+$ bun run format
+
+# Check formatting only (without changes)
+$ bun run format:check
+
+# Lint files only (with auto-fix)
+$ bun run lint
+
+# Check linting only (without changes)
+$ bun run lint:check
+```
+
+### Prettier
+
+Prettier is also configured (`.prettierrc`) and can be used alongside Biome if needed. The configuration includes:
+- Single quotes
+- Trailing commas
+- 2-space indentation
+- 100 character line width
+- LF line endings
+
 ## Run tests
 
 ```bash

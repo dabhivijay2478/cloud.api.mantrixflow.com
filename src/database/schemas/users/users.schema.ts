@@ -1,22 +1,18 @@
 import {
+  boolean,
+  jsonb,
+  pgEnum,
   pgTable,
-  uuid,
-  varchar,
   text,
   timestamp,
-  jsonb,
-  boolean,
-  pgEnum,
+  uuid,
+  varchar,
 } from 'drizzle-orm/pg-core';
 
 /**
  * Enum for user status
  */
-export const userStatusEnum = pgEnum('user_status', [
-  'active',
-  'inactive',
-  'suspended',
-]);
+export const userStatusEnum = pgEnum('user_status', ['active', 'inactive', 'suspended']);
 
 /**
  * Users Table

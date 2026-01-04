@@ -5,18 +5,15 @@
 
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
+import { PostgresErrorCode } from './constants/error-codes.constants';
+import { CONNECTION_DEFAULTS, MAX_CONNECTIONS_PER_ORG } from './constants/postgres.constants';
 import {
+  CreateSyncJobSchema,
+  ExecuteQuerySchema,
   PostgresConnectionConfigSchema,
   TestConnectionSchema,
-  ExecuteQuerySchema,
-  CreateSyncJobSchema,
   UpdateSyncScheduleSchema,
 } from './postgres.types';
-import {
-  CONNECTION_DEFAULTS,
-  MAX_CONNECTIONS_PER_ORG,
-} from './constants/postgres.constants';
-import { PostgresErrorCode } from './constants/error-codes.constants';
 
 @Injectable()
 export class PostgresValidator {
@@ -36,17 +33,12 @@ export class PostgresValidator {
         return {
           isValid: false,
           error: firstError.message,
-          errorCode: this.mapValidationErrorToCode(
-            firstError.path[0] as string,
-          ),
+          errorCode: this.mapValidationErrorToCode(firstError.path[0] as string),
         };
       }
 
       // Additional validation
-      if (
-        result.data.poolSize &&
-        result.data.poolSize > CONNECTION_DEFAULTS.MAX_POOL_SIZE
-      ) {
+      if (result.data.poolSize && result.data.poolSize > CONNECTION_DEFAULTS.MAX_POOL_SIZE) {
         return {
           isValid: false,
           error: `Pool size cannot exceed ${CONNECTION_DEFAULTS.MAX_POOL_SIZE}`,
@@ -83,9 +75,7 @@ export class PostgresValidator {
         return {
           isValid: false,
           error: firstError.message,
-          errorCode: this.mapValidationErrorToCode(
-            firstError.path[0] as string,
-          ),
+          errorCode: this.mapValidationErrorToCode(firstError.path[0] as string),
         };
       }
 
@@ -156,10 +146,7 @@ export class PostgresValidator {
       }
 
       // Additional validation for incremental sync
-      if (
-        result.data.syncMode === 'incremental' &&
-        !result.data.incrementalColumn
-      ) {
+      if (result.data.syncMode === 'incremental' && !result.data.incrementalColumn) {
         return {
           isValid: false,
           error: 'Incremental sync requires an incremental column',

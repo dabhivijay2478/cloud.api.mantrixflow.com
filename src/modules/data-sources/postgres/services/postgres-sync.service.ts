@@ -5,10 +5,10 @@
 
 import { Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
-import { PostgresSyncJobRepository } from '../repositories/postgres-sync-job.repository';
-import { SyncMode, SyncJobStatus, SyncProgress } from '../postgres.types';
 import { SYNC_CONFIG } from '../constants/postgres.constants';
+import { SyncJobStatus, SyncMode, SyncProgress } from '../postgres.types';
+import { PostgresSyncJobRepository } from '../repositories/postgres-sync-job.repository';
+import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresSyncService {
@@ -19,7 +19,7 @@ export class PostgresSyncService {
 
   /**
    * Start sync job
-   * 
+   *
    * ARCHITECTURAL NOTE:
    * This method properly tracks job state in postgres_sync_jobs table.
    * The job record is the AUTHORITATIVE source of truth for:
@@ -43,7 +43,7 @@ export class PostgresSyncService {
     if (!job) {
       throw new Error(`Sync job ${jobId} not found`);
     }
-    
+
     // Update job status to running with proper timestamps
     await this.syncJobRepository.update(jobId, {
       status: 'running',
@@ -105,16 +105,10 @@ export class PostgresSyncService {
     const startTime = new Date();
 
     // Get total row count
-    const countQuery = this.buildCountQuery(
-      schema,
-      tableName,
-      customWhereClause,
-    );
+    const countQuery = this.buildCountQuery(schema, tableName, customWhereClause);
     const countResult = await pool.query(countQuery);
 
-    const totalRows = parseInt(
-      (countResult.rows[0] as { count?: string })?.count || '0',
-    );
+    const totalRows = parseInt((countResult.rows[0] as { count?: string })?.count || '0', 10);
 
     // Sync in batches
     let offset = 0;
@@ -199,8 +193,7 @@ export class PostgresSyncService {
       whereClauses.push(`(${customWhereClause})`);
     }
 
-    const whereClause =
-      whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     // Sync in batches
     let offset = 0;
@@ -216,9 +209,7 @@ export class PostgresSyncService {
         LIMIT $${lastSyncValue ? 2 : 1} OFFSET $${lastSyncValue ? 3 : 2}
       `;
 
-      const params = lastSyncValue
-        ? [lastSyncValue, batchSize, offset]
-        : [batchSize, offset];
+      const params = lastSyncValue ? [lastSyncValue, batchSize, offset] : [batchSize, offset];
 
       const result = await pool.query(selectQuery, params);
 
@@ -230,10 +221,7 @@ export class PostgresSyncService {
       // await this.insertBatch(connectionId, destinationTable, result.rows);
 
       // Track max incremental value
-      const lastRow = result.rows[result.rows.length - 1] as Record<
-        string,
-        unknown
-      >;
+      const lastRow = result.rows[result.rows.length - 1] as Record<string, unknown>;
 
       maxIncrementalValue = lastRow[incrementalColumn];
 
@@ -271,11 +259,7 @@ export class PostgresSyncService {
   /**
    * Build count query
    */
-  private buildCountQuery(
-    schema: string,
-    tableName: string,
-    customWhereClause?: string,
-  ): string {
+  private buildCountQuery(schema: string, tableName: string, customWhereClause?: string): string {
     const whereClause = customWhereClause ? `WHERE ${customWhereClause}` : '';
     return `SELECT COUNT(*) as count FROM ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(tableName)} ${whereClause}`;
   }

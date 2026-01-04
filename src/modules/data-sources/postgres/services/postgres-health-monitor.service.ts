@@ -4,10 +4,10 @@
  */
 
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
-import { PostgresConnectionRepository } from '../repositories/postgres-connection.repository';
-import { ConnectionHealth } from '../postgres.types';
 import { HEALTH_CHECK } from '../constants/postgres.constants';
+import { ConnectionHealth } from '../postgres.types';
+import { PostgresConnectionRepository } from '../repositories/postgres-connection.repository';
+import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresHealthMonitorService implements OnModuleInit {
@@ -51,8 +51,7 @@ export class PostgresHealthMonitorService implements OnModuleInit {
         const result = await client.query('SELECT version(), NOW()');
         const responseTimeMs = Date.now() - startTime;
 
-        const version =
-          (result.rows[0] as { version?: string })?.version || 'Unknown';
+        const version = (result.rows[0] as { version?: string })?.version || 'Unknown';
 
         // Get pool stats
         const stats = this.connectionPoolService.getPoolStats(connectionId);
@@ -88,8 +87,7 @@ export class PostgresHealthMonitorService implements OnModuleInit {
         const health = await this.checkHealth(connectionId);
 
         // Update connection status in database
-        const connection =
-          await this.connectionRepository.findById(connectionId);
+        const connection = await this.connectionRepository.findById(connectionId);
         if (connection) {
           await this.connectionRepository.update(connectionId, {
             status:
@@ -98,18 +96,12 @@ export class PostgresHealthMonitorService implements OnModuleInit {
                 : health.status === 'unhealthy'
                   ? 'error'
                   : 'inactive',
-            lastConnectedAt:
-              health.status === 'healthy'
-                ? new Date()
-                : connection.lastConnectedAt,
+            lastConnectedAt: health.status === 'healthy' ? new Date() : connection.lastConnectedAt,
             lastError: health.error || null,
           });
         }
       } catch (error) {
-        console.error(
-          `Health check failed for connection ${connectionId}:`,
-          error,
-        );
+        console.error(`Health check failed for connection ${connectionId}:`, error);
       }
     }
   }

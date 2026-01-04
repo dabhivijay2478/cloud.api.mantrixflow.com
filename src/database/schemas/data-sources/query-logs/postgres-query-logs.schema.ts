@@ -1,20 +1,10 @@
-import {
-  pgTable,
-  uuid,
-  integer,
-  text,
-  timestamp,
-  pgEnum,
-} from 'drizzle-orm/pg-core';
+import { integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { postgresConnections } from '../connections/postgres-connections.schema';
 
 /**
  * Enum for query log status
  */
-export const queryLogStatusEnum = pgEnum('query_log_status', [
-  'success',
-  'error',
-]);
+export const queryLogStatusEnum = pgEnum('query_log_status', ['success', 'error']);
 
 /**
  * PostgreSQL Query Logs Table
@@ -37,4 +27,3 @@ export const postgresQueryLogs = pgTable('postgres_query_logs', {
 // Type exports for TypeScript
 export type PostgresQueryLog = typeof postgresQueryLogs.$inferSelect;
 export type NewPostgresQueryLog = typeof postgresQueryLogs.$inferInsert;
-

@@ -1,15 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsString,
-  IsOptional,
-  IsNumber,
-  IsBoolean,
-  IsObject,
-  ValidateNested,
-  Min,
-  Max,
-} from 'class-validator';
 import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 
 export class SSLConfigDto {
   @ApiPropertyOptional({
@@ -74,8 +73,7 @@ export class SSHTunnelConfigDto {
 
   @ApiPropertyOptional({
     description: 'SSH private key (PEM format)',
-    example:
-      '-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----',
+    example: '-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----',
   })
   @IsOptional()
   @IsString()

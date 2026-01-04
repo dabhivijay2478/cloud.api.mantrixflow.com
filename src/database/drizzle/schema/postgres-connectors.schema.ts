@@ -1,23 +1,19 @@
 import {
-  pgTable,
-  uuid,
-  varchar,
-  integer,
   boolean,
-  text,
-  timestamp,
+  integer,
   jsonb,
   pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
 } from 'drizzle-orm/pg-core';
 
 /**
  * Enum for connection status
  */
-export const connectionStatusEnum = pgEnum('connection_status', [
-  'active',
-  'inactive',
-  'error',
-]);
+export const connectionStatusEnum = pgEnum('connection_status', ['active', 'inactive', 'error']);
 
 /**
  * Enum for sync job status
@@ -32,12 +28,7 @@ export const syncJobStatusEnum = pgEnum('sync_job_status', [
 /**
  * Enum for sync frequency
  */
-export const syncFrequencyEnum = pgEnum('sync_frequency', [
-  'manual',
-  '15min',
-  '1hour',
-  '24hours',
-]);
+export const syncFrequencyEnum = pgEnum('sync_frequency', ['manual', '15min', '1hour', '24hours']);
 
 /**
  * Enum for sync mode
@@ -47,10 +38,7 @@ export const syncModeEnum = pgEnum('sync_mode', ['full', 'incremental']);
 /**
  * Enum for query log status
  */
-export const queryLogStatusEnum = pgEnum('query_log_status', [
-  'success',
-  'error',
-]);
+export const queryLogStatusEnum = pgEnum('query_log_status', ['success', 'error']);
 
 /**
  * PostgreSQL Connections Table
@@ -110,9 +98,7 @@ export const postgresSyncJobs = pgTable('postgres_sync_jobs', {
   startedAt: timestamp('started_at'),
   completedAt: timestamp('completed_at'),
   errorMessage: text('error_message'),
-  syncFrequency: syncFrequencyEnum('sync_frequency')
-    .notNull()
-    .default('manual'),
+  syncFrequency: syncFrequencyEnum('sync_frequency').notNull().default('manual'),
   nextSyncAt: timestamp('next_sync_at'),
   customWhereClause: text('custom_where_clause'), // Optional SQL WHERE clause
   createdAt: timestamp('created_at').notNull().defaultNow(),

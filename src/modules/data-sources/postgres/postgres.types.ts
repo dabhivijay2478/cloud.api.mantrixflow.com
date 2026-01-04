@@ -317,9 +317,7 @@ export const CreateSyncJobSchema = z.object({
   syncMode: z.enum(['full', 'incremental']),
   incrementalColumn: z.string().optional(),
   customWhereClause: z.string().optional(),
-  syncFrequency: z
-    .enum(['manual', '15min', '1hour', '24hours'])
-    .default('manual'),
+  syncFrequency: z.enum(['manual', '15min', '1hour', '24hours']).default('manual'),
 });
 
 export const UpdateSyncScheduleSchema = z.object({

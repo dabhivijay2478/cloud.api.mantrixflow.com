@@ -4,70 +4,61 @@
  */
 
 import {
-  Controller,
-  Post,
-  Get,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  HttpCode,
-  HttpStatus,
-  Request,
   BadRequestException,
-  NotFoundException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
   HttpException,
+  HttpStatus,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
+
 type Request = ExpressRequest;
+
 import {
-  ApiTags,
+  ApiBearerAuth,
+  ApiBody,
   ApiOperation,
-  ApiResponse,
   ApiParam,
   ApiQuery,
-  ApiBody,
-  ApiBearerAuth,
+  ApiResponse,
+  ApiTags,
 } from '@nestjs/swagger';
-import { PostgresDataSourceService } from './postgres-data-source.service';
-import { PostgresConnectionConfig } from './postgres.types';
-import { createErrorResponse } from './utils/error-mapper.util';
-import { parsePostgresConnectionString } from './utils/connection-string-parser.util';
 import {
-  TestConnectionDto,
-  TestConnectionResponseDto,
-} from './dto/test-connection.dto';
-import { CreateConnectionDto } from './dto/create-connection.dto';
-import {
-  ExecuteQueryDto,
-  QueryExecutionResponseDto,
-} from './dto/execute-query.dto';
-import {
-  CreateSyncJobDto,
-  SyncJobResponseDto,
-} from './dto/create-sync-job.dto';
-import { UpdateConnectionDto } from './dto/update-connection.dto';
-import { SupabaseAuthGuard } from '../../../common/guards/supabase-auth.guard';
-import {
-  ApiSuccessResponse,
-  ApiListResponse,
   ApiDeleteResponse,
-  createSuccessResponse,
-  createListResponse,
+  ApiListResponse,
+  ApiSuccessResponse,
   createDeleteResponse,
+  createListResponse,
+  createSuccessResponse,
 } from '../../../common/dto/api-response.dto';
+import { SupabaseAuthGuard } from '../../../common/guards/supabase-auth.guard';
+import { CreateConnectionDto } from './dto/create-connection.dto';
+import { CreateSyncJobDto, SyncJobResponseDto } from './dto/create-sync-job.dto';
+import { ExecuteQueryDto, QueryExecutionResponseDto } from './dto/execute-query.dto';
+import { TestConnectionDto, TestConnectionResponseDto } from './dto/test-connection.dto';
+import { UpdateConnectionDto } from './dto/update-connection.dto';
+import { PostgresConnectionConfig } from './postgres.types';
+import { PostgresDataSourceService } from './postgres-data-source.service';
+import { parsePostgresConnectionString } from './utils/connection-string-parser.util';
+import { createErrorResponse } from './utils/error-mapper.util';
 
 @ApiTags('data-sources')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
 @Controller('api/data-sources/postgres')
 export class PostgresDataSourceController {
-  constructor(
-    private readonly postgresDataSourceService: PostgresDataSourceService,
-  ) { }
+  constructor(private readonly postgresDataSourceService: PostgresDataSourceService) {}
 
   /**
    * Test connection (without saving)
@@ -126,21 +117,28 @@ export class PostgresDataSourceController {
       }
 
       // Detect Neon and Supabase connections using databaseType or hostname
-      const databaseType = dto.databaseType || (host.includes('.neon.tech') ? 'neon' : 
-        (host.includes('supabase.co') || host.includes('supabase.com') ? 'supabase' : 'other'));
+      const databaseType =
+        dto.databaseType ||
+        (host.includes('.neon.tech')
+          ? 'neon'
+          : host.includes('supabase.co') || host.includes('supabase.com')
+            ? 'supabase'
+            : 'other');
       const isNeon = databaseType === 'neon' || host.includes('.neon.tech');
-      const isSupabase = databaseType === 'supabase' || 
-        host.includes('supabase.co') || host.includes('supabase.com');
-      
+      const isSupabase =
+        databaseType === 'supabase' ||
+        host.includes('supabase.co') ||
+        host.includes('supabase.com');
+
       // Don't auto-enable SSL for localhost/127.0.0.1 (development)
       const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.');
-      
+
       // Auto-enable SSL for Neon and Supabase if not explicitly disabled and not localhost
       const shouldEnableSSL = !isLocalhost && (isNeon || isSupabase || dto.ssl?.enabled === true);
-      
+
       // For localhost with SSL, don't reject unauthorized certificates
       const shouldRejectUnauthorized = !isLocalhost && dto.ssl?.rejectUnauthorized !== false;
-      
+
       // For Neon databases, extract endpoint ID and add to options
       // Only add Neon options if it's actually a Neon host (not localhost)
       let neonOptions: string | undefined;
@@ -158,25 +156,25 @@ export class PostgresDataSourceController {
         password,
         ssl: shouldEnableSSL
           ? {
-            enabled: true,
-            caCert: dto.ssl?.caCert,
-            rejectUnauthorized: shouldRejectUnauthorized,
-          }
+              enabled: true,
+              caCert: dto.ssl?.caCert,
+              rejectUnauthorized: shouldRejectUnauthorized,
+            }
           : dto.ssl?.enabled !== undefined
-          ? {
-            enabled: dto.ssl.enabled,
-            caCert: dto.ssl.caCert,
-            rejectUnauthorized: isLocalhost ? false : (dto.ssl.rejectUnauthorized !== false),
-          }
-          : baseConfig.ssl,
+            ? {
+                enabled: dto.ssl.enabled,
+                caCert: dto.ssl.caCert,
+                rejectUnauthorized: isLocalhost ? false : dto.ssl.rejectUnauthorized !== false,
+              }
+            : baseConfig.ssl,
         sshTunnel: dto.sshTunnel?.enabled
           ? {
-            enabled: dto.sshTunnel.enabled,
-            host: dto.sshTunnel.host,
-            port: dto.sshTunnel.port,
-            username: dto.sshTunnel.username,
-            privateKey: dto.sshTunnel.privateKey,
-          }
+              enabled: dto.sshTunnel.enabled,
+              host: dto.sshTunnel.host,
+              port: dto.sshTunnel.port,
+              username: dto.sshTunnel.username,
+              privateKey: dto.sshTunnel.privateKey,
+            }
           : undefined,
         connectionTimeout: dto.connectionTimeout,
         queryTimeout: dto.queryTimeout,
@@ -186,9 +184,7 @@ export class PostgresDataSourceController {
       const testResult = await this.postgresDataSourceService.testConnection(config);
       return createSuccessResponse(
         testResult,
-        testResult.success
-          ? 'Connection test successful'
-          : 'Connection test failed',
+        testResult.success ? 'Connection test successful' : 'Connection test failed',
         testResult.success ? HttpStatus.OK : HttpStatus.BAD_REQUEST,
         {
           success: testResult.success,
@@ -216,8 +212,7 @@ export class PostgresDataSourceController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create PostgreSQL connection',
-    description:
-      'Create a new PostgreSQL connection with encrypted credentials.',
+    description: 'Create a new PostgreSQL connection with encrypted credentials.',
   })
   @ApiBody({ type: CreateConnectionDto })
   @ApiResponse({
@@ -251,44 +246,50 @@ export class PostgresDataSourceController {
       console.log('[createConnection] User orgId from auth:', req.user?.orgId);
       console.log('[createConnection] Full request query:', JSON.stringify(req.query));
       console.log('[createConnection] Request URL:', req.url);
-      
+
       // Extract orgId from query parameter first, then from auth - REQUIRED
       // Query parameter MUST take absolute precedence - this is the selected organization from UI
       let orgId: string | undefined;
-      
+
       // STRICT: Query parameter takes absolute precedence
       if (orgIdParam) {
         const trimmed = orgIdParam.trim();
         if (trimmed.length > 0) {
           orgId = trimmed;
-          console.log('[createConnection] ✅ Using orgId from query parameter (UI selection):', orgId);
+          console.log(
+            '[createConnection] ✅ Using orgId from query parameter (UI selection):',
+            orgId,
+          );
         } else {
           console.warn('[createConnection] ⚠️ Query parameter orgId is empty string');
         }
       } else {
         console.warn('[createConnection] ⚠️ No orgId query parameter provided');
       }
-      
+
       // Fallback to user auth orgId ONLY if query parameter was not provided
       if (!orgId && req.user?.orgId) {
         orgId = req.user.orgId;
         console.log('[createConnection] ⚠️ Falling back to orgId from user auth:', orgId);
       }
-      
+
       if (!orgId) {
-        console.error('[createConnection] ❌ No orgId available - query param:', orgIdParam, 'user orgId:', req.user?.orgId);
+        console.error(
+          '[createConnection] ❌ No orgId available - query param:',
+          orgIdParam,
+          'user orgId:',
+          req.user?.orgId,
+        );
         throw new BadRequestException(
           'Organization ID is required. Please provide orgId as a query parameter (?orgId=...) or ensure you are authenticated with an organization.',
         );
       }
-      
+
       const userId = req.user?.id;
       if (!userId) {
-        throw new BadRequestException(
-          'User ID is required. Please ensure you are authenticated.',
-        );
+        throw new BadRequestException('User ID is required. Please ensure you are authenticated.');
       }
-      
+
       // Debug logging - final values being used
       console.log('[createConnection] Final orgId being used:', orgId);
       console.log('[createConnection] Final userId being used:', userId);
@@ -299,9 +300,7 @@ export class PostgresDataSourceController {
 
       if (body.config.connectionString) {
         try {
-          const parsed = parsePostgresConnectionString(
-            body.config.connectionString,
-          );
+          const parsed = parsePostgresConnectionString(body.config.connectionString);
           baseConfig = {
             host: parsed.host,
             port: parsed.port,
@@ -331,21 +330,30 @@ export class PostgresDataSourceController {
       }
 
       // Detect Neon and Supabase connections using databaseType or hostname
-      const databaseType = body.config.databaseType || (host.includes('.neon.tech') ? 'neon' : 
-        (host.includes('supabase.co') || host.includes('supabase.com') ? 'supabase' : 'other'));
+      const databaseType =
+        body.config.databaseType ||
+        (host.includes('.neon.tech')
+          ? 'neon'
+          : host.includes('supabase.co') || host.includes('supabase.com')
+            ? 'supabase'
+            : 'other');
       const isNeon = databaseType === 'neon' || host.includes('.neon.tech');
-      const isSupabase = databaseType === 'supabase' || 
-        host.includes('supabase.co') || host.includes('supabase.com');
-      
+      const isSupabase =
+        databaseType === 'supabase' ||
+        host.includes('supabase.co') ||
+        host.includes('supabase.com');
+
       // Don't auto-enable SSL for localhost/127.0.0.1 (development)
       const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.');
-      
+
       // Auto-enable SSL for Neon and Supabase if not explicitly disabled and not localhost
-      const shouldEnableSSL = !isLocalhost && (isNeon || isSupabase || body.config.ssl?.enabled === true);
-      
+      const shouldEnableSSL =
+        !isLocalhost && (isNeon || isSupabase || body.config.ssl?.enabled === true);
+
       // For localhost with SSL, don't reject unauthorized certificates
-      const shouldRejectUnauthorized = !isLocalhost && body.config.ssl?.rejectUnauthorized !== false;
-      
+      const shouldRejectUnauthorized =
+        !isLocalhost && body.config.ssl?.rejectUnauthorized !== false;
+
       // For Neon databases, extract endpoint ID and add to options
       // Only add Neon options if it's actually a Neon host (not localhost)
       let neonOptions: string | undefined;
@@ -363,25 +371,27 @@ export class PostgresDataSourceController {
         password,
         ssl: shouldEnableSSL
           ? {
-            enabled: true,
-            caCert: body.config.ssl?.caCert,
-            rejectUnauthorized: shouldRejectUnauthorized,
-          }
+              enabled: true,
+              caCert: body.config.ssl?.caCert,
+              rejectUnauthorized: shouldRejectUnauthorized,
+            }
           : body.config.ssl?.enabled !== undefined
-          ? {
-            enabled: body.config.ssl.enabled,
-            caCert: body.config.ssl.caCert,
-            rejectUnauthorized: isLocalhost ? false : (body.config.ssl.rejectUnauthorized !== false),
-          }
-          : baseConfig.ssl,
+            ? {
+                enabled: body.config.ssl.enabled,
+                caCert: body.config.ssl.caCert,
+                rejectUnauthorized: isLocalhost
+                  ? false
+                  : body.config.ssl.rejectUnauthorized !== false,
+              }
+            : baseConfig.ssl,
         sshTunnel: body.config.sshTunnel?.enabled
           ? {
-            enabled: body.config.sshTunnel.enabled,
-            host: body.config.sshTunnel.host,
-            port: body.config.sshTunnel.port,
-            username: body.config.sshTunnel.username,
-            privateKey: body.config.sshTunnel.privateKey,
-          }
+              enabled: body.config.sshTunnel.enabled,
+              host: body.config.sshTunnel.host,
+              port: body.config.sshTunnel.port,
+              username: body.config.sshTunnel.username,
+              privateKey: body.config.sshTunnel.privateKey,
+            }
           : undefined,
         connectionTimeout: body.config.connectionTimeout,
         queryTimeout: body.config.queryTimeout,
@@ -444,10 +454,7 @@ export class PostgresDataSourceController {
     status: 400,
     description: 'Invalid organization ID format',
   })
-  async listConnections(
-    @Request() req: Request,
-    @Query('orgId') orgId?: string,
-  ) {
+  async listConnections(@Request() req: Request, @Query('orgId') orgId?: string) {
     try {
       // Use query parameter if provided, otherwise try to get from auth, otherwise throw error
       const finalOrgId = orgId || req?.user?.orgId;
@@ -456,27 +463,22 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
         );
       }
-      
+
       // Debug logging
       console.log('[listConnections] Query orgId:', orgId);
       console.log('[listConnections] User orgId:', req?.user?.orgId);
       console.log('[listConnections] Final orgId:', finalOrgId);
-      
-      const connections =
-        await this.postgresDataSourceService.listConnections(finalOrgId);
-      
+
+      const connections = await this.postgresDataSourceService.listConnections(finalOrgId);
+
       console.log('[listConnections] Found connections:', connections.length);
-      
-      return createListResponse(
-        connections,
-        `Found ${connections.length} connection(s)`,
-        {
-          total: connections.length,
-          limit: connections.length,
-          offset: 0,
-          hasMore: false,
-        },
-      );
+
+      return createListResponse(connections, `Found ${connections.length} connection(s)`, {
+        total: connections.length,
+        limit: connections.length,
+        offset: 0,
+        hasMore: false,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -535,20 +537,12 @@ export class PostgresDataSourceController {
     try {
       // Use query parameter if provided, otherwise try to get from auth
       const finalOrgId = orgId || req?.user?.orgId;
-      const connection = await this.postgresDataSourceService.getConnection(
-        id,
-        finalOrgId,
-      );
-      return createSuccessResponse(
-        connection,
-        'Connection retrieved successfully',
-        HttpStatus.OK,
-        {
-          connectionId: connection.id,
-          connectionName: connection.name,
-          connectionStatus: connection.status,
-        },
-      );
+      const connection = await this.postgresDataSourceService.getConnection(id, finalOrgId);
+      return createSuccessResponse(connection, 'Connection retrieved successfully', HttpStatus.OK, {
+        connectionId: connection.id,
+        connectionName: connection.name,
+        connectionStatus: connection.status,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -588,8 +582,7 @@ export class PostgresDataSourceController {
   })
   @ApiBody({
     type: UpdateConnectionDto,
-    description:
-      'Connection update data. Only include fields you want to update.',
+    description: 'Connection update data. Only include fields you want to update.',
   })
   @ApiResponse({
     status: 200,
@@ -598,8 +591,7 @@ export class PostgresDataSourceController {
   })
   @ApiResponse({
     status: 400,
-    description:
-      'Invalid connection data, organization ID, or connection test failed',
+    description: 'Invalid connection data, organization ID, or connection test failed',
   })
   @ApiResponse({
     status: 404,
@@ -624,16 +616,11 @@ export class PostgresDataSourceController {
         finalOrgId,
         updates as Partial<PostgresConnectionConfig> & Record<string, unknown>,
       );
-      return createSuccessResponse(
-        updated,
-        'Connection updated successfully',
-        HttpStatus.OK,
-        {
-          connectionId: updated.id,
-          connectionName: updated.name,
-          updatedFields: Object.keys(updates),
-        },
-      );
+      return createSuccessResponse(updated, 'Connection updated successfully', HttpStatus.OK, {
+        connectionId: updated.id,
+        connectionName: updated.name,
+        updatedFields: Object.keys(updates),
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -655,8 +642,7 @@ export class PostgresDataSourceController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Delete connection',
-    description:
-      'Delete a PostgreSQL connection. Organization ID is required to verify ownership.',
+    description: 'Delete a PostgreSQL connection. Organization ID is required to verify ownership.',
   })
   @ApiParam({
     name: 'id',
@@ -809,8 +795,10 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
         );
       }
-      const schemasWithTables =
-        await this.postgresDataSourceService.discoverSchemasWithTables(id, finalOrgId);
+      const schemasWithTables = await this.postgresDataSourceService.discoverSchemasWithTables(
+        id,
+        finalOrgId,
+      );
 
       // Calculate total tables across all schemas
       const totalTables = schemasWithTables.reduce(
@@ -889,7 +877,7 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
         );
       }
-      
+
       // If schema is not provided, return all tables from all schemas
       let tables;
       if (!schema || schema.trim().length === 0) {
@@ -899,7 +887,7 @@ export class PostgresDataSourceController {
           finalOrgId,
         );
         // Flatten all tables from all schemas
-        tables = schemasWithTables.flatMap(s => s.tables || []);
+        tables = schemasWithTables.flatMap((s) => s.tables || []);
       } else {
         // Get tables from specific schema
         tables = await this.postgresDataSourceService.discoverTablesForSchema(
@@ -908,7 +896,7 @@ export class PostgresDataSourceController {
           schema,
         );
       }
-      
+
       return createListResponse(
         tables,
         `Found ${tables.length} table(s)${schema ? ` in schema "${schema}"` : ' across all schemas'}`,
@@ -985,17 +973,10 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
         );
       }
-      const discovery = await this.postgresDataSourceService.discoverSchema(
-        id,
-        finalOrgId,
-      );
-      const tableInfo = discovery.tables.find(
-        (t) => t.name === table && t.schema === schema,
-      );
+      const discovery = await this.postgresDataSourceService.discoverSchema(id, finalOrgId);
+      const tableInfo = discovery.tables.find((t) => t.name === table && t.schema === schema);
       if (!tableInfo) {
-        throw new NotFoundException(
-          `Table "${table}" not found in schema "${schema}"`,
-        );
+        throw new NotFoundException(`Table "${table}" not found in schema "${schema}"`);
       }
       return createSuccessResponse(
         tableInfo,
@@ -1057,22 +1038,13 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
         );
       }
-      const schema = await this.postgresDataSourceService.discoverSchema(
-        id,
-        finalOrgId,
-        true,
-      );
-      return createSuccessResponse(
-        schema,
-        'Schema cache refreshed successfully',
-        HttpStatus.OK,
-        {
-          connectionId: id,
-          totalDatabases: schema.databases.length,
-          totalSchemas: schema.schemas.length,
-          totalTables: schema.tables.length,
-        },
-      );
+      const schema = await this.postgresDataSourceService.discoverSchema(id, finalOrgId, true);
+      return createSuccessResponse(schema, 'Schema cache refreshed successfully', HttpStatus.OK, {
+        connectionId: id,
+        totalDatabases: schema.databases.length,
+        totalSchemas: schema.schemas.length,
+        totalTables: schema.tables.length,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -1136,9 +1108,7 @@ export class PostgresDataSourceController {
       }
       const userId = req?.user?.id;
       if (!userId) {
-        throw new BadRequestException(
-          'User ID is required. Please ensure you are authenticated.',
-        );
+        throw new BadRequestException('User ID is required. Please ensure you are authenticated.');
       }
       const result = await this.postgresDataSourceService.executeQuery(
         id,
@@ -1148,16 +1118,11 @@ export class PostgresDataSourceController {
         body.params,
         body.timeout,
       );
-      return createSuccessResponse(
-        result,
-        'Query executed successfully',
-        HttpStatus.OK,
-        {
-          connectionId: id,
-          rowsReturned: result.rowCount,
-          executionTimeMs: result.executionTimeMs,
-        },
-      );
+      return createSuccessResponse(result, 'Query executed successfully', HttpStatus.OK, {
+        connectionId: id,
+        rowsReturned: result.rowCount,
+        executionTimeMs: result.executionTimeMs,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -1261,8 +1226,7 @@ export class PostgresDataSourceController {
   @Post('connections/:id/sync')
   @ApiOperation({
     summary: 'Create sync job',
-    description:
-      'Create a new data synchronization job to sync PostgreSQL table data to Supabase.',
+    description: 'Create a new data synchronization job to sync PostgreSQL table data to Supabase.',
   })
   @ApiParam({
     name: 'id',
@@ -1309,18 +1273,13 @@ export class PostgresDataSourceController {
         body.customWhereClause,
         body.syncFrequency || 'manual',
       );
-      return createSuccessResponse(
-        syncJob,
-        'Sync job created successfully',
-        HttpStatus.CREATED,
-        {
-          connectionId: id,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          jobId: syncJob.id,
-          tableName: body.tableName,
-          syncMode: body.syncMode,
-        },
-      );
+      return createSuccessResponse(syncJob, 'Sync job created successfully', HttpStatus.CREATED, {
+        connectionId: id,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        jobId: syncJob.id,
+        tableName: body.tableName,
+        syncMode: body.syncMode,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -1371,16 +1330,12 @@ export class PostgresDataSourceController {
         );
       }
       const syncJobs = await this.postgresDataSourceService.getSyncJobs(id, finalOrgId);
-      return createListResponse(
-        syncJobs,
-        `Found ${syncJobs.length} sync job(s)`,
-        {
-          total: syncJobs.length,
-          limit: syncJobs.length,
-          offset: 0,
-          hasMore: false,
-        },
-      );
+      return createListResponse(syncJobs, `Found ${syncJobs.length} sync job(s)`, {
+        total: syncJobs.length,
+        limit: syncJobs.length,
+        offset: 0,
+        hasMore: false,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -1441,23 +1396,14 @@ export class PostgresDataSourceController {
         );
       }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const syncJob = await this.postgresDataSourceService.getSyncJob(
-        id,
-        jobId,
-        finalOrgId,
-      );
-      return createSuccessResponse(
-        syncJob,
-        'Sync job retrieved successfully',
-        HttpStatus.OK,
-        {
-          connectionId: id,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          jobId: syncJob.id,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          jobStatus: syncJob.status,
-        },
-      );
+      const syncJob = await this.postgresDataSourceService.getSyncJob(id, jobId, finalOrgId);
+      return createSuccessResponse(syncJob, 'Sync job retrieved successfully', HttpStatus.OK, {
+        connectionId: id,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        jobId: syncJob.id,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        jobStatus: syncJob.status,
+      });
     } catch (error) {
       // If it's already a NestJS exception, re-throw it
       if (
@@ -1654,10 +1600,7 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
         );
       }
-      const health = await this.postgresDataSourceService.getConnectionHealth(
-        id,
-        finalOrgId,
-      );
+      const health = await this.postgresDataSourceService.getConnectionHealth(id, finalOrgId);
       return createSuccessResponse(
         health,
         'Connection health retrieved successfully',
@@ -1687,8 +1630,7 @@ export class PostgresDataSourceController {
   @Get('connections/:id/query-logs')
   @ApiOperation({
     summary: 'Get query logs',
-    description:
-      'Retrieve query execution logs for a connection. Supports pagination.',
+    description: 'Retrieve query execution logs for a connection. Supports pagination.',
   })
   @ApiParam({
     name: 'id',
@@ -1795,10 +1737,7 @@ export class PostgresDataSourceController {
           'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated with an organization.',
         );
       }
-      const metrics = await this.postgresDataSourceService.getConnectionMetrics(
-        id,
-        finalOrgId,
-      );
+      const metrics = await this.postgresDataSourceService.getConnectionMetrics(id, finalOrgId);
       return createSuccessResponse(
         metrics,
         'Connection metrics retrieved successfully',

@@ -1,12 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsString,
-  IsNotEmpty,
-  IsObject,
-  ValidateNested,
-} from 'class-validator';
-import { TestConnectionDto } from './test-connection.dto';
 import { Type } from 'class-transformer';
+import { IsNotEmpty, IsObject, IsString, ValidateNested } from 'class-validator';
+import { TestConnectionDto } from './test-connection.dto';
 
 export class CreateConnectionDto {
   @ApiProperty({

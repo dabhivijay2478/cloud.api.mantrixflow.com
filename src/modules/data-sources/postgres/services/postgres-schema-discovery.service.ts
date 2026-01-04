@@ -5,27 +5,25 @@
 
 import { Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
+import { SCHEMA_DISCOVERY } from '../constants/postgres.constants';
 import {
-  SchemaDiscoveryResult,
+  ColumnInfo,
   DatabaseInfo,
+  IndexInfo,
+  SchemaDiscoveryResult,
   SchemaInfo,
   TableInfo,
-  ColumnInfo,
-  IndexInfo,
 } from '../postgres.types';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 import {
-  mapPostgresTypeToTypeScript,
   isArrayType,
   isJsonbType,
+  mapPostgresTypeToTypeScript,
 } from '../utils/postgres-type-mapper.util';
-import { SCHEMA_DISCOVERY } from '../constants/postgres.constants';
+import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresSchemaDiscoveryService {
-  constructor(
-    private readonly connectionPoolService: PostgresConnectionPoolService,
-  ) {}
+  constructor(private readonly connectionPoolService: PostgresConnectionPoolService) {}
 
   /**
    * Discover complete schema
@@ -163,9 +161,7 @@ export class PostgresSchemaDiscoveryService {
     `;
 
     try {
-      const result = await pool.query(tablesQuery, [
-        SCHEMA_DISCOVERY.MAX_TABLES,
-      ]);
+      const result = await pool.query(tablesQuery, [SCHEMA_DISCOVERY.MAX_TABLES]);
       const tables: TableInfo[] = [];
 
       for (const row of result.rows) {
@@ -201,10 +197,7 @@ export class PostgresSchemaDiscoveryService {
   /**
    * Discover all tables with metadata from a specific schema
    */
-  async discoverTables(
-    pool: Pool,
-    schema: string = 'public',
-  ): Promise<TableInfo[]> {
+  async discoverTables(pool: Pool, schema: string = 'public'): Promise<TableInfo[]> {
     const tablesQuery = `
       SELECT 
         t.table_schema as schema,
@@ -234,10 +227,7 @@ export class PostgresSchemaDiscoveryService {
     `;
 
     try {
-      const result = await pool.query(tablesQuery, [
-        schema,
-        SCHEMA_DISCOVERY.MAX_TABLES,
-      ]);
+      const result = await pool.query(tablesQuery, [schema, SCHEMA_DISCOVERY.MAX_TABLES]);
       const tables: TableInfo[] = [];
 
       for (const row of result.rows) {
@@ -286,7 +276,7 @@ export class PostgresSchemaDiscoveryService {
     try {
       const result = await pool.query(query, [schemaName]);
 
-      return parseInt((result.rows[0] as { count?: string })?.count || '0') > 0;
+      return parseInt((result.rows[0] as { count?: string })?.count || '0', 10) > 0;
     } catch {
       return false;
     }
@@ -319,19 +309,10 @@ export class PostgresSchemaDiscoveryService {
     const indexes = await this.discoverIndexes(pool, schema, tableName);
 
     // Get row count and size
-    const { rowCount, size, sizeFormatted } = await this.getTableStats(
-      pool,
-      schema,
-      tableName,
-    );
+    const { rowCount, size, sizeFormatted } = await this.getTableStats(pool, schema, tableName);
 
     // Get last updated (if available)
-    const lastUpdated = await this.getLastUpdated(
-      pool,
-      schema,
-      tableName,
-      columns,
-    );
+    const lastUpdated = await this.getLastUpdated(pool, schema, tableName, columns);
 
     return {
       name: tableName,
@@ -396,17 +377,11 @@ export class PostgresSchemaDiscoveryService {
       const columns: ColumnInfo[] = [];
 
       for (const row of result.rows as Array<Record<string, unknown>>) {
-        const isArray =
-          isArrayType(row.data_type as string) || (row.is_array as boolean);
+        const isArray = isArrayType(row.data_type as string) || (row.is_array as boolean);
 
-        const isJsonb =
-          isJsonbType(row.data_type as string) || (row.is_jsonb as boolean);
+        const isJsonb = isJsonbType(row.data_type as string) || (row.is_jsonb as boolean);
 
-        const tsType = mapPostgresTypeToTypeScript(
-          row.data_type as string,
-          isArray,
-          isJsonb,
-        );
+        const tsType = mapPostgresTypeToTypeScript(row.data_type as string, isArray, isJsonb);
 
         // Check if column is primary key or foreign key
         const isPrimaryKey = await this.isPrimaryKey(
@@ -481,7 +456,7 @@ export class PostgresSchemaDiscoveryService {
 
     const result = await pool.query(query, [schema, tableName, columnName]);
 
-    return parseInt((result.rows[0] as { count?: string })?.count || '0') > 0;
+    return parseInt((result.rows[0] as { count?: string })?.count || '0', 10) > 0;
   }
 
   /**
@@ -549,9 +524,7 @@ export class PostgresSchemaDiscoveryService {
     try {
       const result = await pool.query(query, [schema, tableName]);
 
-      return result.rows.map(
-        (row: Record<string, unknown>) => row.column_name as string,
-      );
+      return result.rows.map((row: Record<string, unknown>) => row.column_name as string);
     } catch {
       return [];
     }
@@ -564,9 +537,7 @@ export class PostgresSchemaDiscoveryService {
     pool: Pool,
     schema: string,
     tableName: string,
-  ): Promise<
-    Array<{ column: string; referencedTable: string; referencedColumn: string }>
-  > {
+  ): Promise<Array<{ column: string; referencedTable: string; referencedColumn: string }>> {
     const query = `
       SELECT 
         kcu1.column_name as column,
@@ -667,11 +638,9 @@ export class PostgresSchemaDiscoveryService {
       if (result.rows.length > 0) {
         const row = result.rows[0] as Record<string, unknown>;
 
-        const rowCount = parseInt((row.row_count as string | undefined) || '0');
+        const rowCount = parseInt((row.row_count as string | undefined) || '0', 10);
 
-        const sizeBytes = parseInt(
-          (row.size_bytes as string | undefined) || '0',
-        );
+        const sizeBytes = parseInt((row.size_bytes as string | undefined) || '0', 10);
         const sizeFormatted = this.formatBytes(sizeBytes);
 
         return { rowCount, size: sizeBytes, sizeFormatted };
@@ -685,9 +654,7 @@ export class PostgresSchemaDiscoveryService {
       const countQuery = `SELECT COUNT(*) as count FROM ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(tableName)}`;
       const countResult = await pool.query(countQuery);
 
-      const rowCount = parseInt(
-        (countResult.rows[0] as { count?: string })?.count || '0',
-      );
+      const rowCount = parseInt((countResult.rows[0] as { count?: string })?.count || '0', 10);
 
       return { rowCount, size: 0, sizeFormatted: '0 B' };
     } catch {
@@ -708,8 +675,7 @@ export class PostgresSchemaDiscoveryService {
       (col) =>
         col.name.toLowerCase().includes('updated_at') ||
         col.name.toLowerCase().includes('modified_at') ||
-        (col.dataType.includes('timestamp') &&
-          col.name.toLowerCase().includes('at')),
+        (col.dataType.includes('timestamp') && col.name.toLowerCase().includes('at')),
     );
 
     if (!updatedAtColumn) {
@@ -720,9 +686,7 @@ export class PostgresSchemaDiscoveryService {
       const query = `SELECT MAX(${this.quoteIdentifier(updatedAtColumn.name)}) as last_updated 
                      FROM ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(tableName)}`;
       const result = await pool.query(query);
-      const row = result.rows[0] as
-        | { last_updated?: string | number | Date }
-        | undefined;
+      const row = result.rows[0] as { last_updated?: string | number | Date } | undefined;
 
       if (row?.last_updated) {
         return new Date(row.last_updated);
@@ -742,7 +706,7 @@ export class PostgresSchemaDiscoveryService {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    return `${Math.round((bytes / k ** i) * 100) / 100} ${sizes[i]}`;
   }
 
   /**

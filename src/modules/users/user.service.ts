@@ -3,10 +3,10 @@
  * Business logic for user management
  */
 
-import { Injectable, NotFoundException, ConflictException, Inject, forwardRef } from '@nestjs/common';
-import { UserRepository } from './repositories/user.repository';
-import { OrganizationMemberService } from '../organizations/organization-member.service';
+import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
+import { OrganizationMemberService } from '../organizations/organization-member.service';
+import { UserRepository } from './repositories/user.repository';
 
 @Injectable()
 export class UserService {
@@ -53,10 +53,8 @@ export class UserService {
     app_metadata?: Record<string, unknown>;
   }): Promise<{ user: any; created: boolean }> {
     // Check if user already exists by Supabase user ID
-    let existingUser = await this.userRepository.findBySupabaseUserId(
-      supabaseUser.id,
-    );
-    
+    let existingUser = await this.userRepository.findBySupabaseUserId(supabaseUser.id);
+
     // Also check by email in case user exists but with different supabaseUserId
     // This can happen if user was invited before they signed up
     if (!existingUser) {
@@ -67,14 +65,18 @@ export class UserService {
       id: supabaseUser.id,
       supabaseUserId: supabaseUser.id,
       email: supabaseUser.email.toLowerCase(),
-      firstName: (supabaseUser.user_metadata?.first_name as string) || 
-                 (supabaseUser.user_metadata?.firstName as string),
-      lastName: (supabaseUser.user_metadata?.last_name as string) || 
-                (supabaseUser.user_metadata?.lastName as string),
-      fullName: (supabaseUser.user_metadata?.full_name as string) ||
-               `${supabaseUser.user_metadata?.first_name || ''} ${supabaseUser.user_metadata?.last_name || ''}`.trim(),
-      avatarUrl: (supabaseUser.user_metadata?.avatar_url as string) || 
-                 (supabaseUser.user_metadata?.avatarUrl as string),
+      firstName:
+        (supabaseUser.user_metadata?.first_name as string) ||
+        (supabaseUser.user_metadata?.firstName as string),
+      lastName:
+        (supabaseUser.user_metadata?.last_name as string) ||
+        (supabaseUser.user_metadata?.lastName as string),
+      fullName:
+        (supabaseUser.user_metadata?.full_name as string) ||
+        `${supabaseUser.user_metadata?.first_name || ''} ${supabaseUser.user_metadata?.last_name || ''}`.trim(),
+      avatarUrl:
+        (supabaseUser.user_metadata?.avatar_url as string) ||
+        (supabaseUser.user_metadata?.avatarUrl as string),
       emailVerified: !!supabaseUser.email_confirmed_at,
       metadata: {
         ...supabaseUser.user_metadata,
@@ -85,7 +87,7 @@ export class UserService {
     if (existingUser) {
       // Update existing user
       const updated = await this.userRepository.update(existingUser.id, userData);
-      
+
       // Link user to any pending invites (if user was invited but not yet linked)
       try {
         const linkedMembers = await this.memberService.linkUserToInvite(
@@ -113,7 +115,7 @@ export class UserService {
         // Log error but don't fail user update if invite linking fails
         console.error('Failed to link user to invites:', error);
       }
-      
+
       return { user: updated, created: false };
     } else {
       // Check if user was invited (has pending organization_members record)
@@ -171,7 +173,7 @@ export class UserService {
    */
   async getUserById(id: string) {
     let user = await this.userRepository.findById(id);
-    
+
     if (!user) {
       // User doesn't exist in database, try to sync from Supabase
       // Use admin client if available, otherwise try with regular client
@@ -192,7 +194,7 @@ export class UserService {
             // This is a workaround if service role key is not available
             console.warn('Service role key not configured. Cannot auto-sync user from Supabase.');
           }
-          
+
           if (supabaseUser) {
             // Sync user from Supabase
             try {
@@ -208,12 +210,19 @@ export class UserService {
               // If sync fails with duplicate email error, try to find by email
               if (syncError && typeof syncError === 'object' && 'cause' in syncError) {
                 const cause = (syncError as any).cause;
-                if (cause && typeof cause === 'object' && 'code' in cause && cause.code === '23505') {
+                if (
+                  cause &&
+                  typeof cause === 'object' &&
+                  'code' in cause &&
+                  cause.code === '23505'
+                ) {
                   // Duplicate email error - user exists but with different supabaseUserId
                   // Try to find by email
                   try {
                     if (supabaseUser?.email) {
-                      const existingUser = await this.userRepository.findByEmail(supabaseUser.email.toLowerCase());
+                      const existingUser = await this.userRepository.findByEmail(
+                        supabaseUser.email.toLowerCase(),
+                      );
                       if (existingUser) {
                         // Update the existing user with the new supabaseUserId
                         await this.userRepository.update(existingUser.id, {
@@ -227,7 +236,7 @@ export class UserService {
                   }
                 }
               }
-              
+
               // If still no user, re-throw the error
               if (!user) {
                 throw syncError;
@@ -241,7 +250,7 @@ export class UserService {
           }
         }
       }
-      
+
       // If still no user, throw error
       if (!user) {
         throw new NotFoundException(
@@ -249,7 +258,7 @@ export class UserService {
         );
       }
     }
-    
+
     return user;
   }
 
@@ -267,13 +276,16 @@ export class UserService {
   /**
    * Update user
    */
-  async updateUser(id: string, data: {
-    firstName?: string;
-    lastName?: string;
-    fullName?: string;
-    avatarUrl?: string;
-    metadata?: Record<string, unknown>;
-  }) {
+  async updateUser(
+    id: string,
+    data: {
+      firstName?: string;
+      lastName?: string;
+      fullName?: string;
+      avatarUrl?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
     // Update user in database
     const updatedUser = await this.userRepository.update(id, data);
 
@@ -286,12 +298,9 @@ export class UserService {
         if (data.fullName !== undefined) userMetadata.full_name = data.fullName;
         if (data.avatarUrl !== undefined) userMetadata.avatar_url = data.avatarUrl;
 
-        await this.supabaseAdmin.auth.admin.updateUserById(
-          updatedUser.supabaseUserId,
-          {
-            user_metadata: userMetadata,
-          },
-        );
+        await this.supabaseAdmin.auth.admin.updateUserById(updatedUser.supabaseUserId, {
+          user_metadata: userMetadata,
+        });
       } catch (error) {
         console.error('Failed to update Supabase user metadata:', error);
         // Don't fail the update if Supabase sync fails - database update succeeded

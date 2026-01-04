@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { OnboardingController } from './onboarding.controller';
-import { UserModule } from '../users/user.module';
 import { OrganizationModule } from '../organizations/organization.module';
+import { UserModule } from '../users/user.module';
+import { OnboardingController } from './onboarding.controller';
 
 @Module({
   imports: [UserModule, OrganizationModule],

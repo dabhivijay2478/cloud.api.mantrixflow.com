@@ -100,8 +100,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
     'Connection refused. Verify the database is running and accessible.',
   [PostgresErrorCode.INVALID_CREDENTIALS]:
     'Invalid username or password. Please check your credentials.',
-  [PostgresErrorCode.DATABASE_NOT_FOUND]:
-    'Database not found. Please verify the database name.',
+  [PostgresErrorCode.DATABASE_NOT_FOUND]: 'Database not found. Please verify the database name.',
   [PostgresErrorCode.QUERY_TIMEOUT]:
     'Query execution timed out. The query may be too complex or the database is slow.',
   [PostgresErrorCode.QUERY_PERMISSION_DENIED]:
@@ -116,8 +115,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
     'Table schema changed during sync. Please refresh the schema and try again.',
   [PostgresErrorCode.MAX_CONNECTIONS_EXCEEDED]:
     'Maximum number of connections exceeded for your organization.',
-  [PostgresErrorCode.ENCRYPTION_FAILED]:
-    'Failed to encrypt credentials. Please try again.',
+  [PostgresErrorCode.ENCRYPTION_FAILED]: 'Failed to encrypt credentials. Please try again.',
   [PostgresErrorCode.DECRYPTION_FAILED]:
     'Failed to decrypt credentials. The data may be corrupted.',
 };
@@ -125,15 +123,8 @@ export const ERROR_MESSAGES: Record<string, string> = {
 /**
  * Get user-friendly error message
  */
-export function getErrorMessage(
-  errorCode: string,
-  defaultMessage?: string,
-): string {
-  return (
-    ERROR_MESSAGES[errorCode] ||
-    defaultMessage ||
-    'An unexpected error occurred.'
-  );
+export function getErrorMessage(errorCode: string, defaultMessage?: string): string {
+  return ERROR_MESSAGES[errorCode] || defaultMessage || 'An unexpected error occurred.';
 }
 
 /**
@@ -165,11 +156,7 @@ export function mapPostgresError(error: unknown): PostgresErrorCode {
     return PostgresErrorCode.INVALID_CREDENTIALS;
   }
 
-  if (
-    code === '3D000' ||
-    message.includes('database') ||
-    message.includes('does not exist')
-  ) {
+  if (code === '3D000' || message.includes('database') || message.includes('does not exist')) {
     return PostgresErrorCode.DATABASE_NOT_FOUND;
   }
 
@@ -179,27 +166,15 @@ export function mapPostgresError(error: unknown): PostgresErrorCode {
 
   // Query errors
 
-  if (
-    code === '42P01' ||
-    message.includes('table') ||
-    message.includes('does not exist')
-  ) {
+  if (code === '42P01' || message.includes('table') || message.includes('does not exist')) {
     return PostgresErrorCode.QUERY_TABLE_NOT_FOUND;
   }
 
-  if (
-    code === '42703' ||
-    message.includes('column') ||
-    message.includes('does not exist')
-  ) {
+  if (code === '42703' || message.includes('column') || message.includes('does not exist')) {
     return PostgresErrorCode.QUERY_COLUMN_NOT_FOUND;
   }
 
-  if (
-    code === '42501' ||
-    message.includes('permission') ||
-    message.includes('denied')
-  ) {
+  if (code === '42501' || message.includes('permission') || message.includes('denied')) {
     return PostgresErrorCode.QUERY_PERMISSION_DENIED;
   }
 

@@ -3,14 +3,14 @@
  * Data access layer for organization_members table
  */
 
-import { Injectable, Inject } from '@nestjs/common';
-import { eq, and, or, desc } from 'drizzle-orm';
-import {
-  organizationMembers,
-  type OrganizationMember,
-  type NewOrganizationMember,
-} from '../../../database/schemas/organizations';
+import { Inject, Injectable } from '@nestjs/common';
+import { and, desc, eq, or } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
+import {
+  type NewOrganizationMember,
+  type OrganizationMember,
+  organizationMembers,
+} from '../../../database/schemas/organizations';
 
 @Injectable()
 export class OrganizationMemberRepository {
@@ -19,10 +19,7 @@ export class OrganizationMemberRepository {
    * Create a new organization member (invite)
    */
   async create(data: NewOrganizationMember): Promise<OrganizationMember> {
-    const [member] = await this.db
-      .insert(organizationMembers)
-      .values(data)
-      .returning();
+    const [member] = await this.db.insert(organizationMembers).values(data).returning();
     return member;
   }
 
@@ -108,9 +105,7 @@ export class OrganizationMemberRepository {
   /**
    * Find all members for an organization
    */
-  async findByOrganizationId(
-    organizationId: string,
-  ): Promise<OrganizationMember[]> {
+  async findByOrganizationId(organizationId: string): Promise<OrganizationMember[]> {
     return this.db
       .select()
       .from(organizationMembers)
@@ -155,10 +150,7 @@ export class OrganizationMemberRepository {
   /**
    * Update member
    */
-  async update(
-    id: string,
-    data: Partial<NewOrganizationMember>,
-  ): Promise<OrganizationMember> {
+  async update(id: string, data: Partial<NewOrganizationMember>): Promise<OrganizationMember> {
     const [member] = await this.db
       .update(organizationMembers)
       .set({ ...data, updatedAt: new Date() })
@@ -170,10 +162,7 @@ export class OrganizationMemberRepository {
   /**
    * Link user to invite (when user signs up)
    */
-  async linkUserToInvite(
-    inviteId: string,
-    userId: string,
-  ): Promise<OrganizationMember> {
+  async linkUserToInvite(inviteId: string, userId: string): Promise<OrganizationMember> {
     const [member] = await this.db
       .update(organizationMembers)
       .set({
@@ -219,4 +208,3 @@ export class OrganizationMemberRepository {
     await this.db.delete(organizationMembers).where(eq(organizationMembers.id, id));
   }
 }
-

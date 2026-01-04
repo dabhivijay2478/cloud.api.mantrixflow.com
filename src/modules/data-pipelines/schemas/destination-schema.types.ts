@@ -12,13 +12,13 @@ import { ColumnMapping, WriteResult } from '../../data-sources/postgres/postgres
 export interface DestinationSchemaConfig {
   /** Destination connection ID (PostgreSQL) */
   destinationConnectionId: string;
-  
+
   /** Destination schema name (database schema) */
   destinationSchema: string;
-  
+
   /** Destination table name */
   destinationTable: string;
-  
+
   /** Whether destination table already exists */
   destinationTableExists: boolean;
 }
@@ -30,10 +30,10 @@ export interface DestinationSchemaConfig {
 export interface DestinationSchemaDefinition {
   /** Schema name */
   schema: string;
-  
+
   /** Table name */
   table: string;
-  
+
   /** Column definitions */
   columns: Array<{
     name: string;
@@ -43,10 +43,10 @@ export interface DestinationSchemaDefinition {
     isPrimaryKey?: boolean;
     maxLength?: number;
   }>;
-  
+
   /** Primary key columns */
   primaryKeys: string[];
-  
+
   /** Indexes */
   indexes: Array<{
     name: string;
@@ -89,10 +89,10 @@ export interface DestinationSchemaValidation {
 export interface DestinationWriteConfig {
   /** Write mode: append, upsert, or replace */
   writeMode: 'append' | 'upsert' | 'replace';
-  
+
   /** Columns for upsert key (if writeMode is 'upsert') */
   upsertKey?: string[];
-  
+
   /** Column mappings from source to destination */
   columnMappings: ColumnMapping[];
 }
@@ -104,13 +104,13 @@ export interface DestinationWriteConfig {
 export interface DestinationWriteResult extends WriteResult {
   /** Destination schema */
   destinationSchema: string;
-  
+
   /** Destination table */
   destinationTable: string;
-  
+
   /** Columns written */
   columnsWritten: string[];
-  
+
   /** Schema changes applied */
   schemaChanges?: {
     columnsAdded: string[];
@@ -129,13 +129,13 @@ export interface DestinationSchemaComparison {
     destinationColumn: string;
     typeCompatible: boolean;
   }>;
-  
+
   /** Columns only in source */
   sourceOnlyColumns: string[];
-  
+
   /** Columns only in destination */
   destinationOnlyColumns: string[];
-  
+
   /** Type mismatches */
   typeMismatches: Array<{
     sourceColumn: string;
@@ -143,8 +143,7 @@ export interface DestinationSchemaComparison {
     sourceType: string;
     destinationType: string;
   }>;
-  
+
   /** Suggested mappings */
   suggestedMappings: ColumnMapping[];
 }
-

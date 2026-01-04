@@ -4,51 +4,48 @@
  */
 
 import {
-  Controller,
-  Post,
-  Get,
-  Patch,
-  Delete,
+  BadRequestException,
   Body,
-  Param,
+  ConflictException,
+  Controller,
+  Delete,
+  Get,
   HttpCode,
   HttpStatus,
-  Request,
-  BadRequestException,
   NotFoundException,
-  ConflictException,
+  Param,
+  Patch,
+  Post,
+  Request,
 } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
+
 type Request = ExpressRequest;
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiParam,
-  ApiBody,
-  ApiBearerAuth,
-} from '@nestjs/swagger';
+
 import { UseGuards } from '@nestjs/common';
-import { OrganizationMemberService } from './organization-member.service';
-import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
-import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import {
-  ApiSuccessResponse,
-  ApiListResponse,
-  ApiDeleteResponse,
-  createSuccessResponse,
-  createListResponse,
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import {
   createDeleteResponse,
+  createListResponse,
+  createSuccessResponse,
 } from '../../common/dto/api-response.dto';
+import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
+import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
+import { OrganizationMemberService } from './organization-member.service';
 
 @ApiTags('organizations')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
 @Controller('api/organizations')
 export class OrganizationMemberController {
-  constructor(
-    private readonly memberService: OrganizationMemberService,
-  ) {}
+  constructor(private readonly memberService: OrganizationMemberService) {}
 
   /**
    * Invite a member to an organization
@@ -90,24 +87,19 @@ export class OrganizationMemberController {
         userId,
       });
 
-      const member = await this.memberService.inviteMember(
-        organizationId,
-        userId,
-        dto,
-      );
+      const member = await this.memberService.inviteMember(organizationId, userId, dto);
 
       console.log('[INVITE API] Invite successful:', member.id);
-      
-      return createSuccessResponse(
-        member,
-        'Member invited successfully',
-        201,
-      );
+
+      return createSuccessResponse(member, 'Member invited successfully', 201);
     } catch (error) {
       console.error('[INVITE API] Error in inviteMember:', error);
       console.error('[INVITE API] Error type:', error?.constructor?.name);
-      console.error('[INVITE API] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-      
+      console.error(
+        '[INVITE API] Error details:',
+        JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      );
+
       // Re-throw NestJS exceptions as-is
       if (
         error instanceof BadRequestException ||
@@ -116,7 +108,7 @@ export class OrganizationMemberController {
       ) {
         throw error;
       }
-      
+
       // Wrap unexpected errors
       throw new BadRequestException(
         error instanceof Error ? error.message : 'Failed to invite member',
@@ -191,10 +183,7 @@ export class OrganizationMemberController {
     status: 200,
     description: 'Member updated successfully',
   })
-  async updateMember(
-    @Param('memberId') memberId: string,
-    @Body() dto: UpdateMemberDto,
-  ) {
+  async updateMember(@Param('memberId') memberId: string, @Body() dto: UpdateMemberDto) {
     const member = await this.memberService.updateMember(memberId, dto);
     return createSuccessResponse(member, 'Member updated successfully');
   }
@@ -224,4 +213,3 @@ export class OrganizationMemberController {
     return createDeleteResponse(memberId, 'Member removed successfully');
   }
 }
-

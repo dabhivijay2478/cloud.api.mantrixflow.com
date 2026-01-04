@@ -1,23 +1,19 @@
 import {
-  pgTable,
-  uuid,
-  varchar,
-  integer,
   boolean,
-  text,
-  timestamp,
+  integer,
   jsonb,
   pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
 } from 'drizzle-orm/pg-core';
 
 /**
  * Enum for connection status
  */
-export const connectionStatusEnum = pgEnum('connection_status', [
-  'active',
-  'inactive',
-  'error',
-]);
+export const connectionStatusEnum = pgEnum('connection_status', ['active', 'inactive', 'error']);
 
 /**
  * PostgreSQL Connections Table

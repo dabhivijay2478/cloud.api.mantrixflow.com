@@ -23,9 +23,7 @@ export interface ParsedConnectionString {
  * - postgres://user:password@host:port/database
  * - postgresql://user:password@host/database
  */
-export function parsePostgresConnectionString(
-  connectionString: string,
-): ParsedConnectionString {
+export function parsePostgresConnectionString(connectionString: string): ParsedConnectionString {
   if (!connectionString || typeof connectionString !== 'string') {
     throw new Error('Connection string must be a non-empty string');
   }
@@ -35,9 +33,7 @@ export function parsePostgresConnectionString(
 
   // Check if it's a URI format
   if (!trimmed.startsWith('postgresql://') && !trimmed.startsWith('postgres://')) {
-    throw new Error(
-      'Connection string must start with postgresql:// or postgres://',
-    );
+    throw new Error('Connection string must start with postgresql:// or postgres://');
   }
 
   try {
@@ -98,14 +94,14 @@ export function parsePostgresConnectionString(
     // or ep-<endpoint-id>.region.aws.neon.tech
     let connectionOptions: string | undefined;
     const isNeonDatabase = host.includes('.neon.tech');
-    
+
     if (isNeonDatabase) {
       // Extract endpoint ID (first part of hostname before first dot)
       const endpointId = host.split('.')[0];
-      
+
       // Check if options parameter already exists in connection string
       const existingOptions = url.searchParams.get('options');
-      
+
       if (existingOptions) {
         // Decode existing options to check if endpoint is already specified
         const decodedOptions = decodeURIComponent(existingOptions);
@@ -148,4 +144,3 @@ export function parsePostgresConnectionString(
     throw new Error('Failed to parse connection string: Invalid format');
   }
 }
-

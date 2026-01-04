@@ -3,31 +3,27 @@
  * NestJS module that wires together all data pipeline components
  */
 
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
+// Database
+import { createDrizzleDatabase } from '../../database/drizzle/database';
+// Import data-sources module services (for connection access)
+import { PostgresDataSourceModule } from '../data-sources/postgres/postgres-data-source.module';
 import { DataPipelineController } from './data-pipeline.controller';
-import { PostgresPipelineService } from './postgres-pipeline.service';
-
-// Repositories
-import { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
-import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
-import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
-
 // Services
 import { PostgresDestinationService } from './emitters/postgres-destination.service';
-import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
-import { PostgresPipelineQueueService } from './shared/postgres-pipeline-queue.service';
+import { PostgresPipelineService } from './postgres-pipeline.service';
+import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
+import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
+// Repositories
+import { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
 
 // Jobs
 import { PostgresPipelineProcessor } from './shared/jobs/postgres-pipeline.processor';
-
-// Import data-sources module services (for connection access)
-import { PostgresDataSourceModule } from '../data-sources/postgres/postgres-data-source.module';
-
-// Database
-import { createDrizzleDatabase } from '../../database/drizzle/database';
+import { PostgresPipelineQueueService } from './shared/postgres-pipeline-queue.service';
+import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
 
 @Module({
   imports: [
@@ -69,5 +65,4 @@ import { createDrizzleDatabase } from '../../database/drizzle/database';
   ],
   exports: [PostgresPipelineService, PostgresPipelineQueueService],
 })
-export class DataPipelineModule { }
-
+export class DataPipelineModule {}

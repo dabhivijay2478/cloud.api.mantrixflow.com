@@ -1,52 +1,40 @@
 import {
-  pgTable,
-  uuid,
-  varchar,
   integer,
-  text,
-  timestamp,
   jsonb,
   pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
 } from 'drizzle-orm/pg-core';
+import { pipelineDestinationSchemas } from '../destination-schemas/pipeline-destination-schemas.schema';
 import { runStatusEnum } from '../pipeline-runs/postgres-pipeline-runs.schema';
 import { pipelineSourceSchemas } from '../source-schemas/pipeline-source-schemas.schema';
-import { pipelineDestinationSchemas } from '../destination-schemas/pipeline-destination-schemas.schema';
 
 /**
  * Enum for write mode
  */
-export const writeModeEnum = pgEnum('write_mode', [
-  'append',
-  'upsert',
-  'replace',
-]);
+export const writeModeEnum = pgEnum('write_mode', ['append', 'upsert', 'replace']);
 
 /**
  * Enum for pipeline status
  */
-export const pipelineStatusEnum = pgEnum('pipeline_status', [
-  'active',
-  'paused',
-  'error',
-]);
+export const pipelineStatusEnum = pgEnum('pipeline_status', ['active', 'paused', 'error']);
 
 /**
  * Enum for migration state
  */
-export const migrationStateEnum = pgEnum('migration_state', [
-  'pending',
-  'running',
-  'listing',
-]);
+export const migrationStateEnum = pgEnum('migration_state', ['pending', 'running', 'listing']);
 
 // runStatusEnum is imported from pipeline-runs schema to avoid duplication
 
 /**
  * PostgreSQL Pipelines Table
  * Stores pipeline configurations for data synchronization
- * 
+ *
  * Now references separate source and destination schema tables for better organization.
- * 
+ *
  * Structure:
  * - Basic Info: id, orgId, userId, name, description
  * - Source Schema Reference: sourceSchemaId (references pipeline_source_schemas)
@@ -73,12 +61,12 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   // ============================================================================
   /** Source type (legacy column - kept for backward compatibility with database) */
   sourceType: varchar('source_type', { length: 100 }),
-  
+
   /** Source schema ID (references pipeline_source_schemas) */
   sourceSchemaId: uuid('source_schema_id')
     .notNull()
     .references(() => pipelineSourceSchemas.id, { onDelete: 'restrict' }),
-  
+
   /** Destination schema ID (references pipeline_destination_schemas) */
   destinationSchemaId: uuid('destination_schema_id')
     .notNull()
@@ -90,7 +78,7 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   // ============================================================================
   /** Destination connection ID (legacy - kept for backward compatibility, required during migration) */
   destinationConnectionId: uuid('destination_connection_id').notNull(),
-  
+
   /** Destination table name (legacy - kept for backward compatibility, required during migration) */
   destinationTable: varchar('destination_table', { length: 255 }),
 
@@ -153,4 +141,3 @@ export interface Transformation {
  */
 export type PostgresPipeline = typeof postgresPipelines.$inferSelect;
 export type NewPostgresPipeline = typeof postgresPipelines.$inferInsert;
-

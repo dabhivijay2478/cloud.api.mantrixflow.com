@@ -3,32 +3,17 @@
  * REST API endpoints for onboarding flow
  */
 
-import {
-  Controller,
-  Post,
-  Get,
-  Patch,
-  Body,
-  Request,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Request, UseGuards } from '@nestjs/common';
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
+
 type Request = ExpressRequest;
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBody,
-  ApiBearerAuth,
-} from '@nestjs/swagger';
+
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import { UserService } from '../users/user.service';
 import { OrganizationService } from '../organizations/organization.service';
-import {
-  ApiSuccessResponse,
-  createSuccessResponse,
-} from '../../common/dto/api-response.dto';
+import { UserService } from '../users/user.service';
 
 @ApiTags('onboarding')
 @ApiBearerAuth('JWT-auth')
@@ -37,7 +22,7 @@ import {
 export class OnboardingController {
   constructor(
     private readonly userService: UserService,
-    private readonly organizationService: OrganizationService,
+    readonly _organizationService: OrganizationService,
   ) {}
 
   /**
@@ -55,11 +40,11 @@ export class OnboardingController {
   async getOnboardingStatus(@Request() req: Request) {
     const userId = req.user?.id;
     const userEmail = req.user?.email;
-    
+
     if (!userId) {
       throw new Error('User not authenticated');
     }
-    
+
     try {
       const user = await this.userService.getUserById(userId);
       return createSuccessResponse(
@@ -81,7 +66,7 @@ export class OnboardingController {
           user_metadata: {},
           app_metadata: {},
         });
-        
+
         return createSuccessResponse(
           {
             completed: newUser.user.onboardingCompleted,
@@ -109,7 +94,15 @@ export class OnboardingController {
       properties: {
         step: {
           type: 'string',
-          enum: ['welcome', 'organization', 'data-source', 'connect', 'select', 'importing', 'complete'],
+          enum: [
+            'welcome',
+            'organization',
+            'data-source',
+            'connect',
+            'select',
+            'importing',
+            'complete',
+          ],
         },
       },
     },
@@ -118,17 +111,14 @@ export class OnboardingController {
     status: 200,
     description: 'Onboarding step updated successfully',
   })
-  async updateOnboardingStep(
-    @Request() req: Request,
-    @Body() data: { step: string },
-  ) {
+  async updateOnboardingStep(@Request() req: Request, @Body() data: { step: string }) {
     const userId = req.user?.id;
     const userEmail = req.user?.email;
-    
+
     if (!userId) {
       throw new Error('User not authenticated');
     }
-    
+
     // Ensure user exists in database
     try {
       await this.userService.getUserById(userId);
@@ -146,7 +136,7 @@ export class OnboardingController {
         throw error;
       }
     }
-    
+
     const user = await this.userService.updateOnboarding(
       userId,
       data.step === 'complete',
@@ -170,11 +160,11 @@ export class OnboardingController {
   async completeOnboarding(@Request() req: Request) {
     const userId = req.user?.id;
     const userEmail = req.user?.email;
-    
+
     if (!userId) {
       throw new Error('User not authenticated');
     }
-    
+
     // Ensure user exists in database
     try {
       await this.userService.getUserById(userId);
@@ -192,7 +182,7 @@ export class OnboardingController {
         throw error;
       }
     }
-    
+
     const user = await this.userService.updateOnboarding(userId, true, 'complete');
     return createSuccessResponse(user, 'Onboarding completed successfully');
   }

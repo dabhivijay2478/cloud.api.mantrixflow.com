@@ -1,14 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsString,
-  IsNumber,
-  IsOptional,
-  IsBoolean,
-  IsObject,
-  Min,
-  Max,
-  ValidateIf,
-} from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, Max, Min, ValidateIf } from 'class-validator';
 
 export class SSLConfigDto {
   @ApiProperty({

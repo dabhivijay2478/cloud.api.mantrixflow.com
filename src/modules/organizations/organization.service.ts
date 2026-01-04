@@ -3,17 +3,15 @@
  * Business logic for organization management
  */
 
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { Organization } from '../../database/schemas/organizations';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationRepository } from './repositories/organization.repository';
-import type { Organization } from '../../database/schemas/organizations';
 
 @Injectable()
 export class OrganizationService {
-  constructor(
-    private readonly organizationRepository: OrganizationRepository,
-  ) {}
+  constructor(private readonly organizationRepository: OrganizationRepository) {}
 
   /**
    * Generate slug from name
@@ -30,10 +28,7 @@ export class OrganizationService {
   /**
    * Create organization
    */
-  async createOrganization(
-    userId: string,
-    dto: CreateOrganizationDto,
-  ): Promise<Organization> {
+  async createOrganization(_userId: string, dto: CreateOrganizationDto): Promise<Organization> {
     const slug = dto.slug || this.generateSlug(dto.name);
 
     // Check if slug already exists
@@ -84,10 +79,7 @@ export class OrganizationService {
   /**
    * Update organization
    */
-  async updateOrganization(
-    id: string,
-    dto: UpdateOrganizationDto,
-  ): Promise<Organization> {
+  async updateOrganization(id: string, dto: UpdateOrganizationDto): Promise<Organization> {
     const organization = await this.getOrganization(id);
 
     // Check slug uniqueness if slug is being updated
@@ -122,7 +114,7 @@ export class OrganizationService {
    * Set current organization (placeholder - should update user's currentOrgId)
    * For now, just returns the organization
    */
-  async setCurrentOrganization(userId: string, id: string): Promise<Organization> {
+  async setCurrentOrganization(_userId: string, id: string): Promise<Organization> {
     return this.getOrganization(id);
   }
 }

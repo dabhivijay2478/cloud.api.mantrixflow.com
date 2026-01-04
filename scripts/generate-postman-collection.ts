@@ -3,9 +3,10 @@
  * This script fetches the OpenAPI JSON and converts it to Postman Collection v2.1 format
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import * as http from 'http';
+import * as fs from 'node:fs';
+import * as http from 'node:http';
+import * as path from 'node:path';
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const converter = require('openapi-to-postmanv2');
 
@@ -20,7 +21,7 @@ const OUTPUT_DIR = path.join(__dirname, '../postman');
 function generateFileName(openapiSpec: OpenAPISpec): string {
   // Get API name from OpenAPI spec
   const apiName =
-    (openapiSpec.info?.title && typeof openapiSpec.info.title === 'string')
+    openapiSpec.info?.title && typeof openapiSpec.info.title === 'string'
       ? openapiSpec.info.title
       : 'API';
 
@@ -33,7 +34,7 @@ function generateFileName(openapiSpec: OpenAPISpec): string {
 
   // Get version if available
   const version =
-    (openapiSpec.info?.version && typeof openapiSpec.info.version === 'string')
+    openapiSpec.info?.version && typeof openapiSpec.info.version === 'string'
       ? openapiSpec.info.version
       : '1.0.0';
   const sanitizedVersion = String(version).replace(/[^a-zA-Z0-9.-]/g, '');
@@ -82,38 +83,29 @@ interface PostmanCollection {
  */
 function convertOpenAPIToPostman(openapi: OpenAPISpec): Promise<any> {
   return new Promise((resolve, reject) => {
-    converter.convert(
-      { type: 'json', data: openapi },
-      {},
-      (err: Error | null, result: any) => {
-        if (err) {
-          reject(err);
+    converter.convert({ type: 'json', data: openapi }, {}, (err: Error | null, result: any) => {
+      if (err) {
+        reject(err);
+      } else {
+        if (result.result && result.result.length > 0) {
+          resolve(result.result[0].output[0].data);
         } else {
-          if (result.result && result.result.length > 0) {
-            resolve(result.result[0].output[0].data);
-          } else {
-            reject(
-              new Error('Failed to convert OpenAPI to Postman collection'),
-            );
-          }
+          reject(new Error('Failed to convert OpenAPI to Postman collection'));
         }
-      },
-    );
+      }
+    });
   });
 }
 
 /**
  * Convert OpenAPI spec to Postman Collection (Manual fallback)
  */
-function convertOpenAPIToPostmanManual(
-  openapi: OpenAPISpec,
-): PostmanCollection {
+function convertOpenAPIToPostmanManual(openapi: OpenAPISpec): PostmanCollection {
   const collection: PostmanCollection = {
     info: {
       name: openapi.info.title || 'MantrixFlow PostgreSQL Connector API',
       description: openapi.info.description || '',
-      schema:
-        'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
       _exporter_id: 'mantrixflow-postgres-connector',
     },
     item: [],
@@ -183,7 +175,7 @@ function convertOpenAPIToPostmanManual(
             value: contentType,
           });
 
-          if (schema && schema.properties) {
+          if (schema?.properties) {
             item.request.body = {
               mode: 'raw',
               raw: JSON.stringify(generateExampleFromSchema(schema), null, 2),
@@ -199,31 +191,25 @@ function convertOpenAPIToPostmanManual(
 
       // Add example responses
       if (operation.responses) {
-        Object.entries(operation.responses).forEach(
-          ([statusCode, response]: [string, any]) => {
-            if (response.content && response.content['application/json']) {
-              const schema = response.content['application/json'].schema;
-              item.response.push({
-                name: `${statusCode} ${response.description || ''}`,
-                originalRequest: { ...item.request },
-                status: statusCode,
-                code: parseInt(statusCode),
-                _postman_previewlanguage: 'json',
-                header: [
-                  {
-                    key: 'Content-Type',
-                    value: 'application/json',
-                  },
-                ],
-                body: JSON.stringify(
-                  generateExampleFromSchema(schema),
-                  null,
-                  2,
-                ),
-              });
-            }
-          },
-        );
+        Object.entries(operation.responses).forEach(([statusCode, response]: [string, any]) => {
+          if (response.content?.['application/json']) {
+            const schema = response.content['application/json'].schema;
+            item.response.push({
+              name: `${statusCode} ${response.description || ''}`,
+              originalRequest: { ...item.request },
+              status: statusCode,
+              code: parseInt(statusCode, 10),
+              _postman_previewlanguage: 'json',
+              header: [
+                {
+                  key: 'Content-Type',
+                  value: 'application/json',
+                },
+              ],
+              body: JSON.stringify(generateExampleFromSchema(schema), null, 2),
+            });
+          }
+        });
       }
 
       itemsByTag[tag].push(item);
@@ -299,15 +285,13 @@ function fetchOpenAPISpec(): Promise<OpenAPISpec> {
             const spec = JSON.parse(data) as OpenAPISpec;
             resolve(spec);
           } catch (error) {
-            const errorMessage =
-              error instanceof Error ? error.message : String(error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
             reject(new Error(`Failed to parse OpenAPI spec: ${errorMessage}`));
           }
         });
       })
       .on('error', (error) => {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
         reject(new Error(`Failed to fetch OpenAPI spec: ${errorMessage}`));
       });
   });

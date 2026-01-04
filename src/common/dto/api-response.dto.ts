@@ -238,10 +238,7 @@ export function createListResponse<T>(
 /**
  * Helper function to create delete response
  */
-export function createDeleteResponse(
-  deletedId: string,
-  message?: string,
-): ApiDeleteResponse {
+export function createDeleteResponse(deletedId: string, message?: string): ApiDeleteResponse {
   return new ApiDeleteResponse(deletedId, message, 200);
 }
 

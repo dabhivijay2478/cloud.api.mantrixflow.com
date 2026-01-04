@@ -3,16 +3,13 @@
  * Manages connection pools with SSH tunneling and SSL support
  */
 
+import { promises as dns, setDefaultResultOrder } from 'node:dns';
+import { EventEmitter } from 'node:events';
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Pool, PoolConfig, QueryResult } from 'pg';
-import { Client as SSHClient, ConnectConfig } from 'ssh2';
-import { EventEmitter } from 'events';
-import { promises as dns, setDefaultResultOrder } from 'dns';
-import {
-  PostgresConnectionConfig,
-  DecryptedConnectionCredentials,
-} from '../postgres.types';
+import { ConnectConfig, Client as SSHClient } from 'ssh2';
 import { CONNECTION_DEFAULTS } from '../constants/postgres.constants';
+import { DecryptedConnectionCredentials, PostgresConnectionConfig } from '../postgres.types';
 
 // Set Node.js to prefer IPv4 for DNS lookups (affects all connections)
 // This helps prevent IPv6 connectivity issues for ALL PostgreSQL connections
@@ -97,7 +94,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         // but log a warning that IPv6 issues might occur
         console.warn(
           `[PostgreSQL Connection] Failed to resolve ${host} to IPv4 address. ` +
-          `Connection will attempt with hostname (may try IPv6). Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+            `Connection will attempt with hostname (may try IPv6). Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
         );
       }
       // Return original hostname as last resort
@@ -105,8 +102,6 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       return host;
     }
   }
-
-
 
   /**
    * Create or get connection pool
@@ -127,7 +122,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     let actualHost = credentials.host;
     let actualPort = credentials.port;
     const actualUsername = credentials.username;
-    
+
     // Store original host before SSH tunnel changes it
     const originalHost = credentials.host;
 
@@ -142,13 +137,13 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     // Check if this is a Neon database (has .neon.tech in hostname)
     // Use original host, not actualHost (which might be localhost if SSH tunnel is used)
     const isNeonHost = originalHost.includes('.neon.tech');
-    
+
     // For Neon databases, use original hostname in connection string (don't resolve)
     // For other databases, resolve hostname to IPv4 address to force IPv4 connections
     // This prevents IPv6 connectivity issues (EHOSTUNREACH)
     let resolvedHost: string;
     let hostForConnection: string;
-    
+
     if (isNeonHost) {
       // For Neon, always use the original hostname (not resolved, not localhost from SSH tunnel)
       // This ensures SSL certificate validation works correctly
@@ -161,11 +156,14 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
 
     // SSL is enabled if explicitly configured
     const shouldUseSSL = credentials.sslEnabled === true;
-    
+
     // Don't reject unauthorized certificates for localhost (development)
     // Check original host, not resolved host, to avoid false positives
-    const isLocalhost = originalHost === 'localhost' || originalHost === '127.0.0.1' || originalHost.startsWith('127.');
-    const shouldRejectUnauthorized = !isLocalhost && (credentials.sslCaCert ? true : false);
+    const isLocalhost =
+      originalHost === 'localhost' ||
+      originalHost === '127.0.0.1' ||
+      originalHost.startsWith('127.');
+    const shouldRejectUnauthorized = !isLocalhost && !!credentials.sslCaCert;
 
     // Build pool configuration
     const poolConfig: PoolConfig = {
@@ -180,11 +178,9 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       connectionTimeoutMillis: CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS,
       ssl: shouldUseSSL
         ? {
-          rejectUnauthorized: shouldRejectUnauthorized,
-          ca: credentials.sslCaCert
-            ? Buffer.from(credentials.sslCaCert)
-            : undefined,
-        }
+            rejectUnauthorized: shouldRejectUnauthorized,
+            ca: credentials.sslCaCert ? Buffer.from(credentials.sslCaCert) : undefined,
+          }
         : false,
     };
 
@@ -193,9 +189,11 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       // For Neon, options are passed as connection string parameters
       // Construct a connection string with options
       // Always use SSL for Neon (unless it's actually localhost)
-      const sslMode = isLocalhost ? 'disable' : (shouldUseSSL ? 'require' : 'prefer');
+      const sslMode = isLocalhost ? 'disable' : shouldUseSSL ? 'require' : 'prefer';
       // Remove leading ? if present, and ensure proper encoding
-      let optionsParam = credentials.options.startsWith('?') ? credentials.options.slice(1) : credentials.options;
+      let optionsParam = credentials.options.startsWith('?')
+        ? credentials.options.slice(1)
+        : credentials.options;
       // Ensure options parameter is properly URL-encoded
       if (!optionsParam.includes('%3D')) {
         // If not already encoded, encode it
@@ -203,9 +201,12 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       }
       // Use original hostname for Neon connections to ensure SSL certificate validation works
       const connectionString = `postgresql://${encodeURIComponent(actualUsername)}:${encodeURIComponent(credentials.password)}@${hostForConnection}:${actualPort}/${encodeURIComponent(credentials.database)}?${optionsParam}${optionsParam.includes('sslmode') ? '' : `&sslmode=${sslMode}`}`;
-      
-      console.log('[PostgresConnectionPoolService] Neon connection string:', connectionString.replace(credentials.password, '***'));
-      
+
+      console.log(
+        '[PostgresConnectionPoolService] Neon connection string:',
+        connectionString.replace(credentials.password, '***'),
+      );
+
       // Use connection string format for Neon databases
       const neonPoolConfig: PoolConfig = {
         connectionString,
@@ -217,10 +218,13 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
 
       // Create pool with connection string
       const pool = new Pool(neonPoolConfig);
-      
+
       // Set up error handling
       pool.on('error', (err) => {
-        console.error(`[PostgresConnectionPoolService] Unexpected pool error for connection ${connectionId}:`, err);
+        console.error(
+          `[PostgresConnectionPoolService] Unexpected pool error for connection ${connectionId}:`,
+          err,
+        );
       });
 
       // Store pool with metadata
@@ -355,7 +359,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     try {
       // Store original host before SSH tunnel changes it
       const originalHost = config.host;
-      
+
       // Create SSH tunnel if needed
       let actualHost = config.host;
       let actualPort = config.port || CONNECTION_DEFAULTS.PORT;
@@ -383,12 +387,12 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       // Check if this is a Neon database (has .neon.tech in hostname)
       // Use original host from config, not actualHost (which might be localhost if SSH tunnel is used)
       const isNeonHost = originalHost.includes('.neon.tech');
-      
+
       // For Neon databases, use original hostname (don't resolve)
       // For other databases, resolve hostname to IPv4 address to force IPv4 connections
       let resolvedHost: string;
       let hostForConnection: string;
-      
+
       if (isNeonHost) {
         // For Neon, always use the original hostname (not resolved, not localhost from SSH tunnel)
         // This ensures SSL certificate validation works correctly
@@ -408,80 +412,79 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
 
       // Don't reject unauthorized certificates for localhost (development)
       // Check original host, not resolved host, to avoid false positives
-      const isLocalhost = originalHost === 'localhost' || originalHost === '127.0.0.1' || originalHost.startsWith('127.');
+      const isLocalhost =
+        originalHost === 'localhost' ||
+        originalHost === '127.0.0.1' ||
+        originalHost.startsWith('127.');
 
       // Use configured timeout or default
       const connectionTimeout =
         config.connectionTimeout || CONNECTION_DEFAULTS.CONNECTION_TIMEOUT_MS;
+      // Handle Neon endpoint ID if options are provided
+      if (config.options) {
+        // Don't use SSL for localhost even if options are present
+        const sslMode = isLocalhost ? 'disable' : shouldUseSSL ? 'require' : 'prefer';
+        // Remove leading ? if present, and ensure proper encoding
+        let optionsParam = config.options.startsWith('?')
+          ? config.options.slice(1)
+          : config.options;
+        // Ensure options parameter is properly URL-encoded
+        if (!optionsParam.includes('%3D')) {
+          // If not already encoded, encode it
+          optionsParam = optionsParam.replace('=', '%3D');
+        }
+        // Use original hostname for Neon connections to ensure SSL certificate validation works
+        const connectionString = `postgresql://${encodeURIComponent(actualUsername)}:${encodeURIComponent(config.password)}@${hostForConnection}:${actualPort}/${encodeURIComponent(config.database)}?${optionsParam}${optionsParam.includes('sslmode') ? '' : `&sslmode=${sslMode}`}`;
 
-      // Try connection
-      try {
-        // Handle Neon endpoint ID if options are provided
-        if (config.options) {
-          // Don't use SSL for localhost even if options are present
-          const sslMode = isLocalhost ? 'disable' : (shouldUseSSL ? 'require' : 'prefer');
-          // Remove leading ? if present, and ensure proper encoding
-          let optionsParam = config.options.startsWith('?') ? config.options.slice(1) : config.options;
-          // Ensure options parameter is properly URL-encoded
-          if (!optionsParam.includes('%3D')) {
-            // If not already encoded, encode it
-            optionsParam = optionsParam.replace('=', '%3D');
-          }
-          // Use original hostname for Neon connections to ensure SSL certificate validation works
-          const connectionString = `postgresql://${encodeURIComponent(actualUsername)}:${encodeURIComponent(config.password)}@${hostForConnection}:${actualPort}/${encodeURIComponent(config.database)}?${optionsParam}${optionsParam.includes('sslmode') ? '' : `&sslmode=${sslMode}`}`;
-          
-          console.log('[PostgresConnectionPoolService] Neon test connection string:', connectionString.replace(config.password, '***'));
-          
-          // Create temporary pool for testing with connection string
-          pool = new Pool({
-            connectionString,
-            max: 1,
-            connectionTimeoutMillis: connectionTimeout,
-          });
-        } else {
-          // Create temporary pool for testing
-          pool = new Pool({
-            host: hostForConnection,
-            port: actualPort,
-            database: config.database,
-            user: actualUsername, // Use corrected username for Supabase
-            password: config.password,
-            max: 1,
-            connectionTimeoutMillis: connectionTimeout,
-            ssl: shouldUseSSL
-              ? {
-                rejectUnauthorized: isLocalhost 
-                  ? false 
-                  : (config.ssl?.caCert
+        console.log(
+          '[PostgresConnectionPoolService] Neon test connection string:',
+          connectionString.replace(config.password, '***'),
+        );
+
+        // Create temporary pool for testing with connection string
+        pool = new Pool({
+          connectionString,
+          max: 1,
+          connectionTimeoutMillis: connectionTimeout,
+        });
+      } else {
+        // Create temporary pool for testing
+        pool = new Pool({
+          host: hostForConnection,
+          port: actualPort,
+          database: config.database,
+          user: actualUsername, // Use corrected username for Supabase
+          password: config.password,
+          max: 1,
+          connectionTimeoutMillis: connectionTimeout,
+          ssl: shouldUseSSL
+            ? {
+                rejectUnauthorized: isLocalhost
+                  ? false
+                  : config.ssl?.caCert
                     ? config.ssl.rejectUnauthorized !== false
-                    : false),
-                ca: config.ssl?.caCert
-                  ? Buffer.from(config.ssl.caCert)
-                  : undefined,
+                    : false,
+                ca: config.ssl?.caCert ? Buffer.from(config.ssl.caCert) : undefined,
               }
-              : false,
-          });
-        }
+            : false,
+        });
+      }
 
-        // Test connection
-        const client = await pool.connect();
-        try {
-          const result = await client.query('SELECT version()');
+      // Test connection
+      const client = await pool.connect();
+      try {
+        const result = await client.query('SELECT version()');
 
-          const version =
-            (result.rows[0] as { version?: string })?.version || 'Unknown';
-          const responseTimeMs = Date.now() - startTime;
+        const version = (result.rows[0] as { version?: string })?.version || 'Unknown';
+        const responseTimeMs = Date.now() - startTime;
 
-          return {
-            success: true,
-            version,
-            responseTimeMs,
-          };
-        } finally {
-          client.release();
-        }
-      } catch (error) {
-        throw error;
+        return {
+          success: true,
+          version,
+          responseTimeMs,
+        };
+      } finally {
+        client.release();
       }
     } catch (error) {
       // Properly extract and return error message
@@ -502,8 +505,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
           aggregateError.errors.length > 0
         ) {
           const firstError = aggregateError.errors[0];
-          errorMessage =
-            firstError.message || firstError.code || 'Connection failed';
+          errorMessage = firstError.message || firstError.code || 'Connection failed';
           errorCode = firstError.code || aggregateError.code || '';
         } else if (aggregateError.code) {
           errorCode = aggregateError.code;
@@ -515,9 +517,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       } else if (typeof error === 'string') {
         errorMessage = error;
       } else if (error && typeof error === 'object' && 'message' in error) {
-        errorMessage =
-          String((error as { message: unknown }).message) ||
-          'Connection failed';
+        errorMessage = String((error as { message: unknown }).message) || 'Connection failed';
         errorCode = (error as { code?: unknown }).code
           ? String((error as { code: unknown }).code)
           : '';
@@ -536,19 +536,14 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       ) {
         return {
           success: false,
-          error:
-            'Connection timed out. Please check your network and database settings.',
+          error: 'Connection timed out. Please check your network and database settings.',
         };
       }
 
-      if (
-        errorMessage.includes('ECONNREFUSED') ||
-        errorCode === 'ECONNREFUSED'
-      ) {
+      if (errorMessage.includes('ECONNREFUSED') || errorCode === 'ECONNREFUSED') {
         return {
           success: false,
-          error:
-            'Connection refused. Please verify the host and port are correct.',
+          error: 'Connection refused. Please verify the host and port are correct.',
         };
       }
 
@@ -559,10 +554,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
         };
       }
 
-      if (
-        errorMessage.includes('EHOSTUNREACH') ||
-        errorCode === 'EHOSTUNREACH'
-      ) {
+      if (errorMessage.includes('EHOSTUNREACH') || errorCode === 'EHOSTUNREACH') {
         return {
           success: false,
           error:
@@ -573,8 +565,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
       if (errorMessage.includes('password authentication failed')) {
         return {
           success: false,
-          error:
-            'Authentication failed. Please verify your username and password.',
+          error: 'Authentication failed. Please verify your username and password.',
         };
       }
 
@@ -635,9 +626,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
   /**
    * Create SSH tunnel
    */
-  private async createSSHTunnel(
-    credentials: DecryptedConnectionCredentials,
-  ): Promise<SSHClient> {
+  private async createSSHTunnel(credentials: DecryptedConnectionCredentials): Promise<SSHClient> {
     return new Promise((resolve, reject) => {
       const ssh = new SSHClient();
       let localPort: number;
@@ -665,13 +654,11 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
 
             // Create a local server that forwards to the stream
             // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-            const net = require('net');
+            const net = require('node:net');
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            const server = net.createServer(
-              (localStream: NodeJS.ReadWriteStream) => {
-                localStream.pipe(stream).pipe(localStream);
-              },
-            );
+            const server = net.createServer((localStream: NodeJS.ReadWriteStream) => {
+              localStream.pipe(stream).pipe(localStream);
+            });
 
             // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             server.listen(0, () => {
@@ -721,9 +708,8 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
     try {
       await metadata.pool.end();
       if (metadata.sshTunnel) {
-        const sshConfig = (
-          metadata.sshTunnel as { config?: { server?: { close: () => void } } }
-        ).config;
+        const sshConfig = (metadata.sshTunnel as { config?: { server?: { close: () => void } } })
+          .config;
         if (sshConfig?.server) {
           sshConfig.server.close();
         }
@@ -770,9 +756,7 @@ export class PostgresConnectionPoolService implements OnModuleDestroy {
    * Cleanup on module destroy
    */
   async onModuleDestroy() {
-    const closePromises = Array.from(this.pools.keys()).map((id) =>
-      this.closePool(id),
-    );
+    const closePromises = Array.from(this.pools.keys()).map((id) => this.closePool(id));
     await Promise.all(closePromises);
   }
 

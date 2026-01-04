@@ -4,9 +4,9 @@
  */
 
 import {
-  PostgresErrorCode,
-  mapPostgresError,
   getErrorMessage,
+  mapPostgresError,
+  PostgresErrorCode,
 } from '../constants/error-codes.constants';
 
 /**
@@ -29,9 +29,7 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
   if (
     errorObj.code &&
     errorObj.message &&
-    Object.values(PostgresErrorCode).includes(
-      errorObj.code as PostgresErrorCode,
-    )
+    Object.values(PostgresErrorCode).includes(errorObj.code as PostgresErrorCode)
   ) {
     return {
       code: errorObj.code as PostgresErrorCode | string,
@@ -57,7 +55,7 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
   if (pgError?.code) {
     // This is a direct PostgreSQL error - use the code directly
     const pgErrorCode = pgError.code;
-    
+
     // Map known PostgreSQL error codes
     if (pgErrorCode === '23503') {
       // Foreign key constraint violation
@@ -69,10 +67,11 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
           constraint: pgError.constraint,
           detail: pgError.detail,
         },
-        suggestion: 'The referenced record may not exist. Please check that all related records exist in the database.',
+        suggestion:
+          'The referenced record may not exist. Please check that all related records exist in the database.',
       };
     }
-    
+
     if (pgErrorCode === '23502') {
       // NOT NULL constraint violation
       return {
@@ -86,7 +85,7 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
         suggestion: 'Please check that all required fields are provided.',
       };
     }
-    
+
     if (pgErrorCode === '23505') {
       // Unique constraint violation
       return {
@@ -107,7 +106,7 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
 
   const message = getErrorMessage(
     pgErrorCode,
-    (actualError as { message?: string })?.message || errorObj.message as string | undefined,
+    (actualError as { message?: string })?.message || (errorObj.message as string | undefined),
   );
 
   // Extract additional details from the actual error
@@ -138,10 +137,7 @@ export function mapErrorToStandardized(error: unknown): StandardizedError {
 /**
  * Generate helpful suggestion based on error code
  */
-function generateSuggestion(
-  code: PostgresErrorCode,
-  error: unknown,
-): string | undefined {
+function generateSuggestion(code: PostgresErrorCode, error: unknown): string | undefined {
   const errorObj = error as Record<string, unknown>;
   switch (code) {
     case PostgresErrorCode.CONNECTION_TIMEOUT:

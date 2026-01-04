@@ -3,10 +3,10 @@
  * Database operations for users
  */
 
-import { Injectable, Inject } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { users, type User, type NewUser } from '../../../database/schemas/users';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
+import { type NewUser, type User, users } from '../../../database/schemas/users';
 
 @Injectable()
 export class UserRepository {
@@ -43,11 +43,7 @@ export class UserRepository {
    * Find user by email
    */
   async findByEmail(email: string): Promise<User | null> {
-    const [user] = await this.db
-      .select()
-      .from(users)
-      .where(eq(users.email, email))
-      .limit(1);
+    const [user] = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
     return user || null;
   }
 
@@ -76,11 +72,7 @@ export class UserRepository {
   /**
    * Update onboarding status
    */
-  async updateOnboarding(
-    id: string,
-    completed: boolean,
-    step?: string,
-  ): Promise<User> {
+  async updateOnboarding(id: string, completed: boolean, step?: string): Promise<User> {
     const [user] = await this.db
       .update(users)
       .set({

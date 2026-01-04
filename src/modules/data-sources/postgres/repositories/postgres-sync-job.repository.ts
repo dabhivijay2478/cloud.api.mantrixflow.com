@@ -3,14 +3,14 @@
  * Handles database operations for postgres_sync_jobs table
  */
 
-import { Injectable, Inject } from '@nestjs/common';
-import { eq, and, desc, asc, lte } from 'drizzle-orm';
-import {
-  postgresSyncJobs,
-  PostgresSyncJob,
-  NewPostgresSyncJob,
-} from '../../../../database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema';
+import { Inject, Injectable } from '@nestjs/common';
+import { and, asc, desc, eq, lte } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
+import {
+  NewPostgresSyncJob,
+  PostgresSyncJob,
+  postgresSyncJobs,
+} from '../../../../database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema';
 
 @Injectable()
 export class PostgresSyncJobRepository {
@@ -20,32 +20,19 @@ export class PostgresSyncJobRepository {
    * Create sync job
    */
   async create(data: NewPostgresSyncJob): Promise<PostgresSyncJob> {
-    const [job] = await this.db
-      .insert(postgresSyncJobs)
-      .values(data)
-      .returning();
+    const [job] = await this.db.insert(postgresSyncJobs).values(data).returning();
     return job;
   }
 
   /**
    * Find sync job by ID
    */
-  async findById(
-    id: string,
-    connectionId?: string,
-  ): Promise<PostgresSyncJob | null> {
+  async findById(id: string, connectionId?: string): Promise<PostgresSyncJob | null> {
     const conditions = connectionId
-      ? and(
-          eq(postgresSyncJobs.id, id),
-          eq(postgresSyncJobs.connectionId, connectionId),
-        )
+      ? and(eq(postgresSyncJobs.id, id), eq(postgresSyncJobs.connectionId, connectionId))
       : eq(postgresSyncJobs.id, id);
 
-    const [job] = await this.db
-      .select()
-      .from(postgresSyncJobs)
-      .where(conditions)
-      .limit(1);
+    const [job] = await this.db.select().from(postgresSyncJobs).where(conditions).limit(1);
 
     return job || null;
   }
@@ -64,10 +51,7 @@ export class PostgresSyncJobRepository {
   /**
    * Update sync job
    */
-  async update(
-    id: string,
-    data: Partial<NewPostgresSyncJob>,
-  ): Promise<PostgresSyncJob> {
+  async update(id: string, data: Partial<NewPostgresSyncJob>): Promise<PostgresSyncJob> {
     const updateData = {
       ...data,
       updatedAt: new Date(),
@@ -107,11 +91,6 @@ export class PostgresSyncJobRepository {
     return await this.db
       .select()
       .from(postgresSyncJobs)
-      .where(
-        and(
-          eq(postgresSyncJobs.status, 'pending'),
-          lte(postgresSyncJobs.nextSyncAt, now),
-        ),
-      );
+      .where(and(eq(postgresSyncJobs.status, 'pending'), lte(postgresSyncJobs.nextSyncAt, now)));
   }
 }

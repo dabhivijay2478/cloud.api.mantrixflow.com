@@ -3,14 +3,14 @@
  * Database operations for organizations
  */
 
-import { Injectable, Inject } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
-import {
-  organizations,
-  type Organization,
-  type NewOrganization,
-} from '../../../database/schemas/organizations';
+import { Inject, Injectable } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
+import {
+  type NewOrganization,
+  type Organization,
+  organizations,
+} from '../../../database/schemas/organizations';
 
 @Injectable()
 export class OrganizationRepository {
@@ -20,10 +20,7 @@ export class OrganizationRepository {
    * Create a new organization
    */
   async create(data: NewOrganization): Promise<Organization> {
-    const [organization] = await this.db
-      .insert(organizations)
-      .values(data)
-      .returning();
+    const [organization] = await this.db.insert(organizations).values(data).returning();
     return organization;
   }
 
@@ -55,10 +52,7 @@ export class OrganizationRepository {
    * Find all organizations
    */
   async findAll(): Promise<Organization[]> {
-    return this.db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.isActive, true));
+    return this.db.select().from(organizations).where(eq(organizations.isActive, true));
   }
 
   /**

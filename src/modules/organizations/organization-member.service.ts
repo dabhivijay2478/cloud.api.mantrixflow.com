@@ -4,16 +4,16 @@
  */
 
 import {
-  Injectable,
-  NotFoundException,
   BadRequestException,
   ConflictException,
+  Injectable,
+  NotFoundException,
 } from '@nestjs/common';
-import { OrganizationMemberRepository } from './repositories/organization-member.repository';
-import { OrganizationRepository } from './repositories/organization.repository';
-import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
-import type { OrganizationMember } from '../../database/schemas/organizations';
 import { createClient } from '@supabase/supabase-js';
+import type { OrganizationMember } from '../../database/schemas/organizations';
+import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
+import { OrganizationRepository } from './repositories/organization.repository';
+import { OrganizationMemberRepository } from './repositories/organization-member.repository';
 
 @Injectable()
 export class OrganizationMemberService {
@@ -49,17 +49,17 @@ export class OrganizationMemberService {
     // Verify organization exists
     const organization = await this.organizationRepository.findById(organizationId);
     if (!organization) {
-      throw new NotFoundException(
-        `Organization with ID "${organizationId}" not found`,
-      );
+      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
     }
 
     // Normalize email
     const email = dto.email.toLowerCase().trim();
 
     // Check for existing active invite
-    const existingInvite =
-      await this.memberRepository.findActiveInviteByEmail(organizationId, email);
+    const existingInvite = await this.memberRepository.findActiveInviteByEmail(
+      organizationId,
+      email,
+    );
     if (existingInvite) {
       throw new ConflictException(
         `User with email "${email}" has already been invited to this organization`,
@@ -82,7 +82,7 @@ export class OrganizationMemberService {
     if (this.supabaseAdmin) {
       try {
         // Generate invite link - Supabase will redirect to accept-invite page
-        const inviteUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
+        const _inviteUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
 
         // Send invite email via Supabase Auth
         // This uses Supabase's built-in invite functionality
@@ -90,17 +90,14 @@ export class OrganizationMemberService {
         // Supabase redirects with tokens in URL hash (#access_token=...), which must be handled client-side
         // IMPORTANT: redirectTo must match one of the allowed redirect URLs in Supabase dashboard
         const redirectTo = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
-        const { error } = await this.supabaseAdmin.auth.admin.inviteUserByEmail(
-          email,
-          {
-            redirectTo,
-            data: {
-              organizationId,
-              organizationName: organization.name,
-              role: dto.role,
-            },
+        const { error } = await this.supabaseAdmin.auth.admin.inviteUserByEmail(email, {
+          redirectTo,
+          data: {
+            organizationId,
+            organizationName: organization.name,
+            role: dto.role,
           },
-        );
+        });
 
         if (error) {
           console.error('Failed to send invite email via Supabase:', error);
@@ -123,9 +120,7 @@ export class OrganizationMemberService {
     // Verify organization exists
     const organization = await this.organizationRepository.findById(organizationId);
     if (!organization) {
-      throw new NotFoundException(
-        `Organization with ID "${organizationId}" not found`,
-      );
+      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
     }
 
     return this.memberRepository.findByOrganizationId(organizationId);
@@ -145,11 +140,8 @@ export class OrganizationMemberService {
   /**
    * Update member
    */
-  async updateMember(
-    id: string,
-    dto: UpdateMemberDto,
-  ): Promise<OrganizationMember> {
-    const member = await this.getMember(id);
+  async updateMember(id: string, dto: UpdateMemberDto): Promise<OrganizationMember> {
+    const _member = await this.getMember(id);
 
     return this.memberRepository.update(id, dto);
   }
@@ -166,10 +158,7 @@ export class OrganizationMemberService {
    * Link a Supabase user to an invite when they sign up
    * This is called from the user service when a new user signs up
    */
-  async linkUserToInvite(
-    email: string,
-    userId: string,
-  ): Promise<OrganizationMember[]> {
+  async linkUserToInvite(email: string, userId: string): Promise<OrganizationMember[]> {
     // Find all pending invites for this email
     const invites = await this.memberRepository.findAllInvitesByEmail(email);
 
@@ -180,10 +169,7 @@ export class OrganizationMemberService {
     // Link user to all invites and update status
     const updatedMembers: OrganizationMember[] = [];
     for (const invite of invites) {
-      const updated = await this.memberRepository.linkUserToInvite(
-        invite.id,
-        userId,
-      );
+      const updated = await this.memberRepository.linkUserToInvite(invite.id, userId);
       updatedMembers.push(updated);
     }
 
@@ -204,7 +190,7 @@ export class OrganizationMemberService {
    */
   async activateMember(id: string): Promise<OrganizationMember> {
     const member = await this.getMember(id);
-    
+
     if (member.status === 'active') {
       return member; // Already active
     }
@@ -218,4 +204,3 @@ export class OrganizationMemberService {
     return this.memberRepository.updateStatus(id, 'active');
   }
 }
-

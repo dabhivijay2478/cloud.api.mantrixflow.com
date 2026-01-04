@@ -1,12 +1,4 @@
-import {
-  pgTable,
-  uuid,
-  varchar,
-  integer,
-  text,
-  timestamp,
-  pgEnum,
-} from 'drizzle-orm/pg-core';
+import { integer, pgEnum, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { postgresConnections } from '../connections/postgres-connections.schema';
 
 /**
@@ -22,12 +14,7 @@ export const syncJobStatusEnum = pgEnum('sync_job_status', [
 /**
  * Enum for sync frequency
  */
-export const syncFrequencyEnum = pgEnum('sync_frequency', [
-  'manual',
-  '15min',
-  '1hour',
-  '24hours',
-]);
+export const syncFrequencyEnum = pgEnum('sync_frequency', ['manual', '15min', '1hour', '24hours']);
 
 /**
  * Enum for sync mode
@@ -53,9 +40,7 @@ export const postgresSyncJobs = pgTable('postgres_sync_jobs', {
   startedAt: timestamp('started_at'),
   completedAt: timestamp('completed_at'),
   errorMessage: text('error_message'),
-  syncFrequency: syncFrequencyEnum('sync_frequency')
-    .notNull()
-    .default('manual'),
+  syncFrequency: syncFrequencyEnum('sync_frequency').notNull().default('manual'),
   nextSyncAt: timestamp('next_sync_at'),
   customWhereClause: text('custom_where_clause'), // Optional SQL WHERE clause
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -65,4 +50,3 @@ export const postgresSyncJobs = pgTable('postgres_sync_jobs', {
 // Type exports for TypeScript
 export type PostgresSyncJob = typeof postgresSyncJobs.$inferSelect;
 export type NewPostgresSyncJob = typeof postgresSyncJobs.$inferInsert;
-

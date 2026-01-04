@@ -3,10 +3,10 @@
  * Run this script to apply migrations to the database
  */
 
+import * as path from 'node:path';
+import * as dotenv from 'dotenv';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import * as dotenv from 'dotenv';
-import * as path from 'path';
 
 // Load environment variables
 dotenv.config();

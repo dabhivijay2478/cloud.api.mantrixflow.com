@@ -3,11 +3,8 @@
  * Prevents SQL injection and validates query safety
  */
 
-import {
-  DANGEROUS_KEYWORDS,
-  QUERY_CONFIG,
-} from '../constants/postgres.constants';
 import { PostgresErrorCode } from '../constants/error-codes.constants';
+import { DANGEROUS_KEYWORDS, QUERY_CONFIG } from '../constants/postgres.constants';
 
 /**
  * Sanitize and validate SQL query
@@ -51,14 +48,10 @@ export function sanitizeQuery(query: string): {
   }
 
   // Ensure query starts with SELECT or WITH (CTE)
-  if (
-    !normalizedQuery.startsWith('SELECT') &&
-    !normalizedQuery.startsWith('WITH')
-  ) {
+  if (!normalizedQuery.startsWith('SELECT') && !normalizedQuery.startsWith('WITH')) {
     return {
       isValid: false,
-      error:
-        'Query must start with SELECT or WITH. Only read-only queries are allowed.',
+      error: 'Query must start with SELECT or WITH. Only read-only queries are allowed.',
       errorCode: PostgresErrorCode.QUERY_DANGEROUS_KEYWORD,
     };
   }
@@ -68,8 +61,7 @@ export function sanitizeQuery(query: string): {
   if (semicolonCount > 1) {
     return {
       isValid: false,
-      error:
-        'Query contains multiple statements. Only single SELECT queries are allowed.',
+      error: 'Query contains multiple statements. Only single SELECT queries are allowed.',
       errorCode: PostgresErrorCode.QUERY_DANGEROUS_KEYWORD,
     };
   }

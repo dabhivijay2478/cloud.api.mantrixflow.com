@@ -49,9 +49,7 @@ export function mapPostgresTypeToTypeScript(
   if (
     normalizedType.includes('geometry') ||
     normalizedType.includes('geography') ||
-    ['point', 'line', 'lseg', 'box', 'path', 'polygon', 'circle'].includes(
-      normalizedType,
-    )
+    ['point', 'line', 'lseg', 'box', 'path', 'polygon', 'circle'].includes(normalizedType)
   ) {
     return 'object';
   }
@@ -69,10 +67,7 @@ export function mapPostgresTypeToTypeScript(
  * Detect if a type is an array
  */
 export function isArrayType(pgType: string): boolean {
-  return (
-    pgType.toLowerCase().endsWith('[]') ||
-    pgType.toLowerCase().includes('array')
-  );
+  return pgType.toLowerCase().endsWith('[]') || pgType.toLowerCase().includes('array');
 }
 
 /**
@@ -86,10 +81,7 @@ export function isJsonbType(pgType: string): boolean {
  * Detect if a type is an enum
  */
 export function isEnumType(pgType: string): boolean {
-  return (
-    pgType.toLowerCase().includes('enum') ||
-    pgType.toLowerCase().startsWith('user_defined')
-  );
+  return pgType.toLowerCase().includes('enum') || pgType.toLowerCase().startsWith('user_defined');
 }
 
 /**
@@ -98,9 +90,9 @@ export function isEnumType(pgType: string): boolean {
  */
 export function getEnumValues(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  connection: any,
+  _connection: any,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  enumTypeName: string,
+  _enumTypeName: string,
 ): string[] {
   // TODO: Implement enum value extraction
   // Query: SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = $1)

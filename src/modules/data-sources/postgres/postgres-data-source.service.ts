@@ -3,33 +3,29 @@
  * Main service that orchestrates all PostgreSQL connector functionality
  */
 
+import * as crypto from 'node:crypto';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { NewPostgresConnection } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
 import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
-import * as crypto from 'crypto';
-import { PostgresConnectionRepository } from './repositories/postgres-connection.repository';
-import { PostgresSyncJobRepository } from './repositories/postgres-sync-job.repository';
-import { PostgresQueryLogRepository } from './repositories/postgres-query-log.repository';
-import { PostgresConnectionPoolService } from './services/postgres-connection-pool.service';
-import { PostgresSchemaDiscoveryService } from './services/postgres-schema-discovery.service';
-import { PostgresQueryExecutorService } from './services/postgres-query-executor.service';
-import { PostgresSyncService } from './services/postgres-sync.service';
-import { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
-import { PostgresValidator } from './postgres.validator';
-import {
-  PostgresConnectionConfig,
-  SchemaDiscoveryResult,
-  QueryExecutionResult,
   ConnectionHealth,
   ConnectionMetrics,
   PostgresConnection,
+  PostgresConnectionConfig,
+  QueryExecutionResult,
+  SchemaDiscoveryResult,
+  SchemaInfo,
   SyncMode,
   TableInfo,
-  SchemaInfo,
 } from './postgres.types';
-import { NewPostgresConnection } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
+import { PostgresValidator } from './postgres.validator';
+import { PostgresConnectionRepository } from './repositories/postgres-connection.repository';
+import { PostgresQueryLogRepository } from './repositories/postgres-query-log.repository';
+import { PostgresSyncJobRepository } from './repositories/postgres-sync-job.repository';
+import { PostgresConnectionPoolService } from './services/postgres-connection-pool.service';
+import { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
+import { PostgresQueryExecutorService } from './services/postgres-query-executor.service';
+import { PostgresSchemaDiscoveryService } from './services/postgres-schema-discovery.service';
+import { PostgresSyncService } from './services/postgres-sync.service';
 
 @Injectable()
 export class PostgresDataSourceService {
@@ -74,15 +70,13 @@ export class PostgresDataSourceService {
     // Validate UUIDs - throw error if invalid (don't generate new ones)
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     const validUserId = this.validateUUID(userId, 'User ID');
-    
+
     console.log('[PostgresDataSourceService.createConnection] Using orgId:', validOrgId);
     console.log('[PostgresDataSourceService.createConnection] Using userId:', validUserId);
 
     // Validate connection count
-    const currentCount =
-      await this.connectionRepository.countByOrgId(validOrgId);
-    const countValidation =
-      this.validator.validateConnectionCount(currentCount);
+    const currentCount = await this.connectionRepository.countByOrgId(validOrgId);
+    const countValidation = this.validator.validateConnectionCount(currentCount);
     if (!countValidation.isValid) {
       throw new BadRequestException(countValidation.error);
     }
@@ -95,24 +89,23 @@ export class PostgresDataSourceService {
 
     // Detect Neon and Supabase connections and auto-enable SSL
     const isNeon = config.host.includes('.neon.tech');
-    const isSupabase =
-      config.host.includes('supabase.co') ||
-      config.host.includes('supabase.com');
-    
+    const isSupabase = config.host.includes('supabase.co') || config.host.includes('supabase.com');
+
     // Don't auto-enable SSL for localhost/127.0.0.1 (development)
-    const isLocalhost = config.host === 'localhost' || config.host === '127.0.0.1' || config.host.startsWith('127.');
-    
+    const isLocalhost =
+      config.host === 'localhost' || config.host === '127.0.0.1' || config.host.startsWith('127.');
+
     const sslEnabled =
       !isLocalhost &&
       config.ssl?.enabled !== false &&
       (isNeon || isSupabase || config.ssl?.enabled === true);
-    
+
     // For Neon databases, extract endpoint ID and add to options
     if (isNeon && !config.options) {
       const endpointId = config.host.split('.')[0];
       config.options = `endpoint%3D${encodeURIComponent(endpointId)}`;
     }
-    
+
     // For localhost connections, ensure rejectUnauthorized is false if SSL is enabled
     if (isLocalhost && config.ssl?.enabled && config.ssl.rejectUnauthorized !== false) {
       config.ssl.rejectUnauthorized = false;
@@ -188,16 +181,12 @@ export class PostgresDataSourceService {
       try {
         await this.connectionRepository.update(connectionId, {
           status: 'error',
-          lastError:
-            error instanceof Error ? error.message : 'Connection test failed',
+          lastError: error instanceof Error ? error.message : 'Connection test failed',
           lastConnectedAt: null,
         });
       } catch (updateError) {
         // Even the update failed - log but don't throw
-        console.error(
-          `Failed to update connection status for ${connectionId}:`,
-          updateError,
-        );
+        console.error(`Failed to update connection status for ${connectionId}:`, updateError);
       }
     }
   }
@@ -223,22 +212,16 @@ export class PostgresDataSourceService {
 
       // Create connection pool
       try {
-        const updatedConnection =
-          await this.connectionRepository.findById(connectionId);
+        const updatedConnection = await this.connectionRepository.findById(connectionId);
         if (updatedConnection) {
-          const credentials =
-            this.connectionRepository.decryptCredentials(updatedConnection);
-          await this.connectionPoolService.createPool(
-            connectionId,
-            credentials,
-          );
+          const credentials = this.connectionRepository.decryptCredentials(updatedConnection);
+          await this.connectionPoolService.createPool(connectionId, credentials);
         }
       } catch (error) {
         // Pool creation failed, update status
         await this.connectionRepository.update(connectionId, {
           status: 'error',
-          lastError:
-            error instanceof Error ? error.message : 'Pool creation failed',
+          lastError: error instanceof Error ? error.message : 'Pool creation failed',
         });
       }
     } else {
@@ -256,8 +239,7 @@ export class PostgresDataSourceService {
    */
   private validateOrGenerateUUID(value: string): string {
     // UUID v4 regex pattern
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
     if (uuidRegex.test(value)) {
       return value;
@@ -272,35 +254,24 @@ export class PostgresDataSourceService {
    */
   private validateUUID(value: string, fieldName: string = 'ID'): string {
     // UUID v4 regex pattern
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
     if (uuidRegex.test(value)) {
       return value;
     }
 
-    throw new BadRequestException(
-      `Invalid ${fieldName} format. Must be a valid UUID v4.`,
-    );
+    throw new BadRequestException(`Invalid ${fieldName} format. Must be a valid UUID v4.`);
   }
 
   /**
    * Get connection by ID
    */
-  async getConnection(
-    connectionId: string,
-    orgId?: string,
-  ): Promise<PostgresConnection> {
+  async getConnection(connectionId: string, orgId?: string): Promise<PostgresConnection> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
-    const validOrgId = orgId
-      ? this.validateUUID(orgId, 'Organization ID')
-      : undefined;
+    const validOrgId = orgId ? this.validateUUID(orgId, 'Organization ID') : undefined;
 
-    const connection = await this.connectionRepository.findById(
-      validConnectionId,
-      validOrgId,
-    );
+    const connection = await this.connectionRepository.findById(validConnectionId, validOrgId);
     if (!connection) {
       throw new NotFoundException('Connection not found');
     }
@@ -315,7 +286,11 @@ export class PostgresDataSourceService {
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     console.log('[PostgresDataSourceService.listConnections] Querying with orgId:', validOrgId);
     const connections = await this.connectionRepository.findByOrgId(validOrgId);
-    console.log('[PostgresDataSourceService.listConnections] Repository returned:', connections.length, 'connections');
+    console.log(
+      '[PostgresDataSourceService.listConnections] Repository returned:',
+      connections.length,
+      'connections',
+    );
     return connections;
   }
 
@@ -364,19 +339,15 @@ export class PostgresDataSourceService {
       const testConfig: PostgresConnectionConfig = {
         host: (updatesRecord.host as string | undefined) || connection.host,
         port: (updatesRecord.port as number | undefined) || connection.port,
-        database:
-          (updatesRecord.database as string | undefined) || connection.database,
-        username:
-          (updatesRecord.username as string | undefined) || connection.username,
-        password:
-          (updatesRecord.password as string | undefined) || connection.password,
+        database: (updatesRecord.database as string | undefined) || connection.database,
+        username: (updatesRecord.username as string | undefined) || connection.username,
+        password: (updatesRecord.password as string | undefined) || connection.password,
         ssl: normalizedUpdates.ssl,
         sshTunnel: normalizedUpdates.sshTunnel,
       };
 
       // Decrypt existing values if needed
-      const credentials =
-        this.connectionRepository.decryptCredentials(connection);
+      const credentials = this.connectionRepository.decryptCredentials(connection);
       if (!testConfig.host) testConfig.host = credentials.host;
       if (!testConfig.database) testConfig.database = credentials.database;
       if (!testConfig.username) testConfig.username = credentials.username;
@@ -384,9 +355,7 @@ export class PostgresDataSourceService {
 
       const testResult = await this.testConnection(testConfig);
       if (!testResult.success) {
-        throw new BadRequestException(
-          testResult.error || 'Connection test failed',
-        );
+        throw new BadRequestException(testResult.error || 'Connection test failed');
       }
     }
 
@@ -411,9 +380,7 @@ export class PostgresDataSourceService {
     if (updatesRecord.password !== undefined) {
       updateData.password = updatesRecord.password as string; // Will be encrypted in repository
     }
-    const ssl = updatesRecord.ssl as
-      | { enabled?: boolean; caCert?: string }
-      | undefined;
+    const ssl = updatesRecord.ssl as { enabled?: boolean; caCert?: string } | undefined;
     if (ssl?.enabled !== undefined) {
       updateData.sslEnabled = ssl.enabled;
     }
@@ -448,15 +415,11 @@ export class PostgresDataSourceService {
       updateData.connectionPoolSize = updatesRecord.poolSize as number;
     }
     if (updatesRecord.queryTimeout !== undefined) {
-      updateData.queryTimeoutSeconds =
-        (updatesRecord.queryTimeout as number) / 1000; // Convert ms to seconds
+      updateData.queryTimeoutSeconds = (updatesRecord.queryTimeout as number) / 1000; // Convert ms to seconds
     }
 
     // Update connection
-    const updated = await this.connectionRepository.update(
-      validConnectionId,
-      updateData,
-    );
+    const updated = await this.connectionRepository.update(validConnectionId, updateData);
 
     // Recreate pool if credentials changed
     if (
@@ -502,27 +465,17 @@ export class PostgresDataSourceService {
     // Ensure pool exists
     const pool = this.connectionPoolService.getPool(validConnectionId);
     if (!pool) {
-      const credentials =
-        this.connectionRepository.decryptCredentials(connection);
-      await this.connectionPoolService.createPool(
-        validConnectionId,
-        credentials,
-      );
+      const credentials = this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(validConnectionId, credentials);
     }
 
-    return await this.schemaDiscoveryService.discoverSchema(
-      validConnectionId,
-      forceRefresh,
-    );
+    return await this.schemaDiscoveryService.discoverSchema(validConnectionId, forceRefresh);
   }
 
   /**
    * Discover schemas with their tables
    */
-  async discoverSchemasWithTables(
-    connectionId: string,
-    orgId: string,
-  ): Promise<SchemaInfo[]> {
+  async discoverSchemasWithTables(connectionId: string, orgId: string): Promise<SchemaInfo[]> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
@@ -531,12 +484,8 @@ export class PostgresDataSourceService {
     // Ensure pool exists
     const pool = this.connectionPoolService.getPool(validConnectionId);
     if (!pool) {
-      const credentials =
-        this.connectionRepository.decryptCredentials(connection);
-      await this.connectionPoolService.createPool(
-        validConnectionId,
-        credentials,
-      );
+      const credentials = this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(validConnectionId, credentials);
     }
 
     // Get pool again after ensuring it exists
@@ -546,10 +495,8 @@ export class PostgresDataSourceService {
     }
 
     // Discover schemas and tables
-    const schemas =
-      await this.schemaDiscoveryService.discoverSchemas(finalPool);
-    const allTables =
-      await this.schemaDiscoveryService.discoverAllTables(finalPool);
+    const schemas = await this.schemaDiscoveryService.discoverSchemas(finalPool);
+    const allTables = await this.schemaDiscoveryService.discoverAllTables(finalPool);
 
     // Group tables by schema
     const tablesBySchema = new Map<string, TableInfo[]>();
@@ -557,7 +504,7 @@ export class PostgresDataSourceService {
       if (!tablesBySchema.has(table.schema)) {
         tablesBySchema.set(table.schema, []);
       }
-      tablesBySchema.get(table.schema)!.push(table);
+      tablesBySchema.get(table.schema)?.push(table);
     }
 
     // Map schemas with their tables
@@ -583,12 +530,8 @@ export class PostgresDataSourceService {
     // Ensure pool exists
     const pool = this.connectionPoolService.getPool(validConnectionId);
     if (!pool) {
-      const credentials =
-        this.connectionRepository.decryptCredentials(connection);
-      await this.connectionPoolService.createPool(
-        validConnectionId,
-        credentials,
-      );
+      const credentials = this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(validConnectionId, credentials);
     }
 
     // Get pool again after ensuring it exists
@@ -598,10 +541,7 @@ export class PostgresDataSourceService {
     }
 
     // Check if schema exists
-    const schemaExists = await this.schemaDiscoveryService.schemaExists(
-      finalPool,
-      schema,
-    );
+    const schemaExists = await this.schemaDiscoveryService.schemaExists(finalPool, schema);
     if (!schemaExists) {
       throw new NotFoundException(`Schema "${schema}" not found`);
     }
@@ -631,12 +571,8 @@ export class PostgresDataSourceService {
     // Ensure pool exists
     const pool = this.connectionPoolService.getPool(validConnectionId);
     if (!pool) {
-      const credentials =
-        this.connectionRepository.decryptCredentials(connection);
-      await this.connectionPoolService.createPool(
-        validConnectionId,
-        credentials,
-      );
+      const credentials = this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(validConnectionId, credentials);
     }
 
     const result = await this.queryExecutorService.executeQuery(
@@ -677,19 +613,11 @@ export class PostgresDataSourceService {
     // Ensure pool exists
     const pool = this.connectionPoolService.getPool(validConnectionId);
     if (!pool) {
-      const credentials =
-        this.connectionRepository.decryptCredentials(connection);
-      await this.connectionPoolService.createPool(
-        validConnectionId,
-        credentials,
-      );
+      const credentials = this.connectionRepository.decryptCredentials(connection);
+      await this.connectionPoolService.createPool(validConnectionId, credentials);
     }
 
-    return await this.queryExecutorService.explainQuery(
-      validConnectionId,
-      query,
-      params,
-    );
+    return await this.queryExecutorService.explainQuery(validConnectionId, query, params);
   }
 
   /**
@@ -735,9 +663,7 @@ export class PostgresDataSourceService {
       syncFrequency,
       customWhereClause,
       nextSyncAt:
-        syncFrequency !== 'manual'
-          ? this.calculateNextSyncTime(syncFrequency)
-          : undefined,
+        syncFrequency !== 'manual' ? this.calculateNextSyncTime(syncFrequency) : undefined,
     });
 
     // Start sync if manual
@@ -770,20 +696,13 @@ export class PostgresDataSourceService {
   /**
    * Get sync job by ID
    */
-  async getSyncJob(
-    connectionId: string,
-    jobId: string,
-    orgId: string,
-  ): Promise<any> {
+  async getSyncJob(connectionId: string, jobId: string, orgId: string): Promise<any> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validJobId = this.validateUUID(jobId, 'Job ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     await this.getConnection(validConnectionId, validOrgId); // Verify access
-    const job = await this.syncJobRepository.findById(
-      validJobId,
-      validConnectionId,
-    );
+    const job = await this.syncJobRepository.findById(validJobId, validConnectionId);
     if (!job) {
       throw new NotFoundException('Sync job not found');
     }
@@ -793,11 +712,7 @@ export class PostgresDataSourceService {
   /**
    * Cancel sync job
    */
-  async cancelSyncJob(
-    connectionId: string,
-    jobId: string,
-    orgId: string,
-  ): Promise<void> {
+  async cancelSyncJob(connectionId: string, jobId: string, orgId: string): Promise<void> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validJobId = this.validateUUID(jobId, 'Job ID');
@@ -809,10 +724,7 @@ export class PostgresDataSourceService {
   /**
    * Get connection health
    */
-  async getConnectionHealth(
-    connectionId: string,
-    orgId: string,
-  ): Promise<ConnectionHealth> {
+  async getConnectionHealth(connectionId: string, orgId: string): Promise<ConnectionHealth> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
@@ -823,26 +735,20 @@ export class PostgresDataSourceService {
   /**
    * Get connection metrics
    */
-  async getConnectionMetrics(
-    connectionId: string,
-    orgId: string,
-  ): Promise<ConnectionMetrics> {
+  async getConnectionMetrics(connectionId: string, orgId: string): Promise<ConnectionMetrics> {
     // Validate UUIDs - throw error if invalid (for queries)
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     await this.getConnection(validConnectionId, validOrgId); // Verify access
 
-    const stats =
-      await this.queryLogRepository.getStatistics(validConnectionId);
-    const poolStats =
-      this.connectionPoolService.getPoolStats(validConnectionId);
+    const stats = await this.queryLogRepository.getStatistics(validConnectionId);
+    const poolStats = this.connectionPoolService.getPoolStats(validConnectionId);
 
     return {
       connectionId: validConnectionId,
       ...stats,
       connectionPoolUtilization: poolStats
-        ? (poolStats.activeConnections / (poolStats.activeConnections + 10)) *
-          100
+        ? (poolStats.activeConnections / (poolStats.activeConnections + 10)) * 100
         : 0,
       dataVolumeTransferred: 0, // TODO: Calculate from query logs
     };
@@ -861,19 +767,13 @@ export class PostgresDataSourceService {
     const validConnectionId = this.validateUUID(connectionId, 'Connection ID');
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     await this.getConnection(validConnectionId, validOrgId); // Verify access
-    return await this.queryLogRepository.findByConnectionId(
-      validConnectionId,
-      limit,
-      offset,
-    );
+    return await this.queryLogRepository.findByConnectionId(validConnectionId, limit, offset);
   }
 
   /**
    * Calculate next sync time based on frequency
    */
-  private calculateNextSyncTime(
-    frequency: '15min' | '1hour' | '24hours',
-  ): Date {
+  private calculateNextSyncTime(frequency: '15min' | '1hour' | '24hours'): Date {
     const now = new Date();
     switch (frequency) {
       case '15min':

@@ -3,15 +3,15 @@
  * Handles database operations for postgres_query_logs table
  */
 
-import { Injectable, Inject } from '@nestjs/common';
-import { eq, desc, lt, sql } from 'drizzle-orm';
+import { Inject, Injectable } from '@nestjs/common';
+import { desc, eq, lt, sql } from 'drizzle-orm';
+import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 import {
-  postgresQueryLogs,
-  PostgresQueryLog,
   NewPostgresQueryLog,
+  PostgresQueryLog,
+  postgresQueryLogs,
 } from '../../../../database/schemas/data-sources/query-logs/postgres-query-logs.schema';
 import { QUERY_LOG_RETENTION_DAYS } from '../constants/postgres.constants';
-import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 
 @Injectable()
 export class PostgresQueryLogRepository {
@@ -21,10 +21,7 @@ export class PostgresQueryLogRepository {
    * Create query log entry
    */
   async create(data: NewPostgresQueryLog): Promise<PostgresQueryLog> {
-    const [log] = await this.db
-      .insert(postgresQueryLogs)
-      .values(data)
-      .returning();
+    const [log] = await this.db.insert(postgresQueryLogs).values(data).returning();
     return log;
   }
 
@@ -69,9 +66,7 @@ export class PostgresQueryLogRepository {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - QUERY_LOG_RETENTION_DAYS);
 
-    await this.db
-      .delete(postgresQueryLogs)
-      .where(lt(postgresQueryLogs.createdAt, cutoffDate));
+    await this.db.delete(postgresQueryLogs).where(lt(postgresQueryLogs.createdAt, cutoffDate));
 
     // Drizzle returns the result, but we need to check how many rows were affected
     // Since Drizzle doesn't return rowCount directly, we'll return 0 for now

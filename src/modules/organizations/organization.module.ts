@@ -1,13 +1,13 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createDrizzleDatabase } from '../../database/drizzle/database';
+import { UserModule } from '../users/user.module';
 import { OrganizationController } from './organization.controller';
-import { OrganizationMemberController } from './organization-member.controller';
 import { OrganizationService } from './organization.service';
+import { OrganizationMemberController } from './organization-member.controller';
 import { OrganizationMemberService } from './organization-member.service';
 import { OrganizationRepository } from './repositories/organization.repository';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
-import { UserModule } from '../users/user.module';
-import { createDrizzleDatabase } from '../../database/drizzle/database';
 
 @Module({
   imports: [forwardRef(() => UserModule)],

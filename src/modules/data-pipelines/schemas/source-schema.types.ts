@@ -12,19 +12,19 @@ import { ColumnInfo } from '../../data-sources/postgres/postgres.types';
 export interface SourceSchemaConfig {
   /** Source type: 'postgres', 'stripe', 'salesforce', etc. */
   sourceType: string;
-  
+
   /** Source connection ID (for PostgreSQL sources) */
   sourceConnectionId?: string;
-  
+
   /** Source configuration (for external sources) */
   sourceConfig?: Record<string, any>;
-  
+
   /** Source schema name (database schema) */
   sourceSchema?: string;
-  
+
   /** Source table name */
   sourceTable?: string;
-  
+
   /** Custom SQL query for source (alternative to table) */
   sourceQuery?: string;
 }
@@ -36,32 +36,32 @@ export interface SourceSchemaConfig {
 export interface SourceSchemaDiscovery {
   /** Source connection ID */
   connectionId: string;
-  
+
   /** Source schema name */
   schema: string;
-  
+
   /** Source table name */
   table: string;
-  
+
   /** Discovered columns from source */
   columns: ColumnInfo[];
-  
+
   /** Estimated row count */
   estimatedRowCount?: number;
-  
+
   /** Table size in MB */
   sizeMB?: number;
-  
+
   /** Primary key columns */
   primaryKeys: string[];
-  
+
   /** Foreign key relationships */
   foreignKeys: Array<{
     column: string;
     referencedTable: string;
     referencedColumn: string;
   }>;
-  
+
   /** Discovered at timestamp */
   discoveredAt: Date;
 }
@@ -83,16 +83,16 @@ export interface SourceSchemaValidation {
 export interface SourceDataReadResult {
   /** Rows read from source */
   rows: any[];
-  
+
   /** Total rows available (if known) */
   totalRows?: number;
-  
+
   /** Columns in the data */
   columns: string[];
-  
+
   /** Last sync value (for incremental syncs) */
   lastSyncValue?: string;
-  
+
   /** Read metadata */
   metadata: {
     readTimeMs: number;
@@ -100,4 +100,3 @@ export interface SourceDataReadResult {
     sourceType: string;
   };
 }
-

@@ -1,12 +1,12 @@
 import {
-  pgTable,
-  uuid,
   integer,
-  text,
-  timestamp,
-  varchar,
   jsonb,
   pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
 } from 'drizzle-orm/pg-core';
 import { postgresPipelines } from '../pipelines/postgres-pipelines.schema';
 
@@ -24,11 +24,7 @@ export const runStatusEnum = pgEnum('run_status', [
 /**
  * Enum for trigger type
  */
-export const triggerTypeEnum = pgEnum('trigger_type', [
-  'manual',
-  'scheduled',
-  'webhook',
-]);
+export const triggerTypeEnum = pgEnum('trigger_type', ['manual', 'scheduled', 'webhook']);
 
 /**
  * Enum for job state (authoritative state for migration execution)
@@ -47,13 +43,13 @@ export const jobStateEnum = pgEnum('job_state', [
 /**
  * PostgreSQL Pipeline Runs Table
  * Tracks individual pipeline execution runs
- * 
+ *
  * ARCHITECTURAL NOTE:
  * This table is the AUTHORITATIVE source of truth for:
  * - Resolved destination table (locked during setup phase)
  * - Job execution state
  * - Migration progress and cursor
- * 
+ *
  * The resolved destination table is determined ONCE during setup
  * and stored here. Migration execution MUST read from this record.
  */
@@ -71,13 +67,13 @@ export const postgresPipelineRuns = pgTable('postgres_pipeline_runs', {
   // ============================================================================
   /** Resolved destination schema name (locked during setup phase) */
   resolvedDestinationSchema: varchar('resolved_destination_schema', { length: 255 }),
-  
+
   /** Resolved destination table name (locked during setup phase) */
   resolvedDestinationTable: varchar('resolved_destination_table', { length: 255 }),
-  
+
   /** Whether the destination table was created or already existed */
   destinationTableWasCreated: varchar('destination_table_was_created', { length: 10 }), // 'true' | 'false'
-  
+
   /** Resolved column mappings (JSONB) - SINGLE source of truth */
   resolvedColumnMappings: jsonb('resolved_column_mappings').$type<any[]>(),
 
@@ -86,10 +82,10 @@ export const postgresPipelineRuns = pgTable('postgres_pipeline_runs', {
   // ============================================================================
   /** Job execution state - authoritative source for migration logic */
   jobState: jobStateEnum('job_state').default('pending'),
-  
+
   /** Last sync cursor value (for incremental sync) */
   lastSyncCursor: text('last_sync_cursor'),
-  
+
   /** Last updated timestamp for job state */
   jobStateUpdatedAt: timestamp('job_state_updated_at'),
 
@@ -146,4 +142,3 @@ export interface ResolvedDestinationTable {
  */
 export type PostgresPipelineRun = typeof postgresPipelineRuns.$inferSelect;
 export type NewPostgresPipelineRun = typeof postgresPipelineRuns.$inferInsert;
-

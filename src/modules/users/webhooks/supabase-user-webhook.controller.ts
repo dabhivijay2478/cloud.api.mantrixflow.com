@@ -4,20 +4,17 @@
  */
 
 import {
-  Controller,
-  Post,
   Body,
+  Controller,
   Headers,
   HttpCode,
   HttpStatus,
+  Post,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { createSuccessResponse } from '../../../common/dto/api-response.dto';
 import { UserService } from '../user.service';
-import {
-  ApiSuccessResponse,
-  createSuccessResponse,
-} from '../../../common/dto/api-response.dto';
 
 @ApiTags('webhooks')
 @Controller('api/webhooks/supabase')
@@ -64,9 +61,7 @@ export class SupabaseUserWebhookController {
     }
 
     if (body.type === 'INSERT' || body.type === 'UPDATE') {
-      const result = await this.userService.createOrUpdateFromSupabase(
-        body.record,
-      );
+      const result = await this.userService.createOrUpdateFromSupabase(body.record);
       return createSuccessResponse(
         result.user,
         result.created ? 'User created successfully' : 'User updated successfully',

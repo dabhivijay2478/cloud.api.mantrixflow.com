@@ -3,23 +3,23 @@
  * Handles database operations for postgres_connections table
  */
 
-import { Injectable, Inject } from '@nestjs/common';
-import { eq, and, sql } from 'drizzle-orm';
-import {
-  postgresConnections,
-  PostgresConnection,
-  NewPostgresConnection,
-} from '../../../../database/schemas/data-sources/connections/postgres-connections.schema';
+import { Inject, Injectable } from '@nestjs/common';
+import { and, eq, sql } from 'drizzle-orm';
 import { EncryptionService } from '../../../../common/encryption/encryption.service';
-import { DecryptedConnectionCredentials } from '../postgres.types';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
+import {
+  NewPostgresConnection,
+  PostgresConnection,
+  postgresConnections,
+} from '../../../../database/schemas/data-sources/connections/postgres-connections.schema';
+import { DecryptedConnectionCredentials } from '../postgres.types';
 
 @Injectable()
 export class PostgresConnectionRepository {
   constructor(
     @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
     private readonly encryptionService: EncryptionService,
-  ) { }
+  ) {}
 
   /**
    * Create connection with encrypted credentials
@@ -72,10 +72,18 @@ export class PostgresConnectionRepository {
 
     // Insert into database using Drizzle
     try {
-      console.log('[PostgresConnectionRepository.create] Attempting to insert connection into database...');
+      console.log(
+        '[PostgresConnectionRepository.create] Attempting to insert connection into database...',
+      );
       console.log('[PostgresConnectionRepository.create] Connection orgId:', connectionData.orgId);
-      console.log('[PostgresConnectionRepository.create] Connection userId:', connectionData.userId);
-      console.log('[PostgresConnectionRepository.create] Connection data keys:', Object.keys(connectionData));
+      console.log(
+        '[PostgresConnectionRepository.create] Connection userId:',
+        connectionData.userId,
+      );
+      console.log(
+        '[PostgresConnectionRepository.create] Connection data keys:',
+        Object.keys(connectionData),
+      );
 
       const [connection] = await this.db
         .insert(postgresConnections)
@@ -84,8 +92,14 @@ export class PostgresConnectionRepository {
 
       console.log('[PostgresConnectionRepository.create] Connection saved successfully');
       console.log('[PostgresConnectionRepository.create] Saved connection ID:', connection.id);
-      console.log('[PostgresConnectionRepository.create] Saved connection orgId:', connection.orgId);
-      console.log('[PostgresConnectionRepository.create] Saved connection userId:', connection.userId);
+      console.log(
+        '[PostgresConnectionRepository.create] Saved connection orgId:',
+        connection.orgId,
+      );
+      console.log(
+        '[PostgresConnectionRepository.create] Saved connection userId:',
+        connection.userId,
+      );
       return connection;
     } catch (error) {
       // Log the full error for debugging
@@ -95,10 +109,7 @@ export class PostgresConnectionRepository {
         'Error type:',
         (error as { constructor?: { name?: string } })?.constructor?.name,
       );
-      console.error(
-        'Error message:',
-        error instanceof Error ? error.message : String(error),
-      );
+      console.error('Error message:', error instanceof Error ? error.message : String(error));
       // Log error code if available (Postgres error)
       const errorCode = (error as { code?: string })?.code;
       if (errorCode) {
@@ -106,10 +117,7 @@ export class PostgresConnectionRepository {
       }
 
       console.error('Error details:', JSON.stringify(error, null, 2));
-      console.error(
-        'Connection data that failed:',
-        JSON.stringify(connectionData, null, 2),
-      );
+      console.error('Connection data that failed:', JSON.stringify(connectionData, null, 2));
 
       // Re-throw with more context if it's a known Postgres error
       if (errorCode) {
@@ -127,15 +135,9 @@ export class PostgresConnectionRepository {
   /**
    * Find connection by ID
    */
-  async findById(
-    id: string,
-    orgId?: string,
-  ): Promise<PostgresConnection | null> {
+  async findById(id: string, orgId?: string): Promise<PostgresConnection | null> {
     const conditions = orgId
-      ? and(
-        eq(postgresConnections.id, id),
-        eq(postgresConnections.orgId, orgId),
-      )
+      ? and(eq(postgresConnections.id, id), eq(postgresConnections.orgId, orgId))
       : eq(postgresConnections.id, id);
 
     const [connection] = await this.db
@@ -160,8 +162,9 @@ export class PostgresConnectionRepository {
     if (result.length === 0) {
       // Debug: Check if there are any connections at all
       const allConnections = await this.db.select().from(postgresConnections).limit(5);
-      console.log('[PostgresConnectionRepository.findByOrgId] Sample of all connections (first 5):', 
-        allConnections.map(c => ({ id: c.id, orgId: c.orgId, name: c.name }))
+      console.log(
+        '[PostgresConnectionRepository.findByOrgId] Sample of all connections (first 5):',
+        allConnections.map((c) => ({ id: c.id, orgId: c.orgId, name: c.name })),
       );
     }
     return result;
@@ -195,29 +198,18 @@ export class PostgresConnectionRepository {
   /**
    * Update connection
    */
-  async update(
-    id: string,
-    data: Partial<NewPostgresConnection>,
-  ): Promise<PostgresConnection> {
+  async update(id: string, data: Partial<NewPostgresConnection>): Promise<PostgresConnection> {
     // Encrypt sensitive fields if provided
     const encrypted: Partial<NewPostgresConnection> = { ...data };
     if (data.host) encrypted.host = this.encryptionService.encrypt(data.host);
-    if (data.database)
-      encrypted.database = this.encryptionService.encrypt(data.database);
-    if (data.username)
-      encrypted.username = this.encryptionService.encrypt(data.username);
-    if (data.password)
-      encrypted.password = this.encryptionService.encrypt(data.password);
-    if (data.sslCaCert)
-      encrypted.sslCaCert = this.encryptionService.encrypt(data.sslCaCert);
-    if (data.sshHost)
-      encrypted.sshHost = this.encryptionService.encrypt(data.sshHost);
-    if (data.sshUsername)
-      encrypted.sshUsername = this.encryptionService.encrypt(data.sshUsername);
+    if (data.database) encrypted.database = this.encryptionService.encrypt(data.database);
+    if (data.username) encrypted.username = this.encryptionService.encrypt(data.username);
+    if (data.password) encrypted.password = this.encryptionService.encrypt(data.password);
+    if (data.sslCaCert) encrypted.sslCaCert = this.encryptionService.encrypt(data.sslCaCert);
+    if (data.sshHost) encrypted.sshHost = this.encryptionService.encrypt(data.sshHost);
+    if (data.sshUsername) encrypted.sshUsername = this.encryptionService.encrypt(data.sshUsername);
     if (data.sshPrivateKey)
-      encrypted.sshPrivateKey = this.encryptionService.encrypt(
-        data.sshPrivateKey,
-      );
+      encrypted.sshPrivateKey = this.encryptionService.encrypt(data.sshPrivateKey);
 
     encrypted.updatedAt = new Date();
 
@@ -234,31 +226,22 @@ export class PostgresConnectionRepository {
    * Delete connection
    */
   async delete(id: string): Promise<void> {
-    await this.db
-      .delete(postgresConnections)
-      .where(eq(postgresConnections.id, id));
+    await this.db.delete(postgresConnections).where(eq(postgresConnections.id, id));
   }
 
   /**
    * Decrypt connection credentials
    */
-  decryptCredentials(
-    connection: PostgresConnection,
-  ): DecryptedConnectionCredentials {
+  decryptCredentials(connection: PostgresConnection): DecryptedConnectionCredentials {
     // Validate that required encrypted fields exist
-    if (
-      !connection.host ||
-      !connection.database ||
-      !connection.username ||
-      !connection.password
-    ) {
+    if (!connection.host || !connection.database || !connection.username || !connection.password) {
       throw new Error(
         'Connection is missing required credentials. Connection may not be properly initialized.',
       );
     }
 
     const decryptedHost = this.encryptionService.decrypt(connection.host);
-    
+
     // Detect Neon databases and generate options with endpoint ID
     let options: string | undefined;
     if (decryptedHost.includes('.neon.tech')) {
@@ -279,9 +262,7 @@ export class PostgresConnectionRepository {
         ? this.encryptionService.decrypt(connection.sslCaCert)
         : undefined,
       sshTunnelEnabled: connection.sshTunnelEnabled,
-      sshHost: connection.sshHost
-        ? this.encryptionService.decrypt(connection.sshHost)
-        : undefined,
+      sshHost: connection.sshHost ? this.encryptionService.decrypt(connection.sshHost) : undefined,
       sshPort: connection.sshPort || undefined,
       sshUsername: connection.sshUsername
         ? this.encryptionService.decrypt(connection.sshUsername)

@@ -4,9 +4,9 @@
  * Uses crypto.scrypt for key derivation
  */
 
+import * as crypto from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as crypto from 'crypto';
 
 @Injectable()
 export class EncryptionService {
@@ -90,9 +90,7 @@ export class EncryptionService {
     try {
       const parts = encryptedData.split(':');
       if (parts.length !== 4) {
-        throw new Error(
-          'Invalid encryption format. Expected format: salt:iv:tag:ciphertext',
-        );
+        throw new Error('Invalid encryption format. Expected format: salt:iv:tag:ciphertext');
       }
 
       const [saltB64, ivB64, tagB64, ciphertextB64] = parts;
@@ -127,10 +125,7 @@ export class EncryptionService {
 
       return plaintext.toString('utf8');
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes('Unsupported state')
-      ) {
+      if (error instanceof Error && error.message.includes('Unsupported state')) {
         throw new Error(
           'Decryption failed: Authentication tag mismatch. Data may be corrupted or tampered.',
         );
@@ -165,21 +160,5 @@ export class EncryptionService {
       }
     }
     return decrypted;
-  }
-
-  /**
-   * Constant-time comparison to prevent timing attacks
-   */
-  private constantTimeEquals(a: Buffer, b: Buffer): boolean {
-    if (a.length !== b.length) {
-      return false;
-    }
-
-    let result = 0;
-    for (let i = 0; i < a.length; i++) {
-      result |= a[i] ^ b[i];
-    }
-
-    return result === 0;
   }
 }
