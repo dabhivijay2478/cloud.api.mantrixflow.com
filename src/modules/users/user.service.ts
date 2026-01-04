@@ -52,15 +52,21 @@ export class UserService {
     user_metadata?: Record<string, unknown>;
     app_metadata?: Record<string, unknown>;
   }): Promise<{ user: any; created: boolean }> {
-    // Check if user already exists
-    const existingUser = await this.userRepository.findBySupabaseUserId(
+    // Check if user already exists by Supabase user ID
+    let existingUser = await this.userRepository.findBySupabaseUserId(
       supabaseUser.id,
     );
+    
+    // Also check by email in case user exists but with different supabaseUserId
+    // This can happen if user was invited before they signed up
+    if (!existingUser) {
+      existingUser = await this.userRepository.findByEmail(supabaseUser.email.toLowerCase());
+    }
 
     const userData = {
       id: supabaseUser.id,
       supabaseUserId: supabaseUser.id,
-      email: supabaseUser.email,
+      email: supabaseUser.email.toLowerCase(),
       firstName: (supabaseUser.user_metadata?.first_name as string) || 
                  (supabaseUser.user_metadata?.firstName as string),
       lastName: (supabaseUser.user_metadata?.last_name as string) || 
@@ -79,14 +85,55 @@ export class UserService {
     if (existingUser) {
       // Update existing user
       const updated = await this.userRepository.update(existingUser.id, userData);
+      
+      // Link user to any pending invites (if user was invited but not yet linked)
+      try {
+        const linkedMembers = await this.memberService.linkUserToInvite(
+          supabaseUser.email.toLowerCase(),
+          updated.id,
+        );
+
+        // If user was invited and doesn't have a current org, set it to the first one they were invited to
+        if (linkedMembers.length > 0) {
+          if (!updated.currentOrgId) {
+            await this.userRepository.setCurrentOrganization(
+              updated.id,
+              linkedMembers[0].organizationId,
+            );
+          }
+          // If user was invited, mark onboarding as completed (skip welcome page)
+          if (!updated.onboardingCompleted) {
+            await this.userRepository.updateOnboarding(updated.id, true);
+          }
+          // Reload user to get updated fields
+          const reloaded = await this.userRepository.findById(updated.id);
+          return { user: reloaded || updated, created: false };
+        }
+      } catch (error) {
+        // Log error but don't fail user update if invite linking fails
+        console.error('Failed to link user to invites:', error);
+      }
+      
       return { user: updated, created: false };
     } else {
+      // Check if user was invited (has pending organization_members record)
+      let wasInvited = false;
+      try {
+        const pendingInvites = await this.memberService.findAllInvitesByEmail(
+          supabaseUser.email.toLowerCase(),
+        );
+        wasInvited = pendingInvites && pendingInvites.length > 0;
+      } catch (error) {
+        console.error('Error checking for invites:', error);
+      }
+
       // Create new user
       const created = await this.userRepository.create({
         ...userData,
         status: 'active',
-        onboardingCompleted: false,
-        onboardingStep: 'welcome',
+        // If user was invited, skip onboarding (they're already part of an org)
+        onboardingCompleted: wasInvited,
+        onboardingStep: wasInvited ? undefined : 'welcome',
       });
 
       // Link user to any pending invites (if user was invited before signing up)
@@ -103,6 +150,11 @@ export class UserService {
             created.id,
             linkedMembers[0].organizationId,
           );
+          // Mark onboarding as completed for invited users
+          await this.userRepository.updateOnboarding(created.id, true);
+          // Reload user to get updated fields
+          const reloaded = await this.userRepository.findById(created.id);
+          return { user: reloaded || created, created: true };
         }
       } catch (error) {
         // Log error but don't fail user creation if invite linking fails
@@ -143,18 +195,50 @@ export class UserService {
           
           if (supabaseUser) {
             // Sync user from Supabase
-            const result = await this.createOrUpdateFromSupabase({
-              id: supabaseUser.id,
-              email: supabaseUser.email || '',
-              email_confirmed_at: supabaseUser.email_confirmed_at,
-              user_metadata: supabaseUser.user_metadata || {},
-              app_metadata: supabaseUser.app_metadata || {},
-            });
-            user = result.user;
+            try {
+              const result = await this.createOrUpdateFromSupabase({
+                id: supabaseUser.id,
+                email: supabaseUser.email || '',
+                email_confirmed_at: supabaseUser.email_confirmed_at,
+                user_metadata: supabaseUser.user_metadata || {},
+                app_metadata: supabaseUser.app_metadata || {},
+              });
+              user = result.user;
+            } catch (syncError) {
+              // If sync fails with duplicate email error, try to find by email
+              if (syncError && typeof syncError === 'object' && 'cause' in syncError) {
+                const cause = (syncError as any).cause;
+                if (cause && typeof cause === 'object' && 'code' in cause && cause.code === '23505') {
+                  // Duplicate email error - user exists but with different supabaseUserId
+                  // Try to find by email
+                  try {
+                    if (supabaseUser?.email) {
+                      const existingUser = await this.userRepository.findByEmail(supabaseUser.email.toLowerCase());
+                      if (existingUser) {
+                        // Update the existing user with the new supabaseUserId
+                        await this.userRepository.update(existingUser.id, {
+                          supabaseUserId: supabaseUser.id,
+                        });
+                        user = await this.userRepository.findById(existingUser.id);
+                      }
+                    }
+                  } catch (findError) {
+                    console.error('Failed to find user by email after duplicate error:', findError);
+                  }
+                }
+              }
+              
+              // If still no user, re-throw the error
+              if (!user) {
+                throw syncError;
+              }
+            }
           }
         } catch (error) {
           // If Supabase sync fails, log and continue to throw error
-          console.error('Failed to sync user from Supabase:', error);
+          if (!user) {
+            console.error('Failed to sync user from Supabase:', error);
+          }
         }
       }
       

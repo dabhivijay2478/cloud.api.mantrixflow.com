@@ -87,8 +87,9 @@ export class OrganizationMemberService {
         // Send invite email via Supabase Auth
         // This uses Supabase's built-in invite functionality
         // redirectTo: When user clicks invite link, Supabase verify endpoint will redirect here
-        // The callback route will handle token/code verification and redirect to accept-invite
-        const redirectTo = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/callback?type=invite`;
+        // Supabase redirects with tokens in URL hash (#access_token=...), which must be handled client-side
+        // IMPORTANT: redirectTo must match one of the allowed redirect URLs in Supabase dashboard
+        const redirectTo = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
         const { error } = await this.supabaseAdmin.auth.admin.inviteUserByEmail(
           email,
           {
@@ -187,6 +188,14 @@ export class OrganizationMemberService {
     }
 
     return updatedMembers;
+  }
+
+  /**
+   * Find all invites by email (across all organizations)
+   * Used when user signs up to check if they were invited
+   */
+  async findAllInvitesByEmail(email: string): Promise<OrganizationMember[]> {
+    return this.memberRepository.findAllInvitesByEmail(email);
   }
 
   /**
