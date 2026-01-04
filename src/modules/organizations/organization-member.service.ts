@@ -148,13 +148,6 @@ export class OrganizationMemberService {
   ): Promise<OrganizationMember> {
     const member = await this.getMember(id);
 
-    // Validate agent panel access
-    if (dto.agentPanelAccess && (!dto.allowedModels || dto.allowedModels.length === 0)) {
-      throw new BadRequestException(
-        'At least one model must be selected if agent panel access is enabled',
-      );
-    }
-
     return this.memberRepository.update(id, dto);
   }
 

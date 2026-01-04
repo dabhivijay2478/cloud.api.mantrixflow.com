@@ -15,6 +15,8 @@ import {
   HttpStatus,
   Request,
   BadRequestException,
+  NotFoundException,
+  ConflictException,
 } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
 type Request = ExpressRequest;
@@ -75,28 +77,51 @@ export class OrganizationMemberController {
     @Body() dto: InviteMemberDto,
     @Request() req: Request,
   ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new BadRequestException('User ID is required');
-    }
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        throw new BadRequestException('User ID is required');
+      }
 
-    // Validate agent panel access
-    if (dto.agentPanelAccess && (!dto.allowedModels || dto.allowedModels.length === 0)) {
+      console.log('[INVITE API] Inviting member:', {
+        organizationId,
+        email: dto.email,
+        role: dto.role,
+        userId,
+      });
+
+      const member = await this.memberService.inviteMember(
+        organizationId,
+        userId,
+        dto,
+      );
+
+      console.log('[INVITE API] Invite successful:', member.id);
+      
+      return createSuccessResponse(
+        member,
+        'Member invited successfully',
+        201,
+      );
+    } catch (error) {
+      console.error('[INVITE API] Error in inviteMember:', error);
+      console.error('[INVITE API] Error type:', error?.constructor?.name);
+      console.error('[INVITE API] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      
+      // Re-throw NestJS exceptions as-is
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof ConflictException
+      ) {
+        throw error;
+      }
+      
+      // Wrap unexpected errors
       throw new BadRequestException(
-        'At least one model must be selected if agent panel access is enabled',
+        error instanceof Error ? error.message : 'Failed to invite member',
       );
     }
-
-    const member = await this.memberService.inviteMember(
-      organizationId,
-      userId,
-      dto,
-    );
-    return createSuccessResponse(
-      member,
-      'Member invited successfully',
-      201,
-    );
   }
 
   /**
