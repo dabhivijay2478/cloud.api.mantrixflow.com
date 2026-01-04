@@ -81,20 +81,22 @@ export class OrganizationMemberService {
     // Note: This requires Supabase to be configured with email templates
     if (this.supabaseAdmin) {
       try {
-        // Generate invite link (frontend signup URL with invite token)
-        const inviteToken = member.id; // Using member ID as token for simplicity
-        const inviteUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/signup?invite=${inviteToken}&email=${encodeURIComponent(email)}`;
+        // Generate invite link - Supabase will redirect to accept-invite page
+        const inviteUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
 
         // Send invite email via Supabase Auth
         // This uses Supabase's built-in invite functionality
+        // redirectTo: When user clicks invite link, Supabase verify endpoint will redirect here
+        // The callback route will handle token/code verification and redirect to accept-invite
+        const redirectTo = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/callback?type=invite`;
         const { error } = await this.supabaseAdmin.auth.admin.inviteUserByEmail(
           email,
           {
+            redirectTo,
             data: {
               organizationId,
               organizationName: organization.name,
               role: dto.role,
-              inviteUrl,
             },
           },
         );
