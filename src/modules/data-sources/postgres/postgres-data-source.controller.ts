@@ -49,7 +49,7 @@ import { ExecuteQueryDto, QueryExecutionResponseDto } from './dto/execute-query.
 import { TestConnectionDto, TestConnectionResponseDto } from './dto/test-connection.dto';
 import { UpdateConnectionDto } from './dto/update-connection.dto';
 import type { PostgresConnectionConfig, TableInfo } from './postgres.types';
-import type { PostgresDataSourceService } from './postgres-data-source.service';
+import { PostgresDataSourceService } from './postgres-data-source.service';
 import { parsePostgresConnectionString } from './utils/connection-string-parser.util';
 import { createErrorResponse } from './utils/error-mapper.util';
 

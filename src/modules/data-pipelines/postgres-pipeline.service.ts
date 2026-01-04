@@ -78,7 +78,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { PipelineDestinationSchema, PipelineSourceSchema, PostgresPipeline } from '@db/schema';
+import type {
+  PipelineDestinationSchema,
+  PipelineSourceSchema,
+  PostgresPipeline,
+  PostgresPipelineRun,
+} from '@db/schema';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   ColumnMapping,
@@ -88,14 +93,14 @@ import type {
   Transformation,
   ValidationResult,
 } from '../data-sources/postgres/postgres.types';
-import type { PostgresConnectionRepository } from '../data-sources/postgres/repositories/postgres-connection.repository';
-import type { PostgresConnectionPoolService } from '../data-sources/postgres/services/postgres-connection-pool.service';
-import type { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
-import type { PostgresDestinationService } from './emitters/postgres-destination.service';
-import type { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
-import type { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
-import type { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
-import type { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
+import { PostgresConnectionRepository } from '../data-sources/postgres/repositories/postgres-connection.repository';
+import { PostgresConnectionPoolService } from '../data-sources/postgres/services/postgres-connection-pool.service';
+import { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
+import { PostgresDestinationService } from './emitters/postgres-destination.service';
+import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
+import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
+import { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
+import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
 
 @Injectable()
 export class PostgresPipelineService {
@@ -2570,5 +2575,57 @@ export class PostgresPipelineService {
     // Soft delete pipeline
     await this.pipelineRepository.delete(pipelineId);
     this.logger.log(`Deleted pipeline ${pipelineId}`);
+  }
+
+  /**
+   * Find pipelines by organization
+   */
+  async findPipelinesByOrg(orgId: string): Promise<PostgresPipeline[]> {
+    return await this.pipelineRepository.findByOrg(orgId);
+  }
+
+  /**
+   * Find pipeline by ID
+   */
+  async findPipelineById(id: string, orgId?: string): Promise<PostgresPipeline | null> {
+    return await this.pipelineRepository.findById(id, orgId);
+  }
+
+  /**
+   * Update pipeline
+   */
+  async updatePipeline(id: string, updates: Partial<PostgresPipeline>): Promise<PostgresPipeline> {
+    return await this.pipelineRepository.update(id, updates);
+  }
+
+  /**
+   * Find pipeline runs by pipeline ID
+   */
+  async findPipelineRuns(
+    pipelineId: string,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<PostgresPipelineRun[]> {
+    return await this.pipelineRepository.findRunsByPipeline(pipelineId, limit, offset);
+  }
+
+  /**
+   * Find pipeline run by ID
+   */
+  async findPipelineRunById(runId: string): Promise<PostgresPipelineRun | null> {
+    return await this.pipelineRepository.findRunById(runId);
+  }
+
+  /**
+   * Get pipeline statistics
+   */
+  async getPipelineStats(pipelineId: string): Promise<{
+    totalRowsProcessed: number;
+    totalRunsSuccessful: number;
+    totalRunsFailed: number;
+    lastSuccessfulRun?: Date;
+    averageDuration: number;
+  }> {
+    return await this.pipelineRepository.getStats(pipelineId);
   }
 }

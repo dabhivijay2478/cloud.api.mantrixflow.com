@@ -19,7 +19,7 @@ import {
   isJsonbType,
   mapPostgresTypeToTypeScript,
 } from '../utils/postgres-type-mapper.util';
-import type { PostgresConnectionPoolService } from './postgres-connection-pool.service';
+import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresSchemaDiscoveryService {

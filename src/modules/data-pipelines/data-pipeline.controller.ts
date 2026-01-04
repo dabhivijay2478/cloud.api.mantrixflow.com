@@ -41,7 +41,7 @@ import {
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { createErrorResponse } from '../data-sources/postgres/utils/error-mapper.util';
 import type { CreatePipelineDto, UpdatePipelineDto } from './dto/create-pipeline.dto';
-import type { PostgresPipelineService } from './postgres-pipeline.service';
+import { PostgresPipelineService } from './postgres-pipeline.service';
 
 @ApiTags('data-pipelines')
 @ApiBearerAuth('JWT-auth')
@@ -246,7 +246,7 @@ export class DataPipelineController {
         throw new BadRequestException('Invalid Organization ID format. Must be a valid UUID v4.');
       }
 
-      const pipelines = await this.pipelineService.pipelineRepository.findByOrg(finalOrgId);
+      const pipelines = await this.pipelineService.findPipelinesByOrg(finalOrgId);
 
       return createListResponse(pipelines, `Found ${pipelines.length} pipeline(s)`, {
         total: pipelines.length,
@@ -297,7 +297,7 @@ export class DataPipelineController {
         throw new BadRequestException('Invalid Organization ID format. Must be a valid UUID v4.');
       }
 
-      const pipeline = await this.pipelineService.pipelineRepository.findById(id, finalOrgId);
+      const pipeline = await this.pipelineService.findPipelineById(id, finalOrgId);
 
       if (!pipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);
@@ -342,7 +342,7 @@ export class DataPipelineController {
 
       // If collectors/emitters are provided, update the transformations JSONB field
       if (updates.collectors || updates.emitters) {
-        const existingPipeline = await this.pipelineService.pipelineRepository.findById(id);
+        const existingPipeline = await this.pipelineService.findPipelineById(id);
         if (!existingPipeline) {
           throw new NotFoundException(`Pipeline ${id} not found`);
         }
@@ -356,7 +356,7 @@ export class DataPipelineController {
         };
 
         // Update with transformations
-        const updated = await this.pipelineService.pipelineRepository.update(id, {
+        const updated = await this.pipelineService.updatePipeline(id, {
           ...updates,
           transformations: newTransformations,
         });
@@ -368,7 +368,7 @@ export class DataPipelineController {
       }
 
       // Regular update without transformations
-      const updated = await this.pipelineService.pipelineRepository.update(id, updates);
+      const updated = await this.pipelineService.updatePipeline(id, updates);
 
       return createSuccessResponse(updated, 'Pipeline updated successfully', HttpStatus.OK, {
         pipelineId: updated.id,
@@ -512,10 +512,7 @@ export class DataPipelineController {
       await this.pipelineService.togglePipeline(id, 'paused');
 
       // Fetch and return the updated pipeline to ensure frontend has latest state
-      const updatedPipeline = await this.pipelineService.pipelineRepository.findById(
-        id,
-        finalOrgId,
-      );
+      const updatedPipeline = await this.pipelineService.findPipelineById(id, finalOrgId);
 
       if (!updatedPipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);
@@ -556,10 +553,7 @@ export class DataPipelineController {
       await this.pipelineService.togglePipeline(id, 'active');
 
       // Fetch and return the updated pipeline to ensure frontend has latest state
-      const updatedPipeline = await this.pipelineService.pipelineRepository.findById(
-        id,
-        finalOrgId,
-      );
+      const updatedPipeline = await this.pipelineService.findPipelineById(id, finalOrgId);
 
       if (!updatedPipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);
@@ -628,7 +622,7 @@ export class DataPipelineController {
   })
   async autoMapColumns(@Param('id') id: string, @Request() _req: Request) {
     try {
-      const pipeline = await this.pipelineService.pipelineRepository.findById(id);
+      const pipeline = await this.pipelineService.findPipelineById(id);
       if (!pipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);
       }
@@ -683,11 +677,7 @@ export class DataPipelineController {
     @Query('offset') offset?: number,
   ) {
     try {
-      const runs = await this.pipelineService.pipelineRepository.findRunsByPipeline(
-        id,
-        limit || 20,
-        offset || 0,
-      );
+      const runs = await this.pipelineService.findPipelineRuns(id, limit || 20, offset || 0);
 
       return createListResponse(runs, `Found ${runs.length} pipeline run(s)`, {
         total: runs.length,
@@ -729,7 +719,7 @@ export class DataPipelineController {
     @Request() _req: ExpressRequestType,
   ) {
     try {
-      const run = await this.pipelineService.pipelineRepository.findRunById(runId);
+      const run = await this.pipelineService.findPipelineRunById(runId);
 
       if (!run || run.pipelineId !== id) {
         throw new NotFoundException(`Pipeline run ${runId} not found`);
@@ -770,7 +760,7 @@ export class DataPipelineController {
   })
   async getPipelineStats(@Param('id') id: string, @Request() _req: Request) {
     try {
-      const stats = await this.pipelineService.pipelineRepository.getStats(id);
+      const stats = await this.pipelineService.getPipelineStats(id);
 
       return createSuccessResponse(stats, 'Pipeline statistics retrieved successfully');
     } catch (error) {

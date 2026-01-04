@@ -5,7 +5,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import type { EncryptionService } from '../../../../common/encryption/encryption.service';
+import { EncryptionService } from '../../../../common/encryption/encryption.service';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 import {
   type NewPostgresConnection,

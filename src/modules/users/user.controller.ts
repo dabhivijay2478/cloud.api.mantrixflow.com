@@ -20,7 +20,7 @@ import {
 import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { CreateUserDto } from './dto/create-user.dto';
-import type { UserService } from './user.service';
+import { UserService } from './user.service';
 
 @ApiTags('users')
 @ApiBearerAuth('JWT-auth')

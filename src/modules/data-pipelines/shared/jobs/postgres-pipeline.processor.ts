@@ -6,7 +6,7 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
-import type { PostgresPipelineService } from '../../postgres-pipeline.service';
+import { PostgresPipelineService } from '../../postgres-pipeline.service';
 
 export interface PipelineJobData {
   pipelineId: string;

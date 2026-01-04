@@ -6,7 +6,7 @@
 import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import { OrganizationMemberService } from '../organizations/organization-member.service';
-import type { UserRepository } from './repositories/user.repository';
+import { UserRepository } from './repositories/user.repository';
 
 @Injectable()
 export class UserService {

@@ -26,6 +26,7 @@ import { PostgresSyncService } from './services/postgres-sync.service';
 
 @Module({
   imports: [
+    // ConfigModule is global (defined in AppModule), so no need to import it here
     // Enable scheduling for cron jobs (for health monitoring)
     ScheduleModule.forRoot(),
   ],

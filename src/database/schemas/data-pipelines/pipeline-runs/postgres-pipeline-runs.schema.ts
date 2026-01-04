@@ -8,18 +8,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
-import { postgresPipelines } from '../pipelines/postgres-pipelines.schema';
-
-/**
- * Enum for run status
- */
-export const runStatusEnum = pgEnum('run_status', [
-  'pending',
-  'running',
-  'success',
-  'failed',
-  'cancelled',
-]);
+import { postgresPipelines, runStatusEnum } from '../pipelines/postgres-pipelines.schema';
 
 /**
  * Enum for trigger type

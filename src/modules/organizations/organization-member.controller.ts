@@ -38,7 +38,7 @@ import {
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
-import type { OrganizationMemberService } from './organization-member.service';
+import { OrganizationMemberService } from './organization-member.service';
 
 @ApiTags('organizations')
 @ApiBearerAuth('JWT-auth')

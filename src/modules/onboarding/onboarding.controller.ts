@@ -12,8 +12,8 @@ type ExpressRequestType = ExpressRequest;
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import type { OrganizationService } from '../organizations/organization.service';
-import type { UserService } from '../users/user.service';
+import { OrganizationService } from '../organizations/organization.service';
+import { UserService } from '../users/user.service';
 
 @ApiTags('onboarding')
 @ApiBearerAuth('JWT-auth')

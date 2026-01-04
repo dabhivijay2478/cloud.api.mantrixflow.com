@@ -37,7 +37,7 @@ import {
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
-import type { OrganizationService } from './organization.service';
+import { OrganizationService } from './organization.service';
 
 @ApiTags('organizations')
 @ApiBearerAuth('JWT-auth')

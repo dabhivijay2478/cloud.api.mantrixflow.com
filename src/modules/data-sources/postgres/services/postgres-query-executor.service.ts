@@ -8,7 +8,7 @@ import { QUERY_CONFIG } from '../constants/postgres.constants';
 import type { QueryExecutionResult } from '../postgres.types';
 import { mapErrorToStandardized } from '../utils/error-mapper.util';
 import { sanitizeQuery } from '../utils/query-sanitizer.util';
-import type { PostgresConnectionPoolService } from './postgres-connection-pool.service';
+import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 /**
  * Rate limit tracking

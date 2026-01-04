@@ -9,7 +9,6 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { pipelineDestinationSchemas } from '../destination-schemas/pipeline-destination-schemas.schema';
-import { runStatusEnum } from '../pipeline-runs/postgres-pipeline-runs.schema';
 import { pipelineSourceSchemas } from '../source-schemas/pipeline-source-schemas.schema';
 
 /**
@@ -27,7 +26,17 @@ export const pipelineStatusEnum = pgEnum('pipeline_status', ['active', 'paused',
  */
 export const migrationStateEnum = pgEnum('migration_state', ['pending', 'running', 'listing']);
 
-// runStatusEnum is imported from pipeline-runs schema to avoid duplication
+/**
+ * Enum for run status
+ * Defined here to avoid circular dependency with pipeline-runs schema
+ */
+export const runStatusEnum = pgEnum('run_status', [
+  'pending',
+  'running',
+  'success',
+  'failed',
+  'cancelled',
+]);
 
 /**
  * PostgreSQL Pipelines Table

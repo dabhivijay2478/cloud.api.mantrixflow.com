@@ -12,8 +12,8 @@ import {
 import { createClient } from '@supabase/supabase-js';
 import type { OrganizationMember } from '../../database/schemas/organizations';
 import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
-import type { OrganizationRepository } from './repositories/organization.repository';
-import type { OrganizationMemberRepository } from './repositories/organization-member.repository';
+import { OrganizationRepository } from './repositories/organization.repository';
+import { OrganizationMemberRepository } from './repositories/organization-member.repository';
 
 @Injectable()
 export class OrganizationMemberService {
