@@ -3,7 +3,7 @@
  * Factory function to create Drizzle database instance with ConfigService
  */
 
-import { ConfigService } from '@nestjs/config';
+import type { ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schemas';
 

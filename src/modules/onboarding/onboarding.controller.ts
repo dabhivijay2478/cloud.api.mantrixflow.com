@@ -7,13 +7,13 @@ import { Body, Controller, Get, Patch, Post, Request, UseGuards } from '@nestjs/
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
 
-type Request = ExpressRequest;
+type ExpressRequestType = ExpressRequest;
 
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import { OrganizationService } from '../organizations/organization.service';
-import { UserService } from '../users/user.service';
+import type { OrganizationService } from '../organizations/organization.service';
+import type { UserService } from '../users/user.service';
 
 @ApiTags('onboarding')
 @ApiBearerAuth('JWT-auth')
@@ -37,7 +37,7 @@ export class OnboardingController {
     status: 200,
     description: 'Onboarding status retrieved successfully',
   })
-  async getOnboardingStatus(@Request() req: Request) {
+  async getOnboardingStatus(@Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     const userEmail = req.user?.email;
 
@@ -111,7 +111,7 @@ export class OnboardingController {
     status: 200,
     description: 'Onboarding step updated successfully',
   })
-  async updateOnboardingStep(@Request() req: Request, @Body() data: { step: string }) {
+  async updateOnboardingStep(@Request() req: ExpressRequestType, @Body() data: { step: string }) {
     const userId = req.user?.id;
     const userEmail = req.user?.email;
 
@@ -157,7 +157,7 @@ export class OnboardingController {
     status: 200,
     description: 'Onboarding completed successfully',
   })
-  async completeOnboarding(@Request() req: Request) {
+  async completeOnboarding(@Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     const userEmail = req.user?.email;
 

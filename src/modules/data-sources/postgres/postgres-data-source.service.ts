@@ -5,8 +5,8 @@
 
 import * as crypto from 'node:crypto';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { NewPostgresConnection } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
-import {
+import type { NewPostgresConnection } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
+import type {
   ConnectionHealth,
   ConnectionMetrics,
   PostgresConnection,
@@ -17,15 +17,15 @@ import {
   SyncMode,
   TableInfo,
 } from './postgres.types';
-import { PostgresValidator } from './postgres.validator';
-import { PostgresConnectionRepository } from './repositories/postgres-connection.repository';
-import { PostgresQueryLogRepository } from './repositories/postgres-query-log.repository';
-import { PostgresSyncJobRepository } from './repositories/postgres-sync-job.repository';
-import { PostgresConnectionPoolService } from './services/postgres-connection-pool.service';
-import { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
-import { PostgresQueryExecutorService } from './services/postgres-query-executor.service';
-import { PostgresSchemaDiscoveryService } from './services/postgres-schema-discovery.service';
-import { PostgresSyncService } from './services/postgres-sync.service';
+import type { PostgresValidator } from './postgres.validator';
+import type { PostgresConnectionRepository } from './repositories/postgres-connection.repository';
+import type { PostgresQueryLogRepository } from './repositories/postgres-query-log.repository';
+import type { PostgresSyncJobRepository } from './repositories/postgres-sync-job.repository';
+import type { PostgresConnectionPoolService } from './services/postgres-connection-pool.service';
+import type { PostgresHealthMonitorService } from './services/postgres-health-monitor.service';
+import type { PostgresQueryExecutorService } from './services/postgres-query-executor.service';
+import type { PostgresSchemaDiscoveryService } from './services/postgres-schema-discovery.service';
+import type { PostgresSyncService } from './services/postgres-sync.service';
 
 @Injectable()
 export class PostgresDataSourceService {

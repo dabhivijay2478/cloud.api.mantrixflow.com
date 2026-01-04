@@ -6,7 +6,7 @@
 
 import * as crypto from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import type { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class EncryptionService {

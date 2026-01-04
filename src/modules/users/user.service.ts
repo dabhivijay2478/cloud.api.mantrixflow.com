@@ -6,7 +6,7 @@
 import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import { OrganizationMemberService } from '../organizations/organization-member.service';
-import { UserRepository } from './repositories/user.repository';
+import type { UserRepository } from './repositories/user.repository';
 
 @Injectable()
 export class UserService {
@@ -183,7 +183,7 @@ export class UserService {
           // Try to get user from Supabase
           // Note: admin.getUserById requires service role key
           // If not available, we'll need to handle this differently
-          let supabaseUser;
+          let supabaseUser: any;
           if (this.supabaseAdmin) {
             const { data, error } = await this.supabaseAdmin.auth.admin.getUserById(id);
             if (!error && data?.user) {

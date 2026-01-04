@@ -3,7 +3,7 @@
  * Type definitions for destination schema configuration and management
  */
 
-import { ColumnMapping, WriteResult } from '../../data-sources/postgres/postgres.types';
+import type { ColumnMapping, WriteResult } from '../../data-sources/postgres/postgres.types';
 
 /**
  * Destination Schema Configuration

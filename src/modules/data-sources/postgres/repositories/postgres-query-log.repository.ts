@@ -7,8 +7,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { desc, eq, lt, sql } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 import {
-  NewPostgresQueryLog,
-  PostgresQueryLog,
+  type NewPostgresQueryLog,
+  type PostgresQueryLog,
   postgresQueryLogs,
 } from '../../../../database/schemas/data-sources/query-logs/postgres-query-logs.schema';
 import { QUERY_LOG_RETENTION_DAYS } from '../constants/postgres.constants';

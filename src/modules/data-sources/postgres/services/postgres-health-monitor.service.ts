@@ -3,11 +3,11 @@
  * Monitors connection health and performance
  */
 
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { HEALTH_CHECK } from '../constants/postgres.constants';
-import { ConnectionHealth } from '../postgres.types';
-import { PostgresConnectionRepository } from '../repositories/postgres-connection.repository';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
+import type { ConnectionHealth } from '../postgres.types';
+import type { PostgresConnectionRepository } from '../repositories/postgres-connection.repository';
+import type { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresHealthMonitorService implements OnModuleInit {

@@ -6,10 +6,10 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { Queue } from 'bullmq';
-import { PostgresPipelineService } from '../postgres-pipeline.service';
-import { PostgresPipelineRepository } from '../repositories/postgres-pipeline.repository';
-import { PipelineJobData } from './jobs/postgres-pipeline.processor';
+import type { Queue } from 'bullmq';
+import type { PostgresPipelineService } from '../postgres-pipeline.service';
+import type { PostgresPipelineRepository } from '../repositories/postgres-pipeline.repository';
+import type { PipelineJobData } from './jobs/postgres-pipeline.processor';
 
 @Injectable()
 export class PostgresPipelineQueueService {

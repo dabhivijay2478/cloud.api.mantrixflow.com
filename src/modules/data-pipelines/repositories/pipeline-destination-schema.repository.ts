@@ -10,7 +10,7 @@ import {
 } from '@db/schema';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, isNull } from 'drizzle-orm';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 @Injectable()
 export class PipelineDestinationSchemaRepository {

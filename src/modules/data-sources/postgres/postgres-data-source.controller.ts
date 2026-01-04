@@ -23,7 +23,7 @@ import {
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
 
-type Request = ExpressRequest;
+type ExpressRequestType = ExpressRequest;
 
 import {
   ApiBearerAuth,
@@ -48,8 +48,8 @@ import { CreateSyncJobDto, SyncJobResponseDto } from './dto/create-sync-job.dto'
 import { ExecuteQueryDto, QueryExecutionResponseDto } from './dto/execute-query.dto';
 import { TestConnectionDto, TestConnectionResponseDto } from './dto/test-connection.dto';
 import { UpdateConnectionDto } from './dto/update-connection.dto';
-import { PostgresConnectionConfig } from './postgres.types';
-import { PostgresDataSourceService } from './postgres-data-source.service';
+import type { PostgresConnectionConfig, TableInfo } from './postgres.types';
+import type { PostgresDataSourceService } from './postgres-data-source.service';
 import { parsePostgresConnectionString } from './utils/connection-string-parser.util';
 import { createErrorResponse } from './utils/error-mapper.util';
 
@@ -80,7 +80,7 @@ export class PostgresDataSourceController {
     status: 400,
     description: 'Invalid connection parameters',
   })
-  async testConnection(@Body() dto: TestConnectionDto, @Request() _req: Request) {
+  async testConnection(@Body() dto: TestConnectionDto, @Request() _req: ExpressRequestType) {
     try {
       // Parse connection string if provided, otherwise use individual fields
       let baseConfig: Partial<PostgresConnectionConfig> = {};
@@ -236,7 +236,7 @@ export class PostgresDataSourceController {
   })
   async createConnection(
     @Body() body: CreateConnectionDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgIdParam?: string,
   ) {
     try {
@@ -454,7 +454,7 @@ export class PostgresDataSourceController {
     status: 400,
     description: 'Invalid organization ID format',
   })
-  async listConnections(@Request() req: Request, @Query('orgId') orgId?: string) {
+  async listConnections(@Request() req: ExpressRequestType, @Query('orgId') orgId?: string) {
     try {
       // Use query parameter if provided, otherwise try to get from auth, otherwise throw error
       const finalOrgId = orgId || req?.user?.orgId;
@@ -531,7 +531,7 @@ export class PostgresDataSourceController {
   })
   async getConnection(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -601,7 +601,7 @@ export class PostgresDataSourceController {
     @Param('id') id: string,
     @Query('orgId') orgId: string,
     @Body() updates: UpdateConnectionDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
   ) {
     try {
       // Use query parameter if provided, otherwise try to get from auth
@@ -674,7 +674,7 @@ export class PostgresDataSourceController {
   async deleteConnection(
     @Param('id') id: string,
     @Query('orgId') orgId: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
   ) {
     try {
       // Use query parameter if provided, otherwise try to get from auth
@@ -725,7 +725,7 @@ export class PostgresDataSourceController {
   })
   async getDatabases(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -785,7 +785,7 @@ export class PostgresDataSourceController {
   })
   async getSchemas(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -865,7 +865,7 @@ export class PostgresDataSourceController {
   })
   async getTables(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('schema') schema?: string,
     @Query('orgId') orgId?: string,
   ) {
@@ -879,7 +879,7 @@ export class PostgresDataSourceController {
       }
 
       // If schema is not provided, return all tables from all schemas
-      let tables;
+      let tables: TableInfo[];
       if (!schema || schema.trim().length === 0) {
         // Get all schemas with their tables
         const schemasWithTables = await this.postgresDataSourceService.discoverSchemasWithTables(
@@ -962,7 +962,7 @@ export class PostgresDataSourceController {
   async getTableSchema(
     @Param('id') id: string,
     @Param('table') table: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('schema') schema: string = 'public',
     @Query('orgId') orgId?: string,
   ) {
@@ -1028,7 +1028,7 @@ export class PostgresDataSourceController {
   })
   async refreshSchema(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1096,7 +1096,7 @@ export class PostgresDataSourceController {
   async executeQuery(
     @Param('id') id: string,
     @Body() body: ExecuteQueryDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1181,7 +1181,7 @@ export class PostgresDataSourceController {
   async explainQuery(
     @Param('id') id: string,
     @Body() body: { query: string; params?: unknown[] },
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1252,7 +1252,7 @@ export class PostgresDataSourceController {
   async createSync(
     @Param('id') id: string,
     @Body() body: CreateSyncJobDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1319,7 +1319,7 @@ export class PostgresDataSourceController {
   })
   async getSyncJobs(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1385,7 +1385,7 @@ export class PostgresDataSourceController {
   async getSyncJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1453,7 +1453,7 @@ export class PostgresDataSourceController {
   async cancelSyncJob(
     @Param('id') id: string,
     @Param('jobId') jobId: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1590,7 +1590,7 @@ export class PostgresDataSourceController {
   })
   async getHealth(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -1663,7 +1663,7 @@ export class PostgresDataSourceController {
   })
   async getQueryLogs(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('limit') limit: string = '100',
     @Query('offset') offset: string = '0',
     @Query('orgId') orgId?: string,
@@ -1727,7 +1727,7 @@ export class PostgresDataSourceController {
   })
   async getMetrics(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {

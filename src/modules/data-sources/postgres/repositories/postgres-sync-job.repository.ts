@@ -7,8 +7,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, lte } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 import {
-  NewPostgresSyncJob,
-  PostgresSyncJob,
+  type NewPostgresSyncJob,
+  type PostgresSyncJob,
   postgresSyncJobs,
 } from '../../../../database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema';
 

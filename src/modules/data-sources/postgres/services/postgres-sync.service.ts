@@ -4,11 +4,11 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
 import { SYNC_CONFIG } from '../constants/postgres.constants';
-import { SyncJobStatus, SyncMode, SyncProgress } from '../postgres.types';
-import { PostgresSyncJobRepository } from '../repositories/postgres-sync-job.repository';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
+import { SyncJobStatus, SyncMode, type SyncProgress } from '../postgres.types';
+import type { PostgresSyncJobRepository } from '../repositories/postgres-sync-job.repository';
+import type { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresSyncService {

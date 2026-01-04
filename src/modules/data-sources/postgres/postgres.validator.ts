@@ -4,7 +4,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import type { z } from 'zod';
 import { PostgresErrorCode } from './constants/error-codes.constants';
 import { CONNECTION_DEFAULTS, MAX_CONNECTIONS_PER_ORG } from './constants/postgres.constants';
 import {

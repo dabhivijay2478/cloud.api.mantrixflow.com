@@ -5,11 +5,11 @@
 
 import { promises as dns, setDefaultResultOrder } from 'node:dns';
 import { EventEmitter } from 'node:events';
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { Pool, PoolConfig, QueryResult } from 'pg';
-import { ConnectConfig, Client as SSHClient } from 'ssh2';
+import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Pool, type PoolConfig, type QueryResult } from 'pg';
+import { type ConnectConfig, Client as SSHClient } from 'ssh2';
 import { CONNECTION_DEFAULTS } from '../constants/postgres.constants';
-import { DecryptedConnectionCredentials, PostgresConnectionConfig } from '../postgres.types';
+import type { DecryptedConnectionCredentials, PostgresConnectionConfig } from '../postgres.types';
 
 // Set Node.js to prefer IPv4 for DNS lookups (affects all connections)
 // This helps prevent IPv6 connectivity issues for ALL PostgreSQL connections

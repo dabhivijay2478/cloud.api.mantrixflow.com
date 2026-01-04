@@ -4,7 +4,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import {
+import type {
   ColumnInfo,
   ColumnMapping,
   TypeInferenceResult,

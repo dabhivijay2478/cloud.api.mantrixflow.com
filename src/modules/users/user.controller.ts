@@ -7,7 +7,7 @@ import { Body, Controller, Get, Param, Patch, Post, Request, UseGuards } from '@
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
 
-type Request = ExpressRequest;
+type ExpressRequestType = ExpressRequest;
 
 import {
   ApiBearerAuth,
@@ -20,7 +20,7 @@ import {
 import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { CreateUserDto } from './dto/create-user.dto';
-import { UserService } from './user.service';
+import type { UserService } from './user.service';
 
 @ApiTags('users')
 @ApiBearerAuth('JWT-auth')
@@ -73,7 +73,7 @@ export class UserController {
     status: 200,
     description: 'User retrieved successfully',
   })
-  async getCurrentUser(@Request() req: Request) {
+  async getCurrentUser(@Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     if (!userId) {
       throw new Error('User not authenticated');
@@ -113,7 +113,7 @@ export class UserController {
     description: 'User updated successfully',
   })
   async updateCurrentUser(
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Body() data: {
       firstName?: string;
       lastName?: string;
@@ -143,7 +143,7 @@ export class UserController {
     description: 'Onboarding status updated successfully',
   })
   async updateOnboarding(
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Body() data: { completed: boolean; step?: string },
   ) {
     const userId = req.user?.id;

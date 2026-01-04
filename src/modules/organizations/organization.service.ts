@@ -5,9 +5,9 @@
 
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Organization } from '../../database/schemas/organizations';
-import { CreateOrganizationDto } from './dto/create-organization.dto';
-import { UpdateOrganizationDto } from './dto/update-organization.dto';
-import { OrganizationRepository } from './repositories/organization.repository';
+import type { CreateOrganizationDto } from './dto/create-organization.dto';
+import type { UpdateOrganizationDto } from './dto/update-organization.dto';
+import type { OrganizationRepository } from './repositories/organization.repository';
 
 @Injectable()
 export class OrganizationService {

@@ -3,7 +3,7 @@
  * Type definitions for source schema discovery and configuration
  */
 
-import { ColumnInfo } from '../../data-sources/postgres/postgres.types';
+import type { ColumnInfo } from '../../data-sources/postgres/postgres.types';
 
 /**
  * Source Schema Configuration

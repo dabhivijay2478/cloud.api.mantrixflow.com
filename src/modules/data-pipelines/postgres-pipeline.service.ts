@@ -80,7 +80,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PipelineDestinationSchema, PipelineSourceSchema, PostgresPipeline } from '@db/schema';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import {
+import type {
   ColumnMapping,
   DryRunResult,
   PipelineError,
@@ -88,14 +88,14 @@ import {
   Transformation,
   ValidationResult,
 } from '../data-sources/postgres/postgres.types';
-import { PostgresConnectionRepository } from '../data-sources/postgres/repositories/postgres-connection.repository';
-import { PostgresConnectionPoolService } from '../data-sources/postgres/services/postgres-connection-pool.service';
-import { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
-import { PostgresDestinationService } from './emitters/postgres-destination.service';
-import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
-import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
-import { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
-import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
+import type { PostgresConnectionRepository } from '../data-sources/postgres/repositories/postgres-connection.repository';
+import type { PostgresConnectionPoolService } from '../data-sources/postgres/services/postgres-connection-pool.service';
+import type { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
+import type { PostgresDestinationService } from './emitters/postgres-destination.service';
+import type { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
+import type { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
+import type { PostgresPipelineRepository } from './repositories/postgres-pipeline.repository';
+import type { PostgresSchemaMapperService } from './transformers/postgres-schema-mapper.service';
 
 @Injectable()
 export class PostgresPipelineService {

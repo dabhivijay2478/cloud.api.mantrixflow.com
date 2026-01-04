@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { createSuccessResponse } from '../../../common/dto/api-response.dto';
-import { UserService } from '../user.service';
+import type { UserService } from '../user.service';
 
 @ApiTags('webhooks')
 @Controller('api/webhooks/supabase')

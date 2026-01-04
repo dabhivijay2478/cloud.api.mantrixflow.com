@@ -21,7 +21,7 @@ import {
 } from '@db/schema';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 /**
  * Pipeline with loaded schemas

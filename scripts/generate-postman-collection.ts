@@ -316,7 +316,7 @@ async function generatePostmanCollection() {
     const outputFile = path.join(OUTPUT_DIR, fileName);
 
     // Try using the converter library first
-    let collection;
+    let collection: PostmanCollection | any;
     try {
       collection = await convertOpenAPIToPostman(openapiSpec);
       console.log('✅ Converted using openapi-to-postmanv2');

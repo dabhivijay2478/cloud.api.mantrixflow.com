@@ -11,9 +11,9 @@ import {
 } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import type { OrganizationMember } from '../../database/schemas/organizations';
-import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
-import { OrganizationRepository } from './repositories/organization.repository';
-import { OrganizationMemberRepository } from './repositories/organization-member.repository';
+import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
+import type { OrganizationRepository } from './repositories/organization.repository';
+import type { OrganizationMemberRepository } from './repositories/organization-member.repository';
 
 @Injectable()
 export class OrganizationMemberService {

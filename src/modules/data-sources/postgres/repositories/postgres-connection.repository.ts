@@ -5,14 +5,14 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import { EncryptionService } from '../../../../common/encryption/encryption.service';
+import type { EncryptionService } from '../../../../common/encryption/encryption.service';
 import type { DrizzleDatabase } from '../../../../database/drizzle/database';
 import {
-  NewPostgresConnection,
-  PostgresConnection,
+  type NewPostgresConnection,
+  type PostgresConnection,
   postgresConnections,
 } from '../../../../database/schemas/data-sources/connections/postgres-connections.schema';
-import { DecryptedConnectionCredentials } from '../postgres.types';
+import type { DecryptedConnectionCredentials } from '../postgres.types';
 
 @Injectable()
 export class PostgresConnectionRepository {

@@ -20,7 +20,7 @@ import {
 } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
 
-type Request = ExpressRequest;
+type ExpressRequestType = ExpressRequest;
 
 import { UseGuards } from '@nestjs/common';
 import {
@@ -38,7 +38,7 @@ import {
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
-import { OrganizationMemberService } from './organization-member.service';
+import type { OrganizationMemberService } from './organization-member.service';
 
 @ApiTags('organizations')
 @ApiBearerAuth('JWT-auth')
@@ -72,7 +72,7 @@ export class OrganizationMemberController {
   async inviteMember(
     @Param('organizationId') organizationId: string,
     @Body() dto: InviteMemberDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
   ) {
     try {
       const userId = req.user?.id;

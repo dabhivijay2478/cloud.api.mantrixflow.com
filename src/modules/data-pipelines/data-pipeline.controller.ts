@@ -23,7 +23,7 @@ import {
 import type { Request as ExpressRequest } from 'express';
 
 // Type declarations are imported via tsconfig
-type Request = ExpressRequest;
+type ExpressRequestType = ExpressRequest;
 
 import {
   ApiBearerAuth,
@@ -40,8 +40,8 @@ import {
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { createErrorResponse } from '../data-sources/postgres/utils/error-mapper.util';
-import { CreatePipelineDto, UpdatePipelineDto } from './dto/create-pipeline.dto';
-import { PostgresPipelineService } from './postgres-pipeline.service';
+import type { CreatePipelineDto, UpdatePipelineDto } from './dto/create-pipeline.dto';
+import type { PostgresPipelineService } from './postgres-pipeline.service';
 
 @ApiTags('data-pipelines')
 @ApiBearerAuth('JWT-auth')
@@ -65,7 +65,7 @@ export class DataPipelineController {
   })
   async createPipeline(
     @Body() dto: CreatePipelineDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgIdParam?: string,
   ) {
     try {
@@ -230,7 +230,7 @@ export class DataPipelineController {
     status: 200,
     description: 'List of pipelines',
   })
-  async listPipelines(@Request() req: Request, @Query('orgId') orgIdParam?: string) {
+  async listPipelines(@Request() req: ExpressRequestType, @Query('orgId') orgIdParam?: string) {
     try {
       const finalOrgId = orgIdParam || req?.user?.orgId;
 
@@ -279,7 +279,7 @@ export class DataPipelineController {
   })
   async getPipeline(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgIdParam?: string,
   ) {
     try {
@@ -334,7 +334,7 @@ export class DataPipelineController {
   async updatePipeline(
     @Param('id') id: string,
     @Body() updates: UpdatePipelineDto,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgId?: string,
   ) {
     try {
@@ -405,7 +405,7 @@ export class DataPipelineController {
   })
   async deletePipeline(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('dropTable') dropTable?: boolean,
     @Query('orgId') orgId?: string,
   ) {
@@ -503,7 +503,7 @@ export class DataPipelineController {
   })
   async pausePipeline(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgIdParam?: string,
   ) {
     try {
@@ -547,7 +547,7 @@ export class DataPipelineController {
   })
   async resumePipeline(
     @Param('id') id: string,
-    @Request() req: Request,
+    @Request() req: ExpressRequestType,
     @Query('orgId') orgIdParam?: string,
   ) {
     try {
@@ -678,7 +678,7 @@ export class DataPipelineController {
   })
   async getPipelineRuns(
     @Param('id') id: string,
-    @Request() _req: Request,
+    @Request() _req: ExpressRequestType,
     @Query('limit') limit?: number,
     @Query('offset') offset?: number,
   ) {
@@ -726,7 +726,7 @@ export class DataPipelineController {
   async getPipelineRun(
     @Param('id') id: string,
     @Param('runId') runId: string,
-    @Request() _req: Request,
+    @Request() _req: ExpressRequestType,
   ) {
     try {
       const run = await this.pipelineService.pipelineRepository.findRunById(runId);

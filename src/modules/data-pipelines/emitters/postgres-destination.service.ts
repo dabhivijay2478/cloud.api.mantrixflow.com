@@ -4,8 +4,8 @@
  */
 
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { PoolClient } from 'pg';
-import {
+import type { PoolClient } from 'pg';
+import type {
   ColumnMapping,
   SchemaValidationResult,
   TableStats,

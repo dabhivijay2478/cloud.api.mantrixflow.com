@@ -4,9 +4,9 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
 import { SCHEMA_DISCOVERY } from '../constants/postgres.constants';
-import {
+import type {
   ColumnInfo,
   DatabaseInfo,
   IndexInfo,
@@ -19,7 +19,7 @@ import {
   isJsonbType,
   mapPostgresTypeToTypeScript,
 } from '../utils/postgres-type-mapper.util';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
+import type { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 @Injectable()
 export class PostgresSchemaDiscoveryService {

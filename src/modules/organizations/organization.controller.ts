@@ -18,7 +18,7 @@ import {
 // Type declarations are imported via tsconfig
 import type { Request as ExpressRequest } from 'express';
 
-type Request = ExpressRequest;
+type ExpressRequestType = ExpressRequest;
 
 import { UseGuards } from '@nestjs/common';
 import {
@@ -37,7 +37,7 @@ import {
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
-import { OrganizationService } from './organization.service';
+import type { OrganizationService } from './organization.service';
 
 @ApiTags('organizations')
 @ApiBearerAuth('JWT-auth')
@@ -60,7 +60,7 @@ export class OrganizationController {
     status: 201,
     description: 'Organization created successfully',
   })
-  async createOrganization(@Body() dto: CreateOrganizationDto, @Request() req: Request) {
+  async createOrganization(@Body() dto: CreateOrganizationDto, @Request() req: ExpressRequestType) {
     const userId = req.user?.id || 'default-user-id';
     const organization = await this.organizationService.createOrganization(userId, dto);
     return createSuccessResponse(organization, 'Organization created successfully', 201);
@@ -99,7 +99,7 @@ export class OrganizationController {
     status: 404,
     description: 'No current organization set',
   })
-  async getCurrentOrganization(@Request() req: Request) {
+  async getCurrentOrganization(@Request() req: ExpressRequestType) {
     const _userId = req.user?.id;
     const organization = await this.organizationService.getCurrentOrganization();
     if (!organization) {
@@ -144,7 +144,7 @@ export class OrganizationController {
     status: 200,
     description: 'Current organization set successfully',
   })
-  async setCurrentOrganization(@Param('id') id: string, @Request() req: Request) {
+  async setCurrentOrganization(@Param('id') id: string, @Request() req: ExpressRequestType) {
     const userId = req.user?.id || 'default-user-id';
     const organization = await this.organizationService.setCurrentOrganization(userId, id);
     return createSuccessResponse(organization, 'Current organization set successfully');

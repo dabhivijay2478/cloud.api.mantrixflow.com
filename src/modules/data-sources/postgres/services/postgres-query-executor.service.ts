@@ -5,10 +5,10 @@
 
 import { Injectable } from '@nestjs/common';
 import { QUERY_CONFIG } from '../constants/postgres.constants';
-import { QueryExecutionResult } from '../postgres.types';
+import type { QueryExecutionResult } from '../postgres.types';
 import { mapErrorToStandardized } from '../utils/error-mapper.util';
 import { sanitizeQuery } from '../utils/query-sanitizer.util';
-import { PostgresConnectionPoolService } from './postgres-connection-pool.service';
+import type { PostgresConnectionPoolService } from './postgres-connection-pool.service';
 
 /**
  * Rate limit tracking
