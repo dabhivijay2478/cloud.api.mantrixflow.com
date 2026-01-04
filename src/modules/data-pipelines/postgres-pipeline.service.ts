@@ -1,6 +1,41 @@
 /**
  * PostgreSQL Pipeline Service
  * Orchestrates end-to-end data pipeline execution
+ * 
+ * ============================================================================
+ * ARCHITECTURE: Destination Table Resolution & Migration Flow
+ * ============================================================================
+ * 
+ * This service implements a ROOT-CAUSE FIX for destination table creation
+ * that ensures table resolution happens BEFORE migration execution.
+ * 
+ * KEY PRINCIPLES:
+ * 1. Table resolution is DETERMINISTIC and happens ONCE in setup phase
+ * 2. Field mappings are the SINGLE source of truth for schema creation
+ * 3. Table creation NEVER happens during migration execution
+ * 4. Migration phase ONLY writes data (INSERT/UPSERT)
+ * 
+ * EXECUTION FLOW:
+ * 
+ * SETUP PHASE (before migration):
+ *   - resolveAndPrepareDestinationTable()
+ *     * Resolves whether table is EXISTING or NEW
+ *     * Creates table if needed (ONLY in setup phase)
+ *     * Locks the decision in destination schema
+ *     * Uses field mappings as source of truth for schema
+ * 
+ * MIGRATION PHASE (data movement):
+ *   - readFromSource() → Read data from source
+ *   - transformData() → Apply field mappings and transformations
+ *   - writeToDestination() → ONLY writes data (no table creation)
+ * 
+ * RULES:
+ * - If destinationTableExists = true → MUST use existing table, NEVER create
+ * - If destinationTableExists = false → Create new table ONLY if auto-generated name
+ * - Field mappings determine which columns are migrated
+ * - Only mapped fields are included in migration payload
+ * 
+ * ============================================================================
  */
 
 import {
@@ -636,19 +671,13 @@ export class PostgresPipelineService {
         const errors: PipelineError[] = [];
 
         try {
-            // Step 1: Read from source
-            this.logger.log(`[${run.id}] Step 1: Reading from source`);
-            const sourceData = await this.readFromSource(
-                pipeline,
-                sourceSchema,
-                pipeline.lastSyncValue,
-                run.id,
-            );
-
-            // Step 2: Transform data
-            this.logger.log(
-                `[${run.id}] Step 2: Transforming ${sourceData.rows.length} rows`,
-            );
+            // ============================================================================
+            // SETUP PHASE: Resolve destination table BEFORE migration execution
+            // ============================================================================
+            // This ensures table creation happens ONLY in setup phase, not during migration
+            // Field mappings are the SINGLE source of truth for schema creation
+            
+            this.logger.log(`[${run.id}] [SETUP] Resolving destination table and preparing schema`);
             
             // Extract field mappings from transformers in pipeline configuration
             const pipelineConfig = pipeline.transformations as any;
@@ -656,10 +685,10 @@ export class PostgresPipelineService {
             const transformers = collectors.flatMap((c: any) => c.transformers || []);
             
             this.logger.log(
-                `[${run.id}] Found ${transformers.length} transformers, ${collectors.length} collectors`,
+                `[${run.id}] [SETUP] Found ${transformers.length} transformers, ${collectors.length} collectors`,
             );
             
-            // Build column mappings from transformer fieldMappings
+            // Build column mappings from transformer fieldMappings (SINGLE SOURCE OF TRUTH)
             let columnMappings: ColumnMapping[] = [];
             if (transformers.length > 0 && transformers[0]?.fieldMappings && Array.isArray(transformers[0].fieldMappings) && transformers[0].fieldMappings.length > 0) {
                 // Use field mappings from transformers
@@ -667,7 +696,7 @@ export class PostgresPipelineService {
                 const primaryKeyField = transformers[0].primaryKeyField || fieldMappings.find(fm => fm.isPrimaryKey)?.destination;
                 
                 this.logger.log(
-                    `[${run.id}] Using ${fieldMappings.length} field mappings from transformer${primaryKeyField ? ` with primary key: ${primaryKeyField}` : ''}`,
+                    `[${run.id}] [SETUP] Using ${fieldMappings.length} field mappings from transformer${primaryKeyField ? ` with primary key: ${primaryKeyField}` : ''}`,
                 );
                 // Ensure only ONE primary key is set
                 let primaryKeySet = false;
@@ -687,7 +716,7 @@ export class PostgresPipelineService {
                         if (isPrimaryKey) {
                             primaryKeySet = true;
                             this.logger.log(
-                                `[${run.id}] Setting '${fm.destination}' as primary key`,
+                                `[${run.id}] [SETUP] Setting '${fm.destination}' as primary key`,
                             );
                         }
                     }
@@ -704,76 +733,64 @@ export class PostgresPipelineService {
                         isPrimaryKey: isPrimaryKey, // Use explicit primary key flag
                     };
                 });
-                
-                // Ensure 'id' field exists in mappings - if not, add it
-                const hasIdField = columnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
-                if (!hasIdField) {
-                    // Try to find an ID field in source data
-                    const sourceIdField = sourceData.rows.length > 0 
-                        ? Object.keys(sourceData.rows[0]).find(col => 
-                            col.toLowerCase() === 'id' || col.toLowerCase().endsWith('_id')
-                          )
-                        : null;
-                    
-                    if (sourceIdField) {
-                        columnMappings.unshift({
-                            sourceColumn: sourceIdField,
-                            destinationColumn: 'id',
-                            dataType: 'UUID',
-                            nullable: false,
-                            isPrimaryKey: true,
-                        });
-                        this.logger.log(
-                            `[${run.id}] Added missing 'id' field mapping from source column '${sourceIdField}'`,
-                        );
-                    } else {
-                        // Add a generated UUID column
-                        columnMappings.unshift({
-                            sourceColumn: 'id', // Will be generated
-                            destinationColumn: 'id',
-                            dataType: 'UUID',
-                            nullable: false,
-                            isPrimaryKey: true,
-                            defaultValue: 'gen_random_uuid()',
-                        });
-                        this.logger.log(
-                            `[${run.id}] Added generated UUID 'id' field as primary key`,
-                        );
-                    }
-                }
             } else if (destinationSchema.columnMappings && destinationSchema.columnMappings.length > 0) {
                 // Fall back to destination schema column mappings
                 this.logger.log(
-                    `[${run.id}] Using ${destinationSchema.columnMappings.length} column mappings from destination schema`,
+                    `[${run.id}] [SETUP] Using ${destinationSchema.columnMappings.length} column mappings from destination schema`,
                 );
                 columnMappings = destinationSchema.columnMappings;
             } else {
-                // Last resort: use all source columns as-is
-                if (sourceData.rows.length > 0) {
-                    const sourceColumns = Object.keys(sourceData.rows[0]);
-                    this.logger.log(
-                        `[${run.id}] No field mappings found, using all ${sourceColumns.length} source columns as-is`,
-                    );
-                    columnMappings = sourceColumns.map((col) => ({
-                        sourceColumn: col,
-                        destinationColumn: col,
-                        dataType: 'TEXT',
-                        nullable: true,
-                    }));
-                }
+                // Last resort: throw error - field mappings are required
+                this.logger.error(
+                    `[${run.id}] [SETUP] No field mappings found. Transformers: ${JSON.stringify(transformers)}, Destination schema mappings: ${JSON.stringify(destinationSchema.columnMappings)}`,
+                );
+                throw new BadRequestException(
+                    'No field mappings found. Please configure field mappings in the transformer before running migration.',
+                );
             }
             
             if (columnMappings.length === 0) {
-                this.logger.error(
-                    `[${run.id}] No column mappings found. Transformers: ${JSON.stringify(transformers)}, Destination schema mappings: ${JSON.stringify(destinationSchema.columnMappings)}`,
-                );
                 throw new BadRequestException(
                     'No column mappings found. Please configure field mappings in the transformer.',
                 );
             }
             
             this.logger.log(
-                `[${run.id}] Using ${columnMappings.length} column mappings: ${columnMappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`,
+                `[${run.id}] [SETUP] Using ${columnMappings.length} column mappings: ${columnMappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`,
+            );
+            
+            // RESOLVE AND PREPARE DESTINATION TABLE (happens BEFORE migration)
+            // This is the SINGLE point where table creation decisions are made
+            const tableResolution = await this.resolveAndPrepareDestinationTable(
+                pipeline,
+                destinationSchema,
+                columnMappings,
+                run.id,
+            );
+            
+            // Use resolved column mappings (may have been updated during table resolution)
+            const resolvedColumnMappings = tableResolution.columnMappings;
+            
+            this.logger.log(
+                `[${run.id}] [SETUP] Destination table resolved. Exists: ${tableResolution.tableExists}, Was created: ${tableResolution.tableWasCreated}`,
+            );
+
+            // ============================================================================
+            // MIGRATION PHASE: Read → Transform → Write
+            // ============================================================================
+            
+            // Step 1: Read from source
+            this.logger.log(`[${run.id}] Step 1: Reading from source`);
+            const sourceData = await this.readFromSource(
+                pipeline,
+                sourceSchema,
+                pipeline.lastSyncValue,
+                run.id,
+            );
+
+            // Step 2: Transform data
+            this.logger.log(
+                `[${run.id}] Step 2: Transforming ${sourceData.rows.length} rows`,
             );
             
             // Extract transformations array from pipeline config
@@ -855,14 +872,14 @@ export class PostgresPipelineService {
             
             let transformedData = await this.transformData(
                 sourceData.rows,
-                columnMappings,
+                resolvedColumnMappings,
                 legacyTransformations,
             );
             
             // Ensure ID field exists in transformed data - add it if missing
-            const hasIdInMappings = columnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
+            const hasIdInMappings = resolvedColumnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
             if (hasIdInMappings && transformedData.length > 0) {
-                const idMapping = columnMappings.find(m => m.destinationColumn.toLowerCase() === 'id');
+                const idMapping = resolvedColumnMappings.find(m => m.destinationColumn.toLowerCase() === 'id');
                 const hasIdInData = transformedData[0].hasOwnProperty('id') || transformedData[0].hasOwnProperty('ID');
                 
                 if (!hasIdInData && idMapping) {
@@ -883,7 +900,7 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Step 3: Write to destination
+            // Step 3: Write to destination (ONLY writes data - table already resolved)
             this.logger.log(
                 `[${run.id}] Step 3: Writing ${transformedData.length} rows to destination`,
             );
@@ -891,8 +908,8 @@ export class PostgresPipelineService {
                 transformedData,
                 pipeline,
                 destinationSchema,
+                resolvedColumnMappings, // Use resolved mappings from setup phase
                 run.id,
-                columnMappings, // Pass column mappings so table can be created if needed
             );
 
             // Step 4: Update pipeline state
@@ -1592,26 +1609,39 @@ export class PostgresPipelineService {
     }
 
     /**
-     * Step 3: Write to destination
+     * DESTINATION TABLE RESOLVER
+     * 
+     * This method resolves and prepares the destination table BEFORE migration execution.
+     * It is the SINGLE source of truth for table creation decisions.
+     * 
+     * Rules:
+     * 1. If destinationTableExists = true → MUST use existing table, NEVER create
+     * 2. If destinationTableExists = false → Create new table ONLY if auto-generated name
+     * 3. Field mappings are the SINGLE source of truth for schema creation
+     * 4. Table creation happens ONLY in this setup phase, NEVER during migration
+     * 
+     * @returns Resolved column mappings and table existence status
      */
-    private async writeToDestination(
-        transformedData: any[],
+    private async resolveAndPrepareDestinationTable(
         pipeline: PostgresPipeline,
         destinationSchema: PipelineDestinationSchema,
+        columnMappings: ColumnMapping[],
         runId?: string,
-        columnMappings?: ColumnMapping[],
     ): Promise<{
-        rowsWritten: number;
-        rowsSkipped: number;
-        rowsFailed: number;
+        columnMappings: ColumnMapping[];
+        tableExists: boolean;
+        tableWasCreated: boolean;
     }> {
+        const logPrefix = runId ? `[${runId}]` : '';
+        this.logger.log(
+            `${logPrefix} [TABLE RESOLVER] Resolving destination table: ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}`,
+        );
+
         // Get or create connection pool
         let pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
         if (!pool) {
-            // Pool doesn't exist, create it
-            const logPrefix = runId ? `[${runId}]` : '';
             this.logger.log(
-                `${logPrefix} Creating connection pool for destination connection ${destinationSchema.destinationConnectionId}`,
+                `${logPrefix} [TABLE RESOLVER] Creating connection pool for destination connection ${destinationSchema.destinationConnectionId}`,
             );
             const connection = await this.connectionRepository.findById(
                 destinationSchema.destinationConnectionId,
@@ -1639,83 +1669,46 @@ export class PostgresPipelineService {
         try {
             await client.query('BEGIN');
 
-            // Check if table exists
+            // Step 1: Resolve column mappings (field mappings are the SINGLE source of truth)
+            let finalColumnMappings = columnMappings || destinationSchema.columnMappings || [];
+            
+            if (finalColumnMappings.length === 0) {
+                throw new BadRequestException(
+                    'No column mappings found. Field mappings must be configured before migration.',
+                );
+            }
+
+            // Ensure 'id' field exists in mappings (required for primary key)
+                const hasIdField = finalColumnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
+                if (!hasIdField) {
+                // Add generated UUID 'id' field as primary key
+                    finalColumnMappings.unshift({
+                        sourceColumn: 'id',
+                        destinationColumn: 'id',
+                        dataType: 'UUID',
+                        nullable: false,
+                        isPrimaryKey: true,
+                        defaultValue: 'gen_random_uuid()',
+                    });
+                    this.logger.log(
+                    `${logPrefix} [TABLE RESOLVER] Added generated UUID 'id' field as primary key`,
+                );
+            }
+
+            // Step 2: Check if table exists in database
             const tableExists = await this.destinationService.tableExists(
                 client,
                 destinationSchema.destinationSchema ?? 'public',
                 destinationSchema.destinationTable,
             );
 
-            // Use provided column mappings or fall back to destinationSchema.columnMappings
-            // If neither exists, generate from transformed data
-            let finalColumnMappings = columnMappings || destinationSchema.columnMappings || [];
-            if (finalColumnMappings.length === 0 && transformedData.length > 0) {
-                const logPrefix = runId ? `[${runId}]` : '';
-                this.logger.log(
-                    `${logPrefix} No column mappings available, generating from transformed data`,
-                );
-                // Generate column mappings from first row of transformed data
-                const firstRow = transformedData[0];
-                const columns = Object.keys(firstRow);
-                finalColumnMappings = columns.map((col) => {
-                    const isIdField = col.toLowerCase() === 'id' || col.toLowerCase().endsWith('_id');
-                    return {
-                        sourceColumn: col,
-                        destinationColumn: col,
-                        dataType: isIdField ? 'UUID' : 'TEXT', // Use UUID for ID fields
-                        nullable: !isIdField, // ID fields should not be nullable
-                        isPrimaryKey: col.toLowerCase() === 'id', // Mark 'id' as primary key
-                    };
-                });
-                
-                // Ensure 'id' field exists - if not, add it
-                const hasIdField = finalColumnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
-                if (!hasIdField) {
-                    finalColumnMappings.unshift({
-                        sourceColumn: 'id',
-                        destinationColumn: 'id',
-                        dataType: 'UUID',
-                        nullable: false,
-                        isPrimaryKey: true,
-                        defaultValue: 'gen_random_uuid()',
-                    });
-                    this.logger.log(
-                        `${logPrefix} Added generated UUID 'id' field as primary key`,
-                    );
-                }
-                
-                // Update destination schema with generated mappings
-                await this.destinationSchemaRepository.update(destinationSchema.id, {
-                    columnMappings: finalColumnMappings as any,
-                });
-            } else if (finalColumnMappings.length > 0) {
-                // Ensure 'id' field exists in mappings
-                const hasIdField = finalColumnMappings.some(m => m.destinationColumn.toLowerCase() === 'id');
-                if (!hasIdField) {
-                    finalColumnMappings.unshift({
-                        sourceColumn: 'id',
-                        destinationColumn: 'id',
-                        dataType: 'UUID',
-                        nullable: false,
-                        isPrimaryKey: true,
-                        defaultValue: 'gen_random_uuid()',
-                    });
-                    this.logger.log(
-                        `${runId ? `[${runId}]` : ''} Added generated UUID 'id' field as primary key to existing mappings`,
-                    );
-                }
-            }
-
-            // IMPORTANT: Migration behavior fix
-            // If destinationTableExists = true → use the existing table and migrate only mapped fields
-            // If destinationTableExists = false → create a new table only when the name is auto-generated
-            // NEVER create a new table when destinationTableExists = true
-            
+            // Step 3: Resolve table creation decision (DETERMINISTIC - no ambiguity)
             const isAutoGeneratedTable = destinationSchema.destinationTable.startsWith('pipeline_');
-            const logPrefix = runId ? `[${runId}]` : '';
+            let shouldCreateTable = false;
+            let tableWasCreated = false;
             
             if (destinationSchema.destinationTableExists === true) {
-                // User selected an existing table - MUST use it, NEVER create a new one
+                // RULE 1: User explicitly selected existing table - MUST use it, NEVER create
                 if (!tableExists) {
                     // Table doesn't exist but user selected it - this is an error
                     throw new BadRequestException(
@@ -1723,76 +1716,45 @@ export class PostgresPipelineService {
                     );
                 }
                 
-                // Table exists - use it (do NOT create a new one)
                 this.logger.log(
-                    `${logPrefix} Using existing destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}. Will migrate only mapped fields.`,
+                    `${logPrefix} [TABLE RESOLVER] Using existing table (destinationTableExists=true). Will migrate ONLY mapped fields.`,
                 );
-                
-                // IMPORTANT: When using existing table, ensure we only use mapped fields
-                // Filter column mappings to only include fields that are actually mapped
-                if (columnMappings && columnMappings.length > 0) {
-                    // Only use the mapped columns - ignore any unmapped source columns
-                    const mappedColumns = columnMappings.map(m => m.destinationColumn);
-                    this.logger.log(
-                        `${logPrefix} Using ${mappedColumns.length} mapped fields: ${mappedColumns.join(', ')}`,
-                    );
-                }
+                shouldCreateTable = false;
             } else if (destinationSchema.destinationTableExists === false) {
-                // User wants a new table - only create if it's auto-generated or doesn't exist
+                // RULE 2: User wants new table - create ONLY if it doesn't exist
                 if (!tableExists) {
-                    // Table doesn't exist - create it
+                    shouldCreateTable = true;
                     this.logger.log(
-                        `${logPrefix} Creating new destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} with ${finalColumnMappings.length} columns`,
+                        `${logPrefix} [TABLE RESOLVER] Creating new table (destinationTableExists=false, table does not exist).`,
                     );
-                    await this.destinationService.createDestinationTable(
-                        client,
-                        destinationSchema.destinationSchema ?? 'public',
-                        destinationSchema.destinationTable,
-                        finalColumnMappings,
-                    );
-
-                    // Update destination schema to mark table as existing
-                    await this.destinationSchemaRepository.update(destinationSchema.id, {
-                        destinationTableExists: true,
-                        columnMappings: finalColumnMappings as any,
-                    });
                 } else {
-                    // Table exists but user wants new table - this shouldn't happen
-                    // Use the existing table but log a warning
+                    // Table exists but user wants new - this is a conflict
+                    // Update schema to reflect reality and use existing table
                     this.logger.warn(
-                        `${logPrefix} Table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} already exists but destinationTableExists is false. Using existing table.`,
+                        `${logPrefix} [TABLE RESOLVER] Table already exists but destinationTableExists=false. Using existing table and updating schema.`,
                     );
-                    // Update the schema to reflect that table exists
                     await this.destinationSchemaRepository.update(destinationSchema.id, {
                         destinationTableExists: true,
                     });
+                    shouldCreateTable = false;
                 }
             } else {
-                // destinationTableExists is null/undefined - determine based on table existence
+                // destinationTableExists is null/undefined - determine based on table existence and name pattern
                 if (tableExists) {
                     // Table exists - use it
                     this.logger.log(
-                        `${logPrefix} Table exists. Using existing destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}`,
+                        `${logPrefix} [TABLE RESOLVER] Table exists. Using existing table and updating schema.`,
                     );
-                    // Update schema to reflect that table exists
                     await this.destinationSchemaRepository.update(destinationSchema.id, {
                         destinationTableExists: true,
                     });
+                    shouldCreateTable = false;
                 } else if (isAutoGeneratedTable) {
                     // Auto-generated name and table doesn't exist - create it
+                    shouldCreateTable = true;
                     this.logger.log(
-                        `${logPrefix} Creating new destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} with ${finalColumnMappings.length} columns`,
+                        `${logPrefix} [TABLE RESOLVER] Auto-generated table name and table does not exist. Creating new table.`,
                     );
-                    await this.destinationService.createDestinationTable(
-                        client,
-                        destinationSchema.destinationSchema ?? 'public',
-                        destinationSchema.destinationTable,
-                        finalColumnMappings,
-                    );
-                    await this.destinationSchemaRepository.update(destinationSchema.id, {
-                        destinationTableExists: true,
-                        columnMappings: finalColumnMappings as any,
-                    });
                 } else {
                     // Not auto-generated and doesn't exist - error
                     throw new BadRequestException(
@@ -1801,8 +1763,31 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Validate schema if table exists
-            if (tableExists && finalColumnMappings.length > 0) {
+            // Step 4: Create table if needed (ONLY in setup phase)
+            if (shouldCreateTable) {
+                this.logger.log(
+                    `${logPrefix} [TABLE RESOLVER] Creating destination table ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable} with ${finalColumnMappings.length} columns from field mappings`,
+                );
+                
+                    await this.destinationService.createDestinationTable(
+                        client,
+                        destinationSchema.destinationSchema ?? 'public',
+                        destinationSchema.destinationTable,
+                        finalColumnMappings,
+                    );
+
+                // Update destination schema to mark table as existing and store mappings
+                    await this.destinationSchemaRepository.update(destinationSchema.id, {
+                        destinationTableExists: true,
+                        columnMappings: finalColumnMappings as any,
+                    });
+
+                tableWasCreated = true;
+                this.logger.log(
+                    `${logPrefix} [TABLE RESOLVER] Table created successfully. Schema locked with ${finalColumnMappings.length} mapped fields.`,
+                );
+            } else {
+                // Step 5: Validate and evolve existing table schema
                 const validation = await this.destinationService.validateSchema(
                     client,
                     destinationSchema.destinationSchema ?? 'public',
@@ -1811,10 +1796,13 @@ export class PostgresPipelineService {
                 );
 
                 if (!validation.valid) {
-                    // Add missing columns
+                    // Add missing columns (schema evolution)
                     if (validation.missingColumns && validation.missingColumns.length > 0) {
                         const missingMappings = finalColumnMappings.filter((m) =>
                             validation.missingColumns!.includes(m.destinationColumn),
+                        );
+                        this.logger.log(
+                            `${logPrefix} [TABLE RESOLVER] Adding ${missingMappings.length} missing columns to existing table: ${validation.missingColumns!.join(', ')}`,
                         );
                         await this.destinationService.addMissingColumns(
                             client,
@@ -1825,10 +1813,93 @@ export class PostgresPipelineService {
                     }
                 }
                 
-                // IMPORTANT: When using existing table, ensure transformed data only contains mapped columns
-                // Filter out any columns that are not in the mappings (shouldn't happen, but safety check)
-                if (destinationSchema.destinationTableExists === true && transformedData.length > 0) {
-                    const mappedColumns = new Set(finalColumnMappings.map(m => m.destinationColumn));
+                // Update schema with resolved mappings if not already set
+                if (!destinationSchema.columnMappings || destinationSchema.columnMappings.length === 0) {
+                    await this.destinationSchemaRepository.update(destinationSchema.id, {
+                        columnMappings: finalColumnMappings as any,
+                    });
+                }
+            }
+
+            await client.query('COMMIT');
+
+            this.logger.log(
+                `${logPrefix} [TABLE RESOLVER] Resolution complete. Table exists: ${!shouldCreateTable || tableWasCreated}, Mapped fields: ${finalColumnMappings.length}`,
+            );
+
+            return {
+                columnMappings: finalColumnMappings,
+                tableExists: !shouldCreateTable || tableWasCreated,
+                tableWasCreated,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Step 3: Write to destination
+     * 
+     * IMPORTANT: This method ONLY writes data. Table creation/resolution happens
+     * in resolveAndPrepareDestinationTable() which runs BEFORE this method.
+     * 
+     * Field mappings are the SINGLE source of truth for:
+     * - Which columns to insert/update
+     * - The data payload structure
+     */
+    private async writeToDestination(
+        transformedData: any[],
+        pipeline: PostgresPipeline,
+        destinationSchema: PipelineDestinationSchema,
+        resolvedColumnMappings: ColumnMapping[],
+        runId?: string,
+    ): Promise<{
+        rowsWritten: number;
+        rowsSkipped: number;
+        rowsFailed: number;
+    }> {
+        const logPrefix = runId ? `[${runId}]` : '';
+        
+        // Get or create connection pool
+        let pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
+        if (!pool) {
+            this.logger.log(
+                `${logPrefix} Creating connection pool for destination connection ${destinationSchema.destinationConnectionId}`,
+            );
+            const connection = await this.connectionRepository.findById(
+                destinationSchema.destinationConnectionId,
+                pipeline.orgId,
+            );
+            if (!connection) {
+                throw new BadRequestException(
+                    `Destination connection ${destinationSchema.destinationConnectionId} not found`,
+                );
+            }
+            if (connection.status !== 'active') {
+                throw new BadRequestException(
+                    `Destination connection is not active (status: ${connection.status})`,
+                );
+            }
+            const credentials = this.connectionRepository.decryptCredentials(connection);
+            pool = await this.connectionPool.createPool(
+                destinationSchema.destinationConnectionId,
+                credentials,
+            );
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            // IMPORTANT: Filter transformed data to ONLY include mapped columns
+            // Field mappings are the SINGLE source of truth for what gets migrated
+            const mappedColumns = new Set(resolvedColumnMappings.map(m => m.destinationColumn));
+            
+            if (transformedData.length > 0) {
                     const firstRow = transformedData[0];
                     const unmappedColumns = Object.keys(firstRow).filter(col => !mappedColumns.has(col));
                     
@@ -1851,7 +1922,6 @@ export class PostgresPipelineService {
                         this.logger.log(
                             `${logPrefix} Filtered transformed data to only include ${mappedColumns.size} mapped columns.`,
                         );
-                    }
                 }
             }
 
@@ -1861,12 +1931,11 @@ export class PostgresPipelineService {
             let upsertKey: string[] | undefined = destinationSchema.upsertKey || undefined;
             
             // Find primary key from column mappings
-            const primaryKeyMapping = finalColumnMappings.find(m => m.isPrimaryKey);
+            const primaryKeyMapping = resolvedColumnMappings.find(m => m.isPrimaryKey);
             if (primaryKeyMapping && primaryKeyMapping.dataType === 'UUID') {
                 // If primary key is UUID, use upsert mode to update existing records
                 writeMode = 'upsert';
                 upsertKey = [primaryKeyMapping.destinationColumn];
-                const logPrefix = runId ? `[${runId}]` : '';
                 this.logger.log(
                     `${logPrefix} Primary key '${primaryKeyMapping.destinationColumn}' is UUID type. Using upsert mode to update existing records.`,
                 );
@@ -1874,7 +1943,6 @@ export class PostgresPipelineService {
                 // If primary key exists but is not UUID, still use upsert for consistency
                 writeMode = 'upsert';
                 upsertKey = [primaryKeyMapping.destinationColumn];
-                const logPrefix = runId ? `[${runId}]` : '';
                 this.logger.log(
                     `${logPrefix} Primary key '${primaryKeyMapping.destinationColumn}' found. Using upsert mode.`,
                 );
