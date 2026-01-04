@@ -854,7 +854,13 @@ export class PostgresPipelineService {
             // Step 1: Read from source
             // IMPORTANT: Use cursor from run record (AUTHORITATIVE) if available
             // Otherwise fall back to pipeline.lastSyncValue (legacy)
+            // Also read resolved destination table info for later use
             const currentRun = await this.pipelineRepository.findRunById(run.id);
+            if (!currentRun || !currentRun.resolvedDestinationTable) {
+                throw new BadRequestException(
+                    `Run record ${run.id} does not have resolved destination table. Setup phase must complete before migration.`,
+                );
+            }
             const syncCursor = currentRun?.lastSyncCursor || pipeline.lastSyncValue || null;
             
             this.logger.log(`[${run.id}] Step 1: Reading from source${syncCursor ? ` (cursor: ${syncCursor})` : ' (full sync)'}`);
@@ -978,20 +984,13 @@ export class PostgresPipelineService {
             }
 
             // Step 3: Write to destination (ONLY writes data - table already resolved and locked)
-            // IMPORTANT: Read resolved table from run record (AUTHORITATIVE)
+            // IMPORTANT: Use resolved table from run record (AUTHORITATIVE - already read in Step 1)
             this.logger.log(
                 `[${run.id}] Step 3: Writing ${transformedData.length} rows to destination`,
             );
             
-            // Get the locked run record to read authoritative destination table
-            const currentRun = await this.pipelineRepository.findRunById(run.id);
-            if (!currentRun || !currentRun.resolvedDestinationTable) {
-                throw new BadRequestException(
-                    `Run record ${run.id} does not have resolved destination table. Setup phase must complete before migration.`,
-                );
-            }
-            
             // Use resolved table from run record (AUTHORITATIVE - cannot be overridden)
+            // currentRun was already read and validated in Step 1
             const resolvedTable = {
                 schema: currentRun.resolvedDestinationSchema || 'public',
                 table: currentRun.resolvedDestinationTable,
