@@ -3,7 +3,12 @@
  * Verifies Supabase JWT tokens and extracts user information
  */
 
-import { type CanActivate, type ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  type CanActivate,
+  type ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import type { Request } from 'express';
 

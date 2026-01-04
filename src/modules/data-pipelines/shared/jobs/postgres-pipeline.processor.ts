@@ -27,7 +27,12 @@ export class PostgresPipelineProcessor extends WorkerHost {
    * Process pipeline execution job
    */
   async process(job: Job<PipelineJobData>): Promise<any> {
-    const { pipelineId, triggeredBy: _triggeredBy, triggerType: _triggerType, metadata: _metadata } = job.data;
+    const {
+      pipelineId,
+      triggeredBy: _triggeredBy,
+      triggerType: _triggerType,
+      metadata: _metadata,
+    } = job.data;
 
     this.logger.log(`Processing pipeline job ${job.id} for pipeline ${pipelineId}`);
 
