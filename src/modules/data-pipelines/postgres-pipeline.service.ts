@@ -452,13 +452,47 @@ export class PostgresPipelineService {
             pipelineConfig.transformations = allTransformations;
         }
         
+        // CRITICAL: Always include collectors and emitters - they contain field mappings
         if (data.collectors) {
             pipelineConfig.collectors = data.collectors;
+            
+            // Validate that collectors have transformers with field mappings
+            const hasValidMappings = data.collectors.some((collector: any) => {
+                return collector.transformers && 
+                       Array.isArray(collector.transformers) &&
+                       collector.transformers.some((t: any) => 
+                           t?.fieldMappings && 
+                           Array.isArray(t.fieldMappings) && 
+                           t.fieldMappings.length > 0
+                       );
+            });
+            
+            if (!hasValidMappings) {
+                this.logger.warn(
+                    `Pipeline creation: No valid field mappings found in collectors. ` +
+                    `Collectors: ${JSON.stringify(data.collectors.map((c: any) => ({
+                        id: c.id,
+                        transformersCount: c.transformers?.length || 0,
+                        transformers: c.transformers?.map((t: any) => ({
+                            id: t.id,
+                            hasFieldMappings: !!t.fieldMappings,
+                            fieldMappingsCount: Array.isArray(t.fieldMappings) ? t.fieldMappings.length : 0,
+                        })) || [],
+                    })))}`,
+                );
+            }
         }
         
         if (data.emitters) {
             pipelineConfig.emitters = data.emitters;
         }
+        
+        // Log final pipeline config structure for debugging
+        this.logger.log(
+            `Pipeline config structure: collectors=${pipelineConfig.collectors?.length || 0}, ` +
+            `emitters=${pipelineConfig.emitters?.length || 0}, ` +
+            `transformations=${pipelineConfig.transformations?.length || 0}`,
+        );
         
         // Validate destinationConnectionId is provided (required for legacy column)
         if (!data.destinationConnectionId) {
@@ -520,6 +554,21 @@ export class PostgresPipelineService {
             }
         }
         
+        // CRITICAL: Ensure pipelineConfig is properly structured before saving
+        // This ensures transformations are persisted atomically
+        const finalPipelineConfig = {
+            ...pipelineConfig,
+            // Ensure collectors and emitters are always included
+            collectors: pipelineConfig.collectors || [],
+            emitters: pipelineConfig.emitters || [],
+        };
+        
+        this.logger.log(
+            `Creating pipeline with config: collectors=${finalPipelineConfig.collectors?.length || 0}, ` +
+            `emitters=${finalPipelineConfig.emitters?.length || 0}, ` +
+            `transformations=${finalPipelineConfig.transformations?.length || 0}`,
+        );
+        
         const pipeline = await this.pipelineRepository.create({
             orgId: data.orgId,
             userId: data.userId,
@@ -530,13 +579,37 @@ export class PostgresPipelineService {
             destinationSchemaId: destinationSchema.id,
                 destinationConnectionId: data.destinationConnectionId, // Legacy column - required during migration
                 destinationTable: data.destinationTable, // Legacy column - required during migration
-            transformations: pipelineConfig, // Store full config including collectors/emitters
+            transformations: finalPipelineConfig, // Store full config including collectors/emitters
             syncMode: data.syncMode || 'full',
             incrementalColumn: data.incrementalColumn,
             syncFrequency: data.syncFrequency || 'manual',
         });
 
-            this.logger.log(`Successfully created pipeline: ${pipeline.id}`);
+        // CRITICAL: Verify pipeline was created with transformations persisted
+        // Reload immediately to ensure data was committed to database
+        const verifyPipeline = await this.pipelineRepository.findByIdWithSchemas(pipeline.id);
+        if (verifyPipeline && verifyPipeline.pipeline) {
+            const verifyConfig = verifyPipeline.pipeline.transformations as any;
+            const verifyCollectors = verifyConfig?.collectors || [];
+            const verifyTransformers = verifyCollectors.flatMap((c: any) => c.transformers || []);
+            const verifyHasMappings = verifyTransformers.some((t: any) => 
+                t?.fieldMappings && Array.isArray(t.fieldMappings) && t.fieldMappings.length > 0
+            );
+            
+            if (!verifyHasMappings && verifyTransformers.length > 0) {
+                this.logger.warn(
+                    `Pipeline ${pipeline.id} created but field mappings not found in verification. ` +
+                    `This may indicate a persistence issue. Transformers: ${verifyTransformers.length}`,
+                );
+            } else {
+                this.logger.log(
+                    `Pipeline ${pipeline.id} created successfully with ${verifyTransformers.length} transformer(s) ` +
+                    `and ${verifyHasMappings ? 'valid' : 'no'} field mappings`,
+                );
+            }
+        }
+        
+        this.logger.log(`Successfully created pipeline: ${pipeline.id}`);
         return pipeline;
         } catch (error) {
             // Enhanced error logging - extract actual PostgreSQL error from Drizzle
@@ -721,8 +794,63 @@ export class PostgresPipelineService {
             
             this.logger.log(`[${run.id}] [SETUP] Resolving destination table and preparing schema`);
             
+            // CRITICAL: Reload pipeline fresh from database to ensure we have latest transformations
+            // This prevents race conditions where pipeline was just created but transformations
+            // haven't been fully persisted yet
+            // Retry logic to handle potential race conditions
+            let latestPipeline = pipeline;
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            while (retryCount < maxRetries) {
+                const freshPipeline = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+                if (!freshPipeline || !freshPipeline.pipeline) {
+                    throw new NotFoundException(`Pipeline ${pipelineId} not found during setup`);
+                }
+                
+                latestPipeline = freshPipeline.pipeline;
+                
+                // Log raw transformations for debugging
+                this.logger.log(
+                    `[${run.id}] [SETUP] Pipeline transformations (attempt ${retryCount + 1}): type=${typeof latestPipeline.transformations}, hasValue=${!!latestPipeline.transformations}`,
+                );
+                
+                // Check if transformations are properly loaded
+                const pipelineConfig = latestPipeline.transformations as any;
+                const collectors = pipelineConfig?.collectors || [];
+                const transformers = collectors.flatMap((c: any) => c.transformers || []);
+                const hasValidMappings = transformers.some((t: any) => 
+                    t?.fieldMappings && Array.isArray(t.fieldMappings) && t.fieldMappings.length > 0
+                );
+                
+                if (hasValidMappings) {
+                    this.logger.log(
+                        `[${run.id}] [SETUP] Valid field mappings found on attempt ${retryCount + 1}`,
+                    );
+                    break; // Found valid mappings, proceed
+                }
+                
+                if (retryCount < maxRetries - 1) {
+                    this.logger.warn(
+                        `[${run.id}] [SETUP] No valid field mappings found on attempt ${retryCount + 1}. Retrying in 500ms...`,
+                    );
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    retryCount++;
+                } else {
+                    // Final attempt failed - log detailed error
+                    this.logger.error(
+                        `[${run.id}] [SETUP] No valid field mappings found after ${maxRetries} attempts. ` +
+                        `Pipeline ID: ${pipelineId}, Transformations: ${JSON.stringify(latestPipeline.transformations)}`,
+                    );
+                    throw new BadRequestException(
+                        `No field mappings found in pipeline. Please ensure transformations with field mappings are saved before running the pipeline. ` +
+                        `Found ${transformers.length} transformer(s) but none have valid fieldMappings.`,
+                    );
+                }
+            }
+            
             // Extract field mappings from transformers in pipeline configuration
-            const pipelineConfig = pipeline.transformations as any;
+            const pipelineConfig = latestPipeline.transformations as any;
             const collectors = pipelineConfig?.collectors || [];
             const transformers = collectors.flatMap((c: any) => c.transformers || []);
             
@@ -804,11 +932,11 @@ export class PostgresPipelineService {
                 });
             } else if (destinationSchema.columnMappings && destinationSchema.columnMappings.length > 0) {
                 // Fall back to destination schema column mappings
-                this.logger.log(
+                        this.logger.log(
                     `[${run.id}] [SETUP] Using ${destinationSchema.columnMappings.length} column mappings from destination schema`,
-                );
+                        );
                 columnMappings = destinationSchema.columnMappings;
-            } else {
+                    } else {
                 // Last resort: throw error - field mappings are required
                 this.logger.error(
                     `[${run.id}] [SETUP] No field mappings found. Transformers: ${JSON.stringify(transformers.map((t: any) => ({ id: t.id, hasFieldMappings: !!t.fieldMappings, fieldMappingsCount: Array.isArray(t.fieldMappings) ? t.fieldMappings.length : 0 })))}, Destination schema mappings: ${destinationSchema.columnMappings ? destinationSchema.columnMappings.length : 0} mappings`,
@@ -824,7 +952,7 @@ export class PostgresPipelineService {
                 );
             }
             
-            this.logger.log(
+                this.logger.log(
                 `[${run.id}] [SETUP] Using ${columnMappings.length} column mappings: ${columnMappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`,
             );
             
@@ -1801,8 +1929,16 @@ export class PostgresPipelineService {
 
         const client = await pool.connect();
 
+        // CRITICAL: Transaction lifecycle management for table creation
+        let transactionStarted = false;
+
         try {
             await client.query('BEGIN');
+            transactionStarted = true;
+            
+            this.logger.log(
+                `${logPrefix} [TRANSACTION] Started transaction for table resolution`,
+            );
 
             // Step 1: Resolve column mappings (field mappings are the SINGLE source of truth)
             let finalColumnMappings = columnMappings || destinationSchema.columnMappings || [];
@@ -1956,7 +2092,13 @@ export class PostgresPipelineService {
                 }
             }
 
+            // Commit transaction only if all operations succeeded
             await client.query('COMMIT');
+            transactionStarted = false; // Mark as committed
+            
+            this.logger.log(
+                `${logPrefix} [TRANSACTION] Committed transaction for table resolution`,
+            );
 
             this.logger.log(
                 `${logPrefix} [TABLE RESOLVER] Resolution complete. Table exists: ${!shouldCreateTable || tableWasCreated}, Mapped fields: ${finalColumnMappings.length}`,
@@ -1968,7 +2110,27 @@ export class PostgresPipelineService {
                 tableWasCreated,
             };
         } catch (error) {
-            await client.query('ROLLBACK');
+            // CRITICAL: Always rollback on ANY error
+            if (transactionStarted) {
+                try {
+                    await client.query('ROLLBACK');
+                    this.logger.error(
+                        `${logPrefix} [TRANSACTION] Rolled back transaction due to error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                    );
+                } catch (rollbackError) {
+                    this.logger.error(
+                        `${logPrefix} [TRANSACTION] Failed to rollback transaction: ${rollbackError instanceof Error ? rollbackError.message : 'Unknown error'}`,
+                    );
+                }
+            }
+            
+            // Log the original error
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            const errorCode = (error as any)?.code;
+            this.logger.error(
+                `${logPrefix} [TRANSACTION] Table resolution failed: ${errorMessage}${errorCode ? ` (code: ${errorCode})` : ''}`,
+            );
+            
             throw error;
         } finally {
             client.release();
@@ -2046,8 +2208,94 @@ export class PostgresPipelineService {
 
         const client = await pool.connect();
 
+        // CRITICAL: Schema validation BEFORE transaction starts
+        // This prevents 25P02 errors by ensuring constraints exist before upsert
+        let writeMode: 'append' | 'upsert' | 'replace' = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
+        let upsertKey: string[] | undefined = destinationSchema.upsertKey || undefined;
+        
+        // Find primary key from resolved column mappings
+        const primaryKeyMapping = resolvedTable.columnMappings.find(m => m.isPrimaryKey);
+        if (primaryKeyMapping) {
+            // PRIMARY KEY RULE: Always use upsert for UUID primary keys
+            if (primaryKeyMapping.dataType === 'UUID') {
+                writeMode = 'upsert';
+                upsertKey = [primaryKeyMapping.destinationColumn];
+                this.logger.log(
+                    `${logPrefix} [VALIDATION] Primary key '${primaryKeyMapping.destinationColumn}' is UUID. Will use upsert mode.`,
+                );
+            } else {
+                // Non-UUID primary key - still use upsert for consistency
+                writeMode = 'upsert';
+                upsertKey = [primaryKeyMapping.destinationColumn];
+                this.logger.log(
+                    `${logPrefix} [VALIDATION] Primary key '${primaryKeyMapping.destinationColumn}' found. Will use upsert mode.`,
+                );
+            }
+        }
+
+        // CRITICAL: Validate schema BEFORE starting transaction
+        // If upsert mode is enabled, ensure UNIQUE/PRIMARY KEY constraint exists
+        if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
+            const upsertColumn = upsertKey[0];
+            this.logger.log(
+                `${logPrefix} [VALIDATION] Validating UNIQUE constraint for upsert column '${upsertColumn}' before starting transaction`,
+            );
+            
+            // Check if constraint exists (outside transaction to avoid locking)
+            const hasConstraint = await this.destinationService.hasUniqueConstraint(
+                client,
+                resolvedTable.schema,
+                resolvedTable.table,
+                upsertColumn,
+            );
+            
+            if (!hasConstraint) {
+                this.logger.warn(
+                    `${logPrefix} [VALIDATION] No UNIQUE or PRIMARY KEY constraint found on ${resolvedTable.schema}.${resolvedTable.table}.${upsertColumn}. ` +
+                    `Attempting to create UNIQUE constraint...`,
+                );
+                
+                // Try to create the constraint
+                // This must happen BEFORE the transaction starts
+                try {
+                    await this.destinationService.ensureUniqueConstraint(
+                        client,
+                        resolvedTable.schema,
+                        resolvedTable.table,
+                        upsertColumn,
+                    );
+                    this.logger.log(
+                        `${logPrefix} [VALIDATION] Successfully created UNIQUE constraint for upsert column '${upsertColumn}'`,
+                    );
+                } catch (error) {
+                    // If we can't create the constraint, fail early with clear error
+                    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                    client.release();
+                    throw new BadRequestException(
+                        `Cannot enable upsert mode: Column '${upsertColumn}' in table '${resolvedTable.schema}.${resolvedTable.table}' ` +
+                        `does not have a PRIMARY KEY or UNIQUE constraint, and one could not be created: ${errorMessage}. ` +
+                        `Please add a PRIMARY KEY or UNIQUE constraint to this column before running the pipeline.`,
+                    );
+                }
+            } else {
+                this.logger.log(
+                    `${logPrefix} [VALIDATION] UNIQUE or PRIMARY KEY constraint confirmed on ${resolvedTable.schema}.${resolvedTable.table}.${upsertColumn}`,
+                );
+            }
+        }
+
+        // CRITICAL: Transaction lifecycle management
+        // This transaction wraps ALL write operations
+        // If ANY operation fails, the entire transaction is rolled back
+        let transactionStarted = false;
+        
         try {
+            // Start transaction - all subsequent operations are atomic
+            // Schema validation has already passed, so it's safe to proceed
             await client.query('BEGIN');
+            transactionStarted = true;
+            
+            this.logger.log(`${logPrefix} [TRANSACTION] Started transaction for write operation`);
 
             // IMPORTANT: Filter transformed data to ONLY include mapped columns
             // Field mappings are the SINGLE source of truth for what gets migrated
@@ -2079,32 +2327,8 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Determine write mode and upsert key
-            // PRIMARY KEY RULE: Only UUID is allowed as primary key
-            // Same UUID → UPDATE existing row
-            // New UUID → INSERT new row
-            let writeMode: 'append' | 'upsert' | 'replace' = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
-            let upsertKey: string[] | undefined = destinationSchema.upsertKey || undefined;
-            
-            // Find primary key from resolved column mappings
-            const primaryKeyMapping = resolvedTable.columnMappings.find(m => m.isPrimaryKey);
-            if (primaryKeyMapping) {
-                // PRIMARY KEY RULE: Always use upsert for UUID primary keys
-                if (primaryKeyMapping.dataType === 'UUID') {
-                    writeMode = 'upsert';
-                    upsertKey = [primaryKeyMapping.destinationColumn];
-                    this.logger.log(
-                        `${logPrefix} [MIGRATION] Primary key '${primaryKeyMapping.destinationColumn}' is UUID. Using upsert mode (same UUID → UPDATE, new UUID → INSERT).`,
-                    );
-                } else {
-                    // Non-UUID primary key - still use upsert for consistency
-                    writeMode = 'upsert';
-                    upsertKey = [primaryKeyMapping.destinationColumn];
-                    this.logger.log(
-                        `${logPrefix} [MIGRATION] Primary key '${primaryKeyMapping.destinationColumn}' found. Using upsert mode.`,
-                    );
-                }
-            }
+            // Write mode and upsert key are already determined and validated above
+            // (before transaction started to ensure constraints exist)
 
             // Write data to LOCKED destination table (from run record)
             // NEVER creates tables - table was resolved and locked during setup
@@ -2118,13 +2342,47 @@ export class PostgresPipelineService {
                 writeMode === 'append', // Only prevent duplicates in append mode
             );
 
+            // Commit transaction only if all operations succeeded
             await client.query('COMMIT');
+            transactionStarted = false; // Mark as committed so we don't rollback in finally
+            
+            this.logger.log(`${logPrefix} [TRANSACTION] Committed transaction successfully`);
 
             return result;
         } catch (error) {
+            // CRITICAL: Always rollback on ANY error
+            // This prevents 25P02 "transaction aborted" errors from cascading
+            if (transactionStarted) {
+                try {
             await client.query('ROLLBACK');
+                    this.logger.error(
+                        `${logPrefix} [TRANSACTION] Rolled back transaction due to error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                    );
+                } catch (rollbackError) {
+                    // If rollback itself fails, log but don't mask the original error
+                    this.logger.error(
+                        `${logPrefix} [TRANSACTION] Failed to rollback transaction: ${rollbackError instanceof Error ? rollbackError.message : 'Unknown error'}`,
+                    );
+                }
+            }
+            
+            // Log the original error with full context
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            const errorCode = (error as any)?.code;
+            this.logger.error(
+                `${logPrefix} [TRANSACTION] Write operation failed: ${errorMessage}${errorCode ? ` (code: ${errorCode})` : ''}`,
+            );
+            
+            // Re-throw with enhanced error message if it's a transaction error
+            if (errorCode === '25P02' || errorMessage.includes('current transaction is aborted')) {
+                throw new Error(
+                    `Transaction aborted: ${errorMessage}. This usually indicates a previous SQL statement failed. The transaction has been rolled back.`,
+                );
+            }
+            
             throw error;
         } finally {
+            // Always release the client connection
             client.release();
         }
     }

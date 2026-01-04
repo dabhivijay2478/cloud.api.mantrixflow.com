@@ -241,6 +241,98 @@ export class PostgresDestinationService {
     }
 
     /**
+     * Check if a column has PRIMARY KEY or UNIQUE constraint
+     * CRITICAL: Required for ON CONFLICT to work
+     * Public method - called from pipeline service for validation
+     */
+    async hasUniqueConstraint(
+        client: PoolClient,
+        schema: string,
+        table: string,
+        column: string,
+    ): Promise<boolean> {
+        const query = `
+            SELECT COUNT(*) as count
+            FROM (
+                -- Check PRIMARY KEY constraints
+                SELECT 1
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                JOIN pg_class c ON c.oid = i.indrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE i.indisprimary
+                AND n.nspname = $1
+                AND c.relname = $2
+                AND a.attname = $3
+                
+                UNION
+                
+                -- Check UNIQUE constraints
+                SELECT 1
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                JOIN pg_class c ON c.oid = i.indrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE i.indisunique
+                AND i.indisprimary = false
+                AND n.nspname = $1
+                AND c.relname = $2
+                AND a.attname = $3
+                AND array_length(i.indkey, 1) = 1  -- Single column constraint
+            ) constraints
+        `;
+
+        const result = await client.query(query, [schema, table, column]);
+        return parseInt(result.rows[0]?.count || '0', 10) > 0;
+    }
+
+    /**
+     * Create UNIQUE constraint on a column if it doesn't exist
+     * CRITICAL: Required for ON CONFLICT to work
+     * Public method - called from pipeline service for validation
+     */
+    async ensureUniqueConstraint(
+        client: PoolClient,
+        schema: string,
+        table: string,
+        column: string,
+    ): Promise<void> {
+        // Check if constraint already exists
+        const hasConstraint = await this.hasUniqueConstraint(client, schema, table, column);
+        
+        if (hasConstraint) {
+            this.logger.log(
+                `UNIQUE or PRIMARY KEY constraint already exists on ${schema}.${table}.${column}`,
+            );
+            return;
+        }
+
+        // Create UNIQUE constraint
+        const constraintName = `${table}_${column}_unique`;
+        const sql = `
+            ALTER TABLE ${this.quoteIdentifier(schema)}.${this.quoteIdentifier(table)}
+            ADD CONSTRAINT ${this.quoteIdentifier(constraintName)}
+            UNIQUE (${this.quoteIdentifier(column)})
+        `;
+
+        try {
+            await client.query(sql);
+            this.logger.log(
+                `Created UNIQUE constraint '${constraintName}' on ${schema}.${table}.${column} for upsert operations`,
+            );
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(
+                `Failed to create UNIQUE constraint on ${schema}.${table}.${column}: ${errorMessage}`,
+            );
+            throw new Error(
+                `Cannot create UNIQUE constraint on ${schema}.${table}.${column}: ${errorMessage}. ` +
+                `This is required for upsert operations. Please ensure the column can have a unique constraint.`,
+            );
+        }
+    }
+
+    /**
      * Insert batch of rows with duplicate prevention
      */
     private async insertBatch(
@@ -352,6 +444,9 @@ export class PostgresDestinationService {
     /**
      * Execute query with retry logic
      * Returns result with rowCount for duplicate detection
+     * 
+     * CRITICAL: Does NOT retry on transaction errors (25P02) - these indicate
+     * the transaction is aborted and must be rolled back immediately
      */
     private async executeWithRetry(
         client: PoolClient,
@@ -366,6 +461,23 @@ export class PostgresDestinationService {
                 return result;
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error('Unknown error');
+                
+                // CRITICAL: Check for transaction aborted error (25P02)
+                // This means the transaction is in an aborted state and MUST be rolled back
+                // Do NOT retry - immediately throw to trigger ROLLBACK
+                const errorCode = (error as any)?.code;
+                const errorMessage = lastError.message || '';
+                
+                if (errorCode === '25P02' || errorMessage.includes('current transaction is aborted')) {
+                    this.logger.error(
+                        `Transaction aborted (25P02) - cannot retry. Original error: ${errorMessage}. This indicates a previous query failed and the transaction must be rolled back.`,
+                    );
+                    // Immediately throw - do not retry
+                    throw new Error(
+                        `Transaction aborted: ${errorMessage}. Previous query in transaction failed. Transaction must be rolled back.`,
+                    );
+                }
+                
                 this.logger.warn(
                     `Query failed (attempt ${attempt}/${this.MAX_RETRIES}): ${lastError.message}`,
                 );
