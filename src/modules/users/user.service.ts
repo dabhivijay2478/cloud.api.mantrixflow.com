@@ -274,7 +274,31 @@ export class UserService {
     avatarUrl?: string;
     metadata?: Record<string, unknown>;
   }) {
-    return this.userRepository.update(id, data);
+    // Update user in database
+    const updatedUser = await this.userRepository.update(id, data);
+
+    // Also update Supabase user metadata
+    if (this.supabaseAdmin && updatedUser.supabaseUserId) {
+      try {
+        const userMetadata: Record<string, unknown> = {};
+        if (data.firstName !== undefined) userMetadata.first_name = data.firstName;
+        if (data.lastName !== undefined) userMetadata.last_name = data.lastName;
+        if (data.fullName !== undefined) userMetadata.full_name = data.fullName;
+        if (data.avatarUrl !== undefined) userMetadata.avatar_url = data.avatarUrl;
+
+        await this.supabaseAdmin.auth.admin.updateUserById(
+          updatedUser.supabaseUserId,
+          {
+            user_metadata: userMetadata,
+          },
+        );
+      } catch (error) {
+        console.error('Failed to update Supabase user metadata:', error);
+        // Don't fail the update if Supabase sync fails - database update succeeded
+      }
+    }
+
+    return updatedUser;
   }
 
   /**
