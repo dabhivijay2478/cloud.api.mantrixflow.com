@@ -57,6 +57,13 @@
       "when": 1764005000000,
       "tag": "0007_add_pipeline_run_job_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1764006000000,
+      "tag": "0008_add_organization_members_table",
+      "breakpoints": true
     }
   ]
 }
