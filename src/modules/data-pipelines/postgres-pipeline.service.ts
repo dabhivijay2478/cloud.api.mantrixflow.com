@@ -3,35 +3,74 @@
  * Orchestrates end-to-end data pipeline execution
  * 
  * ============================================================================
- * ARCHITECTURE: Destination Table Resolution & Migration Flow
+ * ARCHITECTURE: Job-Based Pipeline Execution with Authoritative State
  * ============================================================================
  * 
- * This service implements a ROOT-CAUSE FIX for destination table creation
- * that ensures table resolution happens BEFORE migration execution.
+ * This service implements a COMPLETE ARCHITECTURAL REFACTOR that fixes
+ * systemic design problems in the pipeline execution system.
  * 
- * KEY PRINCIPLES:
- * 1. Table resolution is DETERMINISTIC and happens ONCE in setup phase
- * 2. Field mappings are the SINGLE source of truth for schema creation
- * 3. Table creation NEVER happens during migration execution
- * 4. Migration phase ONLY writes data (INSERT/UPSERT)
+ * CRITICAL ARCHITECTURAL PRINCIPLES:
+ * 
+ * 1. SEPARATION OF SETUP AND EXECUTION
+ *    - Setup Phase: Resolves destination table ONCE and LOCKS it in run record
+ *    - Execution Phase: Reads from run record (AUTHORITATIVE) and ONLY writes data
+ *    - Table creation NEVER happens during execution
+ * 
+ * 2. RUN RECORD AS AUTHORITATIVE SOURCE OF TRUTH
+ *    - postgres_pipeline_runs stores:
+ *      * resolved_destination_schema/table (locked during setup)
+ *      * resolved_column_mappings (SINGLE source of truth)
+ *      * job_state (drives migration behavior)
+ *      * last_sync_cursor (authoritative cursor for incremental sync)
+ *    - Migration execution MUST read from run record
+ *    - Cannot override or recreate tables
+ * 
+ * 3. FIELD MAPPINGS AS SINGLE SOURCE OF TRUTH
+ *    - Field mappings determine:
+ *      * Which columns are migrated
+ *      * Schema creation (if applicable)
+ *      * Insert/update payload structure
+ *    - Only mapped fields are included in migration
+ * 
+ * 4. PRIMARY KEY & UPSERT RULES
+ *    - Only UUID is allowed as primary key
+ *    - Same UUID → UPDATE existing row
+ *    - New UUID → INSERT new row
+ *    - Works identically for existing and newly created tables
  * 
  * EXECUTION FLOW:
  * 
- * SETUP PHASE (before migration):
- *   - resolveAndPrepareDestinationTable()
- *     * Resolves whether table is EXISTING or NEW
- *     * Creates table if needed (ONLY in setup phase)
- *     * Locks the decision in destination schema
- *     * Uses field mappings as source of truth for schema
+ * SETUP PHASE (ONE TIME - before migration):
+ *   1. Create run record
+ *   2. Extract field mappings from transformers
+ *   3. resolveAndPrepareDestinationTable():
+ *      * Resolves whether table is EXISTING or NEW (DETERMINISTIC)
+ *      * Creates table if needed (ONLY in setup phase)
+ *      * Returns resolved table information
+ *   4. LOCK resolved table in run record:
+ *      * resolved_destination_schema
+ *      * resolved_destination_table
+ *      * resolved_column_mappings
+ *      * destination_table_was_created
+ *      * job_state = 'running'
  * 
  * MIGRATION PHASE (data movement):
- *   - readFromSource() → Read data from source
- *   - transformData() → Apply field mappings and transformations
- *   - writeToDestination() → ONLY writes data (no table creation)
+ *   1. Read resolved table from run record (AUTHORITATIVE)
+ *   2. Read from source (using cursor from run record if incremental)
+ *   3. Transform data (apply field mappings)
+ *   4. Write to destination (ONLY writes data - no table creation):
+ *      * Uses resolved table from run record
+ *      * Filters to only mapped columns
+ *      * Uses upsert for UUID primary keys
+ *   5. Update run record:
+ *      * job_state = 'completed'
+ *      * last_sync_cursor (for incremental sync)
+ *      * execution statistics
  * 
- * RULES:
+ * RULES (ENFORCED):
  * - If destinationTableExists = true → MUST use existing table, NEVER create
  * - If destinationTableExists = false → Create new table ONLY if auto-generated name
+ * - Migration execution CANNOT create tables (reads from run record)
  * - Field mappings determine which columns are migrated
  * - Only mapped fields are included in migration payload
  * 
@@ -646,15 +685,18 @@ export class PostgresPipelineService {
         }
 
         // Create pipeline run record first
+        // Job state starts as 'setup' - will be updated to 'running' after table resolution
         const run = await this.pipelineRepository.createRun({
             pipelineId: pipeline.id,
             orgId: pipeline.orgId,
             status: 'running',
+            jobState: 'setup' as any, // Start in setup phase
+            jobStateUpdatedAt: new Date(),
             startedAt: new Date(),
             triggeredBy: pipeline.userId,
             triggerType: 'manual',
             runMetadata: { batchSize: 1000 },
-        });
+        } as any);
 
         // Update pipeline migration state to 'running'
         this.logger.log(
@@ -759,8 +801,15 @@ export class PostgresPipelineService {
                 `[${run.id}] [SETUP] Using ${columnMappings.length} column mappings: ${columnMappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`,
             );
             
-            // RESOLVE AND PREPARE DESTINATION TABLE (happens BEFORE migration)
+            // ============================================================================
+            // SETUP PHASE: Resolve destination table and LOCK it in run record
+            // ============================================================================
             // This is the SINGLE point where table creation decisions are made
+            // The resolved table is stored in the run record and becomes AUTHORITATIVE
+            // Migration execution MUST read from run record, not resolve again
+            
+            this.logger.log(`[${run.id}] [SETUP] Resolving and locking destination table`);
+            
             const tableResolution = await this.resolveAndPrepareDestinationTable(
                 pipeline,
                 destinationSchema,
@@ -768,23 +817,51 @@ export class PostgresPipelineService {
                 run.id,
             );
             
-            // Use resolved column mappings (may have been updated during table resolution)
-            const resolvedColumnMappings = tableResolution.columnMappings;
+            // LOCK the resolved destination table in run record (AUTHORITATIVE)
+            // This ensures migration execution cannot override or recreate tables
+            await this.pipelineRepository.updateRun(run.id, {
+                resolvedDestinationSchema: destinationSchema.destinationSchema ?? 'public',
+                resolvedDestinationTable: destinationSchema.destinationTable,
+                destinationTableWasCreated: tableResolution.tableWasCreated ? 'true' : 'false',
+                resolvedColumnMappings: tableResolution.columnMappings as any,
+                jobState: 'running' as any, // Set job state to running after setup
+                jobStateUpdatedAt: new Date(),
+            } as any);
+            
+            // Refresh run record to get the locked values
+            const lockedRun = await this.pipelineRepository.findRunById(run.id);
+            if (!lockedRun) {
+                throw new NotFoundException(`Pipeline run ${run.id} not found after setup`);
+            }
             
             this.logger.log(
-                `[${run.id}] [SETUP] Destination table resolved. Exists: ${tableResolution.tableExists}, Was created: ${tableResolution.tableWasCreated}`,
+                `[${run.id}] [SETUP] Destination table LOCKED in run record: ${lockedRun.resolvedDestinationSchema}.${lockedRun.resolvedDestinationTable} (wasCreated: ${lockedRun.destinationTableWasCreated})`,
             );
+            
+            // Use resolved column mappings from locked run record
+            const resolvedColumnMappings = (lockedRun.resolvedColumnMappings || tableResolution.columnMappings) as ColumnMapping[];
+            
+            if (!resolvedColumnMappings || resolvedColumnMappings.length === 0) {
+                throw new BadRequestException(
+                    'Resolved column mappings not found in run record. Setup phase failed.',
+                );
+            }
 
             // ============================================================================
             // MIGRATION PHASE: Read → Transform → Write
             // ============================================================================
             
             // Step 1: Read from source
-            this.logger.log(`[${run.id}] Step 1: Reading from source`);
+            // IMPORTANT: Use cursor from run record (AUTHORITATIVE) if available
+            // Otherwise fall back to pipeline.lastSyncValue (legacy)
+            const currentRun = await this.pipelineRepository.findRunById(run.id);
+            const syncCursor = currentRun?.lastSyncCursor || pipeline.lastSyncValue || null;
+            
+            this.logger.log(`[${run.id}] Step 1: Reading from source${syncCursor ? ` (cursor: ${syncCursor})` : ' (full sync)'}`);
             const sourceData = await this.readFromSource(
                 pipeline,
                 sourceSchema,
-                pipeline.lastSyncValue,
+                syncCursor, // Use cursor from run record (AUTHORITATIVE)
                 run.id,
             );
 
@@ -900,26 +977,47 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Step 3: Write to destination (ONLY writes data - table already resolved)
+            // Step 3: Write to destination (ONLY writes data - table already resolved and locked)
+            // IMPORTANT: Read resolved table from run record (AUTHORITATIVE)
             this.logger.log(
                 `[${run.id}] Step 3: Writing ${transformedData.length} rows to destination`,
             );
+            
+            // Get the locked run record to read authoritative destination table
+            const currentRun = await this.pipelineRepository.findRunById(run.id);
+            if (!currentRun || !currentRun.resolvedDestinationTable) {
+                throw new BadRequestException(
+                    `Run record ${run.id} does not have resolved destination table. Setup phase must complete before migration.`,
+                );
+            }
+            
+            // Use resolved table from run record (AUTHORITATIVE - cannot be overridden)
+            const resolvedTable = {
+                schema: currentRun.resolvedDestinationSchema || 'public',
+                table: currentRun.resolvedDestinationTable,
+                columnMappings: (currentRun.resolvedColumnMappings || resolvedColumnMappings) as ColumnMapping[],
+            };
+            
+            this.logger.log(
+                `[${run.id}] [MIGRATION] Using LOCKED destination table: ${resolvedTable.schema}.${resolvedTable.table} (from run record)`,
+            );
+            
             const writeResult = await this.writeToDestination(
                 transformedData,
                 pipeline,
                 destinationSchema,
-                resolvedColumnMappings, // Use resolved mappings from setup phase
+                resolvedTable, // Pass resolved table from run record
                 run.id,
             );
 
-            // Step 4: Update pipeline state
+            // Step 4: Update run record with execution results and cursor
             const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
 
-            // Calculate last sync value for incremental sync
+            // Calculate last sync cursor for incremental sync
             // IMPORTANT: For timestamp columns, we need to handle edge cases where multiple records
-            // have the same timestamp. We update lastSyncValue to the max value found, so the next
+            // have the same timestamp. We update lastSyncCursor to the max value found, so the next
             // query using >= will catch any remaining records with that timestamp.
-            let lastSyncValue: string | null = pipeline.lastSyncValue || null;
+            let lastSyncCursor: string | null = null;
             if (pipeline.incrementalColumn && sourceData.rows.length > 0) {
                 const incrementalCol = pipeline.incrementalColumn;
                 const isTimestampColumn = incrementalCol.toLowerCase().includes('_at') || 
@@ -957,9 +1055,9 @@ export class PostgresPipelineService {
                 }
                 
                 if (maxValue !== null) {
-                    lastSyncValue = maxValue;
+                    lastSyncCursor = maxValue;
                     this.logger.log(
-                        `[${run.id}] Updated lastSyncValue for incremental column '${incrementalCol}': ${lastSyncValue} (${isTimestampColumn ? 'timestamp' : 'sequential'})`,
+                        `[${run.id}] Updated lastSyncCursor for incremental column '${incrementalCol}': ${lastSyncCursor} (${isTimestampColumn ? 'timestamp' : 'sequential'})`,
                     );
                 } else {
                     this.logger.warn(
@@ -967,23 +1065,30 @@ export class PostgresPipelineService {
                     );
                 }
             } else if (pipeline.incrementalColumn && sourceData.rows.length === 0) {
+                // Keep existing cursor if no new rows
+                const existingRun = await this.pipelineRepository.findRunById(run.id);
+                lastSyncCursor = existingRun?.lastSyncCursor || null;
                 this.logger.log(
-                    `[${run.id}] No new rows found for incremental sync. Keeping lastSyncValue: ${lastSyncValue || 'null'}`,
+                    `[${run.id}] No new rows found for incremental sync. Keeping lastSyncCursor: ${lastSyncCursor || 'null'}`,
                 );
             }
 
             // Determine if this is the first successful run
             const isFirstSuccessfulRun = (pipeline.totalRunsSuccessful ?? 0) === 0;
 
+            // Update run record with execution results and job state
             await this.pipelineRepository.updateRun(run.id, {
                 status: 'success',
+                jobState: 'completed' as any, // Set job state to completed
+                jobStateUpdatedAt: new Date(),
+                lastSyncCursor: lastSyncCursor, // Store cursor in run record (AUTHORITATIVE)
                 rowsRead: sourceData.rows.length,
                 rowsWritten: writeResult.rowsWritten,
                 rowsSkipped: writeResult.rowsSkipped,
                 rowsFailed: writeResult.rowsFailed,
                 completedAt: new Date(),
                 durationSeconds,
-            });
+            } as any);
 
             // Update pipeline statistics and switch to incremental mode after first successful run
             const updateData: any = {
@@ -1053,9 +1158,10 @@ export class PostgresPipelineService {
                 }
             }
 
-            // Update lastSyncValue if we have one
-            if (lastSyncValue !== null) {
-                updateData.lastSyncValue = lastSyncValue;
+            // Update lastSyncValue if we have one (for pipeline record - legacy)
+            // NOTE: The authoritative cursor is stored in run record (lastSyncCursor)
+            if (lastSyncCursor !== null) {
+                updateData.lastSyncValue = lastSyncCursor;
             }
 
             const updatedPipeline = await this.pipelineRepository.update(pipeline.id, updateData);
@@ -1084,13 +1190,16 @@ export class PostgresPipelineService {
 
             const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
 
+            // Update run record with error state
             await this.pipelineRepository.updateRun(run.id, {
                 status: 'failed',
+                jobState: 'error' as any, // Set job state to error
+                jobStateUpdatedAt: new Date(),
                 errorMessage,
                 errorStack: error instanceof Error ? error.stack : undefined,
                 completedAt: new Date(),
                 durationSeconds,
-            });
+            } as any);
 
             this.logger.log(
                 `[${run.id}] Setting pipeline migration state to 'pending' due to failure`,
@@ -1843,18 +1952,26 @@ export class PostgresPipelineService {
     /**
      * Step 3: Write to destination
      * 
-     * IMPORTANT: This method ONLY writes data. Table creation/resolution happens
-     * in resolveAndPrepareDestinationTable() which runs BEFORE this method.
+     * ARCHITECTURAL NOTE:
+     * This method ONLY writes data. It NEVER creates tables.
      * 
-     * Field mappings are the SINGLE source of truth for:
-     * - Which columns to insert/update
-     * - The data payload structure
+     * The resolved destination table is passed from the run record (AUTHORITATIVE).
+     * This ensures:
+     * - Table was resolved and locked during setup phase
+     * - Migration execution cannot override or recreate tables
+     * - Field mappings are the SINGLE source of truth
+     * 
+     * @param resolvedTable - Resolved table from run record (AUTHORITATIVE)
      */
     private async writeToDestination(
         transformedData: any[],
         pipeline: PostgresPipeline,
         destinationSchema: PipelineDestinationSchema,
-        resolvedColumnMappings: ColumnMapping[],
+        resolvedTable: {
+            schema: string;
+            table: string;
+            columnMappings: ColumnMapping[];
+        },
         runId?: string,
     ): Promise<{
         rowsWritten: number;
@@ -1862,6 +1979,17 @@ export class PostgresPipelineService {
         rowsFailed: number;
     }> {
         const logPrefix = runId ? `[${runId}]` : '';
+        
+        // Validate resolved table (must come from run record)
+        if (!resolvedTable.schema || !resolvedTable.table || !resolvedTable.columnMappings) {
+            throw new BadRequestException(
+                'Resolved destination table information is missing. Setup phase must complete before migration.',
+            );
+        }
+        
+        this.logger.log(
+            `${logPrefix} [MIGRATION] Writing to LOCKED destination: ${resolvedTable.schema}.${resolvedTable.table}`,
+        );
         
         // Get or create connection pool
         let pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
@@ -1897,7 +2025,7 @@ export class PostgresPipelineService {
 
             // IMPORTANT: Filter transformed data to ONLY include mapped columns
             // Field mappings are the SINGLE source of truth for what gets migrated
-            const mappedColumns = new Set(resolvedColumnMappings.map(m => m.destinationColumn));
+            const mappedColumns = new Set(resolvedTable.columnMappings.map(m => m.destinationColumn));
             
             if (transformedData.length > 0) {
                     const firstRow = transformedData[0];
@@ -1926,33 +2054,38 @@ export class PostgresPipelineService {
             }
 
             // Determine write mode and upsert key
-            // If primary key is UUID, use upsert mode to update existing records
+            // PRIMARY KEY RULE: Only UUID is allowed as primary key
+            // Same UUID → UPDATE existing row
+            // New UUID → INSERT new row
             let writeMode: 'append' | 'upsert' | 'replace' = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
             let upsertKey: string[] | undefined = destinationSchema.upsertKey || undefined;
             
-            // Find primary key from column mappings
-            const primaryKeyMapping = resolvedColumnMappings.find(m => m.isPrimaryKey);
-            if (primaryKeyMapping && primaryKeyMapping.dataType === 'UUID') {
-                // If primary key is UUID, use upsert mode to update existing records
-                writeMode = 'upsert';
-                upsertKey = [primaryKeyMapping.destinationColumn];
-                this.logger.log(
-                    `${logPrefix} Primary key '${primaryKeyMapping.destinationColumn}' is UUID type. Using upsert mode to update existing records.`,
-                );
-            } else if (primaryKeyMapping) {
-                // If primary key exists but is not UUID, still use upsert for consistency
-                writeMode = 'upsert';
-                upsertKey = [primaryKeyMapping.destinationColumn];
-                this.logger.log(
-                    `${logPrefix} Primary key '${primaryKeyMapping.destinationColumn}' found. Using upsert mode.`,
-                );
+            // Find primary key from resolved column mappings
+            const primaryKeyMapping = resolvedTable.columnMappings.find(m => m.isPrimaryKey);
+            if (primaryKeyMapping) {
+                // PRIMARY KEY RULE: Always use upsert for UUID primary keys
+                if (primaryKeyMapping.dataType === 'UUID') {
+                    writeMode = 'upsert';
+                    upsertKey = [primaryKeyMapping.destinationColumn];
+                    this.logger.log(
+                        `${logPrefix} [MIGRATION] Primary key '${primaryKeyMapping.destinationColumn}' is UUID. Using upsert mode (same UUID → UPDATE, new UUID → INSERT).`,
+                    );
+                } else {
+                    // Non-UUID primary key - still use upsert for consistency
+                    writeMode = 'upsert';
+                    upsertKey = [primaryKeyMapping.destinationColumn];
+                    this.logger.log(
+                        `${logPrefix} [MIGRATION] Primary key '${primaryKeyMapping.destinationColumn}' found. Using upsert mode.`,
+                    );
+                }
             }
 
-            // Write data with proper upsert behavior
+            // Write data to LOCKED destination table (from run record)
+            // NEVER creates tables - table was resolved and locked during setup
             const result = await this.destinationService.writeData(
                 client,
-                destinationSchema.destinationSchema ?? 'public',
-                destinationSchema.destinationTable,
+                resolvedTable.schema, // Use resolved schema from run record
+                resolvedTable.table,  // Use resolved table from run record
                 transformedData,
                 writeMode,
                 upsertKey,

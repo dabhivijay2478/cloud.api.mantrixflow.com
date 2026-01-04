@@ -19,6 +19,15 @@ export class PostgresSyncService {
 
   /**
    * Start sync job
+   * 
+   * ARCHITECTURAL NOTE:
+   * This method properly tracks job state in postgres_sync_jobs table.
+   * The job record is the AUTHORITATIVE source of truth for:
+   * - Job execution state
+   * - Progress (rowsSynced)
+   * - Cursor (lastSyncValue for incremental sync)
+   * - Destination table
+   * - Timestamps
    */
   async startSync(
     connectionId: string,
@@ -29,10 +38,17 @@ export class PostgresSyncService {
     incrementalColumn?: string,
     customWhereClause?: string,
   ): Promise<SyncProgress> {
-    // Update job status to running
+    // Get job record to read destination table (AUTHORITATIVE)
+    const job = await this.syncJobRepository.findById(jobId);
+    if (!job) {
+      throw new Error(`Sync job ${jobId} not found`);
+    }
+    
+    // Update job status to running with proper timestamps
     await this.syncJobRepository.update(jobId, {
       status: 'running',
       startedAt: new Date(),
+      updatedAt: new Date(),
     });
 
     const pool = this.connectionPoolService.getPool(connectionId);
@@ -62,10 +78,12 @@ export class PostgresSyncService {
         );
       }
     } catch (error) {
+      // Update job record with error state (AUTHORITATIVE)
       await this.syncJobRepository.update(jobId, {
         status: 'failed',
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
         completedAt: new Date(),
+        updatedAt: new Date(),
       });
 
       throw error;
@@ -122,20 +140,23 @@ export class PostgresSyncService {
       rowsSynced += result.rows.length;
       offset += batchSize;
 
-      // Update progress
+      // Update progress in job record (AUTHORITATIVE)
+      // This ensures job state is tracked throughout execution
       await this.syncJobRepository.update(jobId, {
         rowsSynced,
+        updatedAt: new Date(), // Update timestamp on each progress update
       });
 
       // Emit progress event (would use WebSocket in production)
       // this.emitProgress(jobId, { rowsSynced, totalRows, percentage: (rowsSynced / totalRows) * 100 });
     }
 
-    // Mark as completed
+    // Mark as completed with final state
     await this.syncJobRepository.update(jobId, {
       status: 'success',
       rowsSynced,
       completedAt: new Date(),
+      updatedAt: new Date(),
     });
 
     return {
@@ -219,19 +240,22 @@ export class PostgresSyncService {
       rowsSynced += result.rows.length;
       offset += batchSize;
 
-      // Update progress
+      // Update progress and cursor in job record (AUTHORITATIVE)
+      // This ensures job state and cursor are tracked throughout execution
       await this.syncJobRepository.update(jobId, {
         rowsSynced,
-        lastSyncValue: String(maxIncrementalValue),
+        lastSyncValue: String(maxIncrementalValue), // Update cursor during execution
+        updatedAt: new Date(), // Update timestamp on each progress update
       });
     }
 
-    // Mark as completed
+    // Mark as completed with final state and cursor
     await this.syncJobRepository.update(jobId, {
       status: 'success',
       rowsSynced,
-      lastSyncValue: String(maxIncrementalValue),
+      lastSyncValue: String(maxIncrementalValue), // Final cursor value
       completedAt: new Date(),
+      updatedAt: new Date(),
     });
 
     return {
@@ -281,10 +305,12 @@ export class PostgresSyncService {
    * Cancel sync job
    */
   async cancelSync(jobId: string): Promise<void> {
+    // Update job record with cancellation state (AUTHORITATIVE)
     await this.syncJobRepository.update(jobId, {
       status: 'failed',
       errorMessage: 'Sync cancelled by user',
       completedAt: new Date(),
+      updatedAt: new Date(),
     });
   }
 }
