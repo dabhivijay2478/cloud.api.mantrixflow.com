@@ -730,19 +730,46 @@ export class PostgresPipelineService {
                 `[${run.id}] [SETUP] Found ${transformers.length} transformers, ${collectors.length} collectors`,
             );
             
+            // Log transformer details for debugging
+            if (transformers.length > 0) {
+                transformers.forEach((t: any, idx: number) => {
+                    this.logger.log(
+                        `[${run.id}] [SETUP] Transformer ${idx}: id=${t.id || 'unknown'}, hasFieldMappings=${!!t.fieldMappings}, fieldMappingsCount=${Array.isArray(t.fieldMappings) ? t.fieldMappings.length : 0}`,
+                    );
+                });
+            } else {
+                this.logger.warn(
+                    `[${run.id}] [SETUP] No transformers found in collectors. Collectors: ${JSON.stringify(collectors.map((c: any) => ({ id: c.id, transformersCount: c.transformers?.length || 0 })))}`,
+                );
+            }
+            
             // Build column mappings from transformer fieldMappings (SINGLE SOURCE OF TRUTH)
+            // Check ALL transformers for fieldMappings, not just the first one
             let columnMappings: ColumnMapping[] = [];
-            if (transformers.length > 0 && transformers[0]?.fieldMappings && Array.isArray(transformers[0].fieldMappings) && transformers[0].fieldMappings.length > 0) {
+            let foundFieldMappings: Array<{ source: string; destination: string; isPrimaryKey?: boolean }> = [];
+            let primaryKeyField: string | undefined;
+            
+            // Search through all transformers to find fieldMappings
+            for (const transformer of transformers) {
+                if (transformer?.fieldMappings && Array.isArray(transformer.fieldMappings) && transformer.fieldMappings.length > 0) {
+                    foundFieldMappings = transformer.fieldMappings as Array<{ source: string; destination: string; isPrimaryKey?: boolean }>;
+                    primaryKeyField = transformer.primaryKeyField || foundFieldMappings.find(fm => fm.isPrimaryKey)?.destination;
+                    this.logger.log(
+                        `[${run.id}] [SETUP] Found ${foundFieldMappings.length} field mappings in transformer ${transformer.id || 'unknown'}`,
+                    );
+                    break; // Use the first transformer with field mappings
+                }
+            }
+            
+            if (foundFieldMappings.length > 0) {
                 // Use field mappings from transformers
-                const fieldMappings = transformers[0].fieldMappings as Array<{ source: string; destination: string; isPrimaryKey?: boolean }>;
-                const primaryKeyField = transformers[0].primaryKeyField || fieldMappings.find(fm => fm.isPrimaryKey)?.destination;
                 
                 this.logger.log(
-                    `[${run.id}] [SETUP] Using ${fieldMappings.length} field mappings from transformer${primaryKeyField ? ` with primary key: ${primaryKeyField}` : ''}`,
+                    `[${run.id}] [SETUP] Using ${foundFieldMappings.length} field mappings from transformer${primaryKeyField ? ` with primary key: ${primaryKeyField}` : ''}`,
                 );
                 // Ensure only ONE primary key is set
                 let primaryKeySet = false;
-                columnMappings = fieldMappings.map((fm) => {
+                columnMappings = foundFieldMappings.map((fm) => {
                     // Handle schema-qualified source column names (e.g., "company.companies.id" -> "id")
                     // Extract just the column name from the source field
                     const sourceColumn = fm.source.includes('.') 
@@ -784,10 +811,10 @@ export class PostgresPipelineService {
             } else {
                 // Last resort: throw error - field mappings are required
                 this.logger.error(
-                    `[${run.id}] [SETUP] No field mappings found. Transformers: ${JSON.stringify(transformers)}, Destination schema mappings: ${JSON.stringify(destinationSchema.columnMappings)}`,
+                    `[${run.id}] [SETUP] No field mappings found. Transformers: ${JSON.stringify(transformers.map((t: any) => ({ id: t.id, hasFieldMappings: !!t.fieldMappings, fieldMappingsCount: Array.isArray(t.fieldMappings) ? t.fieldMappings.length : 0 })))}, Destination schema mappings: ${destinationSchema.columnMappings ? destinationSchema.columnMappings.length : 0} mappings`,
                 );
                 throw new BadRequestException(
-                    'No field mappings found. Please configure field mappings in the transformer before running migration.',
+                    `No field mappings found. Please configure field mappings in the transformer before running migration. Found ${transformers.length} transformer(s) but none have fieldMappings configured.`,
                 );
             }
             
