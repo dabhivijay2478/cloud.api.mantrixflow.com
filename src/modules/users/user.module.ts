@@ -1,12 +1,14 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UserController } from './user.controller';
 import { UserService } from './user.service';
 import { UserRepository } from './repositories/user.repository';
 import { SupabaseUserWebhookController } from './webhooks/supabase-user-webhook.controller';
+import { OrganizationModule } from '../organizations/organization.module';
 import { createDrizzleDatabase } from '../../database/drizzle/database';
 
 @Module({
+  imports: [forwardRef(() => OrganizationModule)],
   controllers: [UserController, SupabaseUserWebhookController],
   providers: [
     // Database provider

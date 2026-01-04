@@ -3,8 +3,9 @@
  * Business logic for user management
  */
 
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Inject, forwardRef } from '@nestjs/common';
 import { UserRepository } from './repositories/user.repository';
+import { OrganizationMemberService } from '../organizations/organization-member.service';
 import { createClient } from '@supabase/supabase-js';
 
 @Injectable()
@@ -12,7 +13,11 @@ export class UserService {
   private supabase: ReturnType<typeof createClient>;
   private supabaseAdmin: ReturnType<typeof createClient> | null = null;
 
-  constructor(private readonly userRepository: UserRepository) {
+  constructor(
+    private readonly userRepository: UserRepository,
+    @Inject(forwardRef(() => OrganizationMemberService))
+    private readonly memberService: OrganizationMemberService,
+  ) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
     const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -83,6 +88,27 @@ export class UserService {
         onboardingCompleted: false,
         onboardingStep: 'welcome',
       });
+
+      // Link user to any pending invites (if user was invited before signing up)
+      // This links the Supabase user to organization member records
+      try {
+        const linkedMembers = await this.memberService.linkUserToInvite(
+          supabaseUser.email.toLowerCase(),
+          created.id,
+        );
+
+        // If user was invited, set their current organization to the first one they were invited to
+        if (linkedMembers.length > 0) {
+          await this.userRepository.setCurrentOrganization(
+            created.id,
+            linkedMembers[0].organizationId,
+          );
+        }
+      } catch (error) {
+        // Log error but don't fail user creation if invite linking fails
+        console.error('Failed to link user to invites:', error);
+      }
+
       return { user: created, created: true };
     }
   }
