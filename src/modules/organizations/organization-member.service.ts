@@ -9,6 +9,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
 import type { OrganizationMember } from '../../database/schemas/organizations';
 import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
@@ -22,10 +23,11 @@ export class OrganizationMemberService {
   constructor(
     private readonly memberRepository: OrganizationMemberRepository,
     private readonly organizationRepository: OrganizationRepository,
+    private readonly configService: ConfigService,
   ) {
     // Initialize Supabase admin client for sending invite emails
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
+    const supabaseServiceRoleKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
 
     if (supabaseUrl && supabaseServiceRoleKey) {
       this.supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
@@ -81,15 +83,18 @@ export class OrganizationMemberService {
     // Note: This requires Supabase to be configured with email templates
     if (this.supabaseAdmin) {
       try {
+        // Get frontend URL from config
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+        
         // Generate invite link - Supabase will redirect to accept-invite page
-        const _inviteUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
+        const _inviteUrl = `${frontendUrl}/auth/accept-invite`;
 
         // Send invite email via Supabase Auth
         // This uses Supabase's built-in invite functionality
         // redirectTo: When user clicks invite link, Supabase verify endpoint will redirect here
         // Supabase redirects with tokens in URL hash (#access_token=...), which must be handled client-side
         // IMPORTANT: redirectTo must match one of the allowed redirect URLs in Supabase dashboard
-        const redirectTo = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/accept-invite`;
+        const redirectTo = `${frontendUrl}/auth/accept-invite`;
         const { error } = await this.supabaseAdmin.auth.admin.inviteUserByEmail(email, {
           redirectTo,
           data: {
