@@ -1,21 +1,10 @@
 {
   "version": 2,
+  "framework": "nest",
   "buildCommand": "bun run build",
   "installCommand": "bun install",
-  "framework": null,
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/dist/main.js"
-    }
-  ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "dist/main.js": {
-      "maxDuration": 30
-    }
   }
 }
 
