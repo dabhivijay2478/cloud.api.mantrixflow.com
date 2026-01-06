@@ -86,9 +86,6 @@ export class OrganizationMemberService {
         // Get frontend URL from config
         const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
 
-        // Generate invite link - Supabase will redirect to accept-invite page
-        const _inviteUrl = `${frontendUrl}/auth/accept-invite`;
-
         // Send invite email via Supabase Auth
         // This uses Supabase's built-in invite functionality
         // redirectTo: When user clicks invite link, Supabase verify endpoint will redirect here
@@ -146,8 +143,6 @@ export class OrganizationMemberService {
    * Update member
    */
   async updateMember(id: string, dto: UpdateMemberDto): Promise<OrganizationMember> {
-    const _member = await this.getMember(id);
-
     return this.memberRepository.update(id, dto);
   }
 
