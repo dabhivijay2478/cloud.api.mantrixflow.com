@@ -85,7 +85,7 @@ export class OrganizationMemberService {
       try {
         // Get frontend URL from config
         const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-        
+
         // Generate invite link - Supabase will redirect to accept-invite page
         const _inviteUrl = `${frontendUrl}/auth/accept-invite`;
 
