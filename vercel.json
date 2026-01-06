@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "framework": "nest",
+  "framework": "nestjs",
   "buildCommand": "bun run build",
   "installCommand": "bun install",
   "env": {
