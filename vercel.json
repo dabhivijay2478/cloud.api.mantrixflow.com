@@ -3,15 +3,6 @@
   "buildCommand": "bun run build",
   "installCommand": "bun install",
   "framework": null,
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["dist/**"]
-      }
-    }
-  ],
   "routes": [
     {
       "src": "/(.*)",
