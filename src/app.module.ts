@@ -19,14 +19,36 @@ import { UserModule } from './modules/users/user.module';
     // Global BullMQ configuration
     BullModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        connection: {
-          host: configService.get('REDIS_HOST', 'localhost'),
-          port: configService.get('REDIS_PORT', 6379),
-          // Optional: Add password if Redis requires authentication
-          // password: configService.get('REDIS_PASSWORD'),
-        },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const redisUrl = configService.get<string>('REDIS_URL');
+
+        // If REDIS_URL is provided, parse it
+        if (redisUrl) {
+          try {
+            const url = new URL(redisUrl);
+            return {
+              connection: {
+                host: url.hostname,
+                port: parseInt(url.port, 10),
+                password: url.password || undefined,
+                username: url.username || undefined,
+              },
+            };
+          } catch (error) {
+            console.warn('Failed to parse REDIS_URL, falling back to individual config', error);
+          }
+        }
+
+        // Fallback to individual configuration
+        return {
+          connection: {
+            host: configService.get('REDIS_HOST', 'localhost'),
+            port: configService.get<number>('REDIS_PORT', 6379),
+            password: configService.get<string>('REDIS_PASSWORD'),
+            username: configService.get<string>('REDIS_USERNAME'),
+          },
+        };
+      },
     }),
     PostgresDataSourceModule,
     DataPipelineModule,
