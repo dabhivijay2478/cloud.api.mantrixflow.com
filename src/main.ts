@@ -60,7 +60,6 @@ async function bootstrap() {
   });
 
   // Enable CORS for API access
-  // When using credentials: 'include', we must specify exact origins, not wildcard
   const allowedOrigins: string[] = [];
 
   // Add origins from ALLOWED_ORIGINS env var (comma-separated)
@@ -76,6 +75,11 @@ async function bootstrap() {
     allowedOrigins.push(nextPublicAppUrl);
   }
 
+  // Add API URL itself (for same-origin requests)
+  if (apiUrl) {
+    allowedOrigins.push(apiUrl);
+  }
+
   // In development, add default localhost origins
   if (nodeEnv === 'development') {
     if (!allowedOrigins.includes(defaultDevOrigin)) {
@@ -88,34 +92,43 @@ async function bootstrap() {
     }
   }
 
-  // CORS configuration - must specify exact origins when using credentials
-  // Cannot use wildcard '*' when credentials: true
+  // CORS configuration
   app.enableCors({
     origin: (
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean | string) => void,
     ) => {
-      // For preflight OPTIONS requests, origin might be undefined
-      // We need to explicitly allow the origin, not return true (which defaults to *)
+      // Allow requests with no origin (direct browser access, Postman, curl, etc.)
       if (!origin) {
-        // In development, default to configured dev origin for no-origin requests
-        if (nodeEnv === 'development') {
-          return callback(null, defaultDevOrigin);
-        }
-        return callback(new Error('Not allowed by CORS'));
+        return callback(null, true);
       }
 
       // Check if origin is in allowed list
       if (allowedOrigins.includes(origin)) {
-        callback(null, origin); // Return the specific origin, not true
-      } else {
-        // In development, allow localhost with any port
-        if (nodeEnv === 'development' && origin.startsWith('http://localhost:')) {
-          callback(null, origin); // Return the specific origin
-        } else {
-          callback(new Error('Not allowed by CORS'));
-        }
+        return callback(null, origin);
       }
+
+      // Allow Vercel domains (production and preview)
+      if (
+        origin.includes('.vercel.app') ||
+        origin.includes('.vercel.sh') ||
+        origin.startsWith('https://vercel.live')
+      ) {
+        return callback(null, origin);
+      }
+
+      // In development, allow localhost with any port
+      if (nodeEnv === 'development' && origin.startsWith('http://localhost:')) {
+        return callback(null, origin);
+      }
+
+      // Allow same-origin requests (when origin matches API URL)
+      if (apiUrl && origin === apiUrl) {
+        return callback(null, origin);
+      }
+
+      // Reject all other origins
+      return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
