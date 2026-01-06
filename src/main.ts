@@ -22,7 +22,7 @@ async function bootstrap() {
   const apiUrl = configService.get<string>('API_URL');
   const devServerUrl = configService.get<string>('DEV_SERVER_URL', 'http://localhost:8000');
   const frontendUrl = configService.get<string>('FRONTEND_URL');
-  const nextPublicAppUrl = configService.get<string>('NEXT_PUBLIC_APP_URL');
+  const nextPublicAppUrl = configService.get<string>('APP_URL');
   const allowedOriginsEnv = configService.get<string>('ALLOWED_ORIGINS');
   const defaultDevOrigin = configService.get<string>('DEFAULT_DEV_ORIGIN', 'http://localhost:3000');
 
