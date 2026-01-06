@@ -7,7 +7,7 @@ import {
   type NewPipelineDestinationSchema,
   type PipelineDestinationSchema,
   pipelineDestinationSchemas,
-} from '@db/schema';
+} from '../../../database/schemas';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';

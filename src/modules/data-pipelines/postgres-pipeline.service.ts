@@ -83,7 +83,7 @@ import type {
   PipelineSourceSchema,
   PostgresPipeline,
   PostgresPipelineRun,
-} from '@db/schema';
+} from '../../database/schemas';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   ColumnMapping,

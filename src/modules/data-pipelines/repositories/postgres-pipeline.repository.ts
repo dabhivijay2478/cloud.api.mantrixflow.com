@@ -11,14 +11,14 @@ import type {
   PipelineSourceSchema,
   PostgresPipeline,
   PostgresPipelineRun,
-} from '@db/schema';
+} from '../../../database/schemas';
 // Import table definitions (runtime values)
 import {
   pipelineDestinationSchemas,
   pipelineSourceSchemas,
   postgresPipelineRuns,
   postgresPipelines,
-} from '@db/schema';
+} from '../../../database/schemas';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
