@@ -122,6 +122,11 @@ async function bootstrap() {
         return callback(null, origin);
       }
 
+      // Allow production domain (mantrixflow.com)
+      if (origin === 'https://mantrixflow.com' || origin === 'http://mantrixflow.com') {
+        return callback(null, origin);
+      }
+
       // In development, allow localhost with any port
       if (nodeEnv === 'development' && origin.startsWith('http://localhost:')) {
         return callback(null, origin);
