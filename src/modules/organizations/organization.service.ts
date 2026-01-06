@@ -3,15 +3,22 @@
  * Business logic for organization management
  */
 
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Organization } from '../../database/schemas/organizations';
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { UpdateOrganizationDto } from './dto/update-organization.dto';
+import { OrganizationMemberRepository } from './repositories/organization-member.repository';
 import { OrganizationRepository } from './repositories/organization.repository';
+import { UserRepository } from '../users/repositories/user.repository';
 
 @Injectable()
 export class OrganizationService {
-  constructor(private readonly organizationRepository: OrganizationRepository) {}
+  constructor(
+    private readonly organizationRepository: OrganizationRepository,
+    private readonly memberRepository: OrganizationMemberRepository,
+    @Inject(forwardRef(() => UserRepository))
+    private readonly userRepository: UserRepository,
+  ) {}
 
   /**
    * Generate slug from name
@@ -28,7 +35,7 @@ export class OrganizationService {
   /**
    * Create organization
    */
-  async createOrganization(_userId: string, dto: CreateOrganizationDto): Promise<Organization> {
+  async createOrganization(userId: string, dto: CreateOrganizationDto): Promise<Organization> {
     const slug = dto.slug || this.generateSlug(dto.name);
 
     // Check if slug already exists
@@ -44,14 +51,52 @@ export class OrganizationService {
       isActive: true,
     });
 
+    // Add the user as owner of the organization
+    try {
+      const user = await this.userRepository.findById(userId);
+      if (user) {
+        // Create member record with owner role and active status
+        await this.memberRepository.create({
+          organizationId: organization.id,
+          userId: userId,
+          email: user.email.toLowerCase(),
+          role: 'owner',
+          status: 'active',
+          acceptedAt: new Date(),
+        });
+
+        // Set this organization as the user's current organization
+        await this.userRepository.setCurrentOrganization(userId, organization.id);
+      }
+    } catch (error) {
+      // Log error but don't fail organization creation
+      console.error('Failed to add user as member or set current organization:', error);
+    }
+
     return organization;
   }
 
   /**
-   * List all organizations
+   * List all organizations for a user (only organizations they are a member of)
    */
-  async listOrganizations(): Promise<Organization[]> {
-    return this.organizationRepository.findAll();
+  async listOrganizations(userId: string): Promise<Organization[]> {
+    // Get all organization memberships for this user
+    const members = await this.memberRepository.findByUserId(userId);
+    
+    if (members.length === 0) {
+      return [];
+    }
+
+    // Get organization IDs
+    const orgIds = members.map((m) => m.organizationId);
+
+    // Fetch organizations
+    const organizations = await Promise.all(
+      orgIds.map((id) => this.organizationRepository.findById(id)),
+    );
+
+    // Filter out null values and return
+    return organizations.filter((org): org is Organization => org !== null);
   }
 
   /**
@@ -102,19 +147,32 @@ export class OrganizationService {
   }
 
   /**
-   * Get current organization (returns first active organization for now)
-   * In the future, this should get from user's currentOrgId
+   * Get current organization for a user
    */
-  async getCurrentOrganization(): Promise<Organization | null> {
-    const orgs = await this.organizationRepository.findAll();
-    return orgs.length > 0 ? orgs[0] : null;
+  async getCurrentOrganization(userId: string): Promise<Organization | null> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || !user.currentOrgId) {
+      return null;
+    }
+    return this.getOrganization(user.currentOrgId);
   }
 
   /**
-   * Set current organization (placeholder - should update user's currentOrgId)
-   * For now, just returns the organization
+   * Set current organization for a user
    */
-  async setCurrentOrganization(_userId: string, id: string): Promise<Organization> {
-    return this.getOrganization(id);
+  async setCurrentOrganization(userId: string, id: string): Promise<Organization> {
+    // Verify organization exists
+    const organization = await this.getOrganization(id);
+    
+    // Verify user is a member of this organization
+    const member = await this.memberRepository.findByOrganizationAndUserId(id, userId);
+    if (!member) {
+      throw new BadRequestException(`User is not a member of organization "${id}"`);
+    }
+
+    // Set as current organization
+    await this.userRepository.setCurrentOrganization(userId, id);
+    
+    return organization;
   }
 }

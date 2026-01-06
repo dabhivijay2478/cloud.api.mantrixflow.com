@@ -78,8 +78,12 @@ export class OrganizationController {
     status: 200,
     description: 'Organizations retrieved successfully',
   })
-  async listOrganizations() {
-    const organizations = await this.organizationService.listOrganizations();
+  async listOrganizations(@Request() req: ExpressRequestType) {
+    const userId = req.user?.id;
+    if (!userId) {
+      return createListResponse([], 'Organizations retrieved successfully');
+    }
+    const organizations = await this.organizationService.listOrganizations(userId);
     return createListResponse(organizations, 'Organizations retrieved successfully');
   }
 
@@ -100,8 +104,11 @@ export class OrganizationController {
     description: 'No current organization set',
   })
   async getCurrentOrganization(@Request() req: ExpressRequestType) {
-    const _userId = req.user?.id;
-    const organization = await this.organizationService.getCurrentOrganization();
+    const userId = req.user?.id;
+    if (!userId) {
+      return createSuccessResponse(null, 'No current organization set', 200);
+    }
+    const organization = await this.organizationService.getCurrentOrganization(userId);
     if (!organization) {
       return createSuccessResponse(null, 'No current organization set', 200);
     }

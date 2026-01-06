@@ -114,6 +114,17 @@ export class OrganizationMemberRepository {
   }
 
   /**
+   * Find all memberships for a user
+   */
+  async findByUserId(userId: string): Promise<OrganizationMember[]> {
+    return this.db
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.userId, userId))
+      .orderBy(desc(organizationMembers.createdAt));
+  }
+
+  /**
    * Find invite by email (across all organizations)
    * Used when user signs up to find their invite
    */
