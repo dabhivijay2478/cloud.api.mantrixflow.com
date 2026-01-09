@@ -1,4 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { users } from '../users/users.schema';
 
 /**
  * Organizations Table
@@ -9,6 +10,8 @@ export const organizations = pgTable('organizations', {
   name: varchar('name', { length: 255 }).notNull(),
   slug: varchar('slug', { length: 255 }).notNull().unique(),
   description: text('description'),
+  // Owner reference - the user who created this organization
+  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
   // Metadata
   metadata: jsonb('metadata'), // Additional organization data
   // Settings

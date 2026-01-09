@@ -11,6 +11,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Request,
@@ -47,26 +48,6 @@ export class OrganizationController {
   constructor(private readonly organizationService: OrganizationService) {}
 
   /**
-   * Create organization
-   */
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Create organization',
-    description: 'Create a new organization',
-  })
-  @ApiBody({ type: CreateOrganizationDto })
-  @ApiResponse({
-    status: 201,
-    description: 'Organization created successfully',
-  })
-  async createOrganization(@Body() dto: CreateOrganizationDto, @Request() req: ExpressRequestType) {
-    const userId = req.user?.id || 'default-user-id';
-    const organization = await this.organizationService.createOrganization(userId, dto);
-    return createSuccessResponse(organization, 'Organization created successfully', 201);
-  }
-
-  /**
    * List organizations
    */
   @Get()
@@ -89,6 +70,7 @@ export class OrganizationController {
 
   /**
    * Get current organization
+   * IMPORTANT: This must come before @Get(':id') to avoid route conflicts
    */
   @Get('current')
   @ApiOperation({
@@ -116,23 +98,77 @@ export class OrganizationController {
   }
 
   /**
+   * Check if user can create organizations
+   * IMPORTANT: This must come before @Get(':id') to avoid route conflicts
+   * Returns whether the current user is allowed to create organizations
+   */
+  @Get('can-create')
+  @ApiOperation({
+    summary: 'Check if user can create organizations',
+    description: 'Check if the current user is allowed to create organizations (not invited-only)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Check result retrieved successfully',
+  })
+  async canCreateOrganization(@Request() req: ExpressRequestType) {
+    const userId = req.user?.id;
+    if (!userId) {
+      return createSuccessResponse({ canCreate: false }, 'User not authenticated', 200);
+    }
+    const isInvitedOnly = await this.organizationService.isInvitedOnlyUser(userId);
+    const canCreate = !isInvitedOnly;
+    return createSuccessResponse({ canCreate }, 'Check result retrieved successfully');
+  }
+
+  /**
+   * Create organization
+   */
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create organization',
+    description: 'Create a new organization',
+  })
+  @ApiBody({ type: CreateOrganizationDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Organization created successfully',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - Invited users cannot create organizations',
+  })
+  async createOrganization(@Body() dto: CreateOrganizationDto, @Request() req: ExpressRequestType) {
+    const userId = req.user?.id || 'default-user-id';
+    const organization = await this.organizationService.createOrganization(userId, dto);
+    return createSuccessResponse(organization, 'Organization created successfully', 201);
+  }
+
+  /**
    * Get organization by ID
+   * IMPORTANT: This must come AFTER all specific routes (current, can-create, etc.)
+   * Uses ParseUUIDPipe to ensure only valid UUIDs are accepted, preventing conflicts with specific routes
    */
   @Get(':id')
   @ApiOperation({
     summary: 'Get organization',
     description: 'Get organization by ID',
   })
-  @ApiParam({ name: 'id', description: 'Organization ID' })
+  @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
   @ApiResponse({
     status: 200,
     description: 'Organization retrieved successfully',
   })
   @ApiResponse({
+    status: 400,
+    description: 'Invalid UUID format',
+  })
+  @ApiResponse({
     status: 404,
     description: 'Organization not found',
   })
-  async getOrganization(@Param('id') id: string) {
+  async getOrganization(@Param('id', ParseUUIDPipe) id: string) {
     const organization = await this.organizationService.getOrganization(id);
     return createSuccessResponse(organization, 'Organization retrieved successfully');
   }
@@ -146,12 +182,16 @@ export class OrganizationController {
     summary: 'Set current organization',
     description: 'Set the active organization',
   })
-  @ApiParam({ name: 'id', description: 'Organization ID' })
+  @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
   @ApiResponse({
     status: 200,
     description: 'Current organization set successfully',
   })
-  async setCurrentOrganization(@Param('id') id: string, @Request() req: ExpressRequestType) {
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid UUID format',
+  })
+  async setCurrentOrganization(@Param('id', ParseUUIDPipe) id: string, @Request() req: ExpressRequestType) {
     const userId = req.user?.id || 'default-user-id';
     const organization = await this.organizationService.setCurrentOrganization(userId, id);
     return createSuccessResponse(organization, 'Current organization set successfully');
@@ -165,17 +205,21 @@ export class OrganizationController {
     summary: 'Update organization',
     description: 'Update organization details',
   })
-  @ApiParam({ name: 'id', description: 'Organization ID' })
+  @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
   @ApiBody({ type: UpdateOrganizationDto })
   @ApiResponse({
     status: 200,
     description: 'Organization updated successfully',
   })
   @ApiResponse({
+    status: 400,
+    description: 'Invalid UUID format',
+  })
+  @ApiResponse({
     status: 404,
     description: 'Organization not found',
   })
-  async updateOrganization(@Param('id') id: string, @Body() dto: UpdateOrganizationDto) {
+  async updateOrganization(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateOrganizationDto) {
     const organization = await this.organizationService.updateOrganization(id, dto);
     return createSuccessResponse(organization, 'Organization updated successfully');
   }
@@ -188,16 +232,20 @@ export class OrganizationController {
     summary: 'Delete organization',
     description: 'Delete an organization',
   })
-  @ApiParam({ name: 'id', description: 'Organization ID' })
+  @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
   @ApiResponse({
     status: 200,
     description: 'Organization deleted successfully',
   })
   @ApiResponse({
+    status: 400,
+    description: 'Invalid UUID format',
+  })
+  @ApiResponse({
     status: 404,
     description: 'Organization not found',
   })
-  async deleteOrganization(@Param('id') id: string) {
+  async deleteOrganization(@Param('id', ParseUUIDPipe) id: string) {
     await this.organizationService.deleteOrganization(id);
     return createDeleteResponse(id, 'Organization deleted successfully');
   }

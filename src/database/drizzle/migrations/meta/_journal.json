@@ -64,6 +64,20 @@
       "when": 1764006000000,
       "tag": "0008_add_organization_members_table",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1764007000000,
+      "tag": "0009_add_owner_user_id_to_organizations",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1764008000000,
+      "tag": "0010_add_organization_owners_table",
+      "breakpoints": true
     }
   ]
 }

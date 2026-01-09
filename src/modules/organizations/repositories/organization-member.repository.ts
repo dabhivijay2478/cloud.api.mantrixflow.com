@@ -125,6 +125,27 @@ export class OrganizationMemberRepository {
   }
 
   /**
+   * Find all active memberships for a user
+   * Only returns memberships with active, accepted, or invited status
+   */
+  async findActiveMembershipsByUserId(userId: string): Promise<OrganizationMember[]> {
+    return this.db
+      .select()
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.userId, userId),
+          or(
+            eq(organizationMembers.status, 'active'),
+            eq(organizationMembers.status, 'accepted'),
+            eq(organizationMembers.status, 'invited'),
+          ),
+        ),
+      )
+      .orderBy(desc(organizationMembers.createdAt));
+  }
+
+  /**
    * Find invite by email (across all organizations)
    * Used when user signs up to find their invite
    */
