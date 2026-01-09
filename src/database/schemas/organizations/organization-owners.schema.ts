@@ -6,7 +6,7 @@ import { organizations } from './organizations.schema';
  * Organization Owners Table
  * Tracks ownership of organizations separately from membership
  * A user can own multiple organizations, and ownership is distinct from membership
- * 
+ *
  * This table is the single source of truth for organization ownership.
  * Ownership grants full control over the organization, while membership grants access based on role.
  */

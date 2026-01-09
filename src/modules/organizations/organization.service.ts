@@ -3,7 +3,14 @@
  * Business logic for organization management
  */
 
-import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  forwardRef,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Organization } from '../../database/schemas/organizations';
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -37,12 +44,12 @@ export class OrganizationService {
   /**
    * Check if a user is invited-only (i.e., all their organization memberships
    * are from invites, not from creating organizations)
-   * 
+   *
    * An invited-only user is one who:
    * - Has at least one organization membership
    * - Does NOT own any organizations (checked via organization_owners table)
    * - ALL of their memberships have invitedBy set (they were invited, not owners)
-   * 
+   *
    * @param userId The user ID to check
    * @returns true if user is invited-only, false otherwise
    */
@@ -56,7 +63,7 @@ export class OrganizationService {
 
     // Get all organization memberships for this user
     const memberships = await this.memberRepository.findByUserId(userId);
-    
+
     // If user has no memberships, they're not invited-only (they're a new user)
     if (memberships.length === 0) {
       return false;
@@ -65,13 +72,13 @@ export class OrganizationService {
     // Check if ALL memberships have invitedBy set (meaning user was invited to all)
     // If any membership has no invitedBy, it means they created that organization
     const allInvited = memberships.every((membership) => membership.invitedBy !== null);
-    
+
     return allInvited;
   }
 
   /**
    * Create organization
-   * 
+   *
    * Authorization Rules:
    * - Only users who are NOT invited-only can create organizations
    * - Invited users (members invited to existing organizations) cannot create new organizations
@@ -83,7 +90,7 @@ export class OrganizationService {
     if (isInvitedOnly) {
       throw new ForbiddenException(
         'Invited users are not allowed to create organizations. ' +
-        'Only organization owners can create new organizations.'
+          'Only organization owners can create new organizations.',
       );
     }
 
@@ -142,12 +149,14 @@ export class OrganizationService {
    * Returns organizations where the user is:
    * 1. An owner (from organization_owners table)
    * 2. A member (from organization_members table with active status)
-   * 
+   *
    * This ensures users see all organizations they have access to, whether they own them or are members
-   * 
+   *
    * Returns organizations with role/ownership information
    */
-  async listOrganizations(userId: string): Promise<Array<Organization & { isOwner: boolean; role?: string }>> {
+  async listOrganizations(
+    userId: string,
+  ): Promise<Array<Organization & { isOwner: boolean; role?: string }>> {
     // Get organizations where user is an owner
     const ownedOrgs = await this.ownerRepository.findByUserId(userId);
     const ownedOrgIds = new Set(ownedOrgs.map((o) => o.organizationId));
@@ -174,7 +183,7 @@ export class OrganizationService {
 
     // Filter out null values and only return active organizations
     const activeOrganizations = organizations.filter(
-      (org): org is Organization => org !== null && org.isActive === true
+      (org): org is Organization => org !== null && org.isActive === true,
     );
 
     // Return unique organizations with role/ownership information
@@ -258,7 +267,7 @@ export class OrganizationService {
   async setCurrentOrganization(userId: string, id: string): Promise<Organization> {
     // Verify organization exists
     const organization = await this.getOrganization(id);
-    
+
     // Verify user is a member of this organization
     const member = await this.memberRepository.findByOrganizationAndUserId(id, userId);
     if (!member) {
@@ -267,7 +276,7 @@ export class OrganizationService {
 
     // Set as current organization
     await this.userRepository.setCurrentOrganization(userId, id);
-    
+
     return organization;
   }
 }

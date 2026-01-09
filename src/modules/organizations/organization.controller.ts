@@ -191,7 +191,10 @@ export class OrganizationController {
     status: 400,
     description: 'Invalid UUID format',
   })
-  async setCurrentOrganization(@Param('id', ParseUUIDPipe) id: string, @Request() req: ExpressRequestType) {
+  async setCurrentOrganization(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
     const userId = req.user?.id || 'default-user-id';
     const organization = await this.organizationService.setCurrentOrganization(userId, id);
     return createSuccessResponse(organization, 'Current organization set successfully');
@@ -219,7 +222,10 @@ export class OrganizationController {
     status: 404,
     description: 'Organization not found',
   })
-  async updateOrganization(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateOrganizationDto) {
+  async updateOrganization(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateOrganizationDto,
+  ) {
     const organization = await this.organizationService.updateOrganization(id, dto);
     return createSuccessResponse(organization, 'Organization updated successfully');
   }

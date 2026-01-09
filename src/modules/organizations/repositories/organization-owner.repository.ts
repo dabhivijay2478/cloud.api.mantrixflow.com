@@ -60,10 +60,7 @@ export class OrganizationOwnerRepository {
    * Find all organizations owned by a user
    */
   async findByUserId(userId: string): Promise<OrganizationOwner[]> {
-    return this.db
-      .select()
-      .from(organizationOwners)
-      .where(eq(organizationOwners.userId, userId));
+    return this.db.select().from(organizationOwners).where(eq(organizationOwners.userId, userId));
   }
 
   /**
