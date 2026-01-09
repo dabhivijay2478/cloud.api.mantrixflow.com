@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
@@ -55,6 +56,7 @@ import { UserModule } from './modules/users/user.module';
     OrganizationModule,
     UserModule,
     OnboardingModule,
+    ActivityLogModule,
   ],
   controllers: [AppController],
   providers: [AppService],

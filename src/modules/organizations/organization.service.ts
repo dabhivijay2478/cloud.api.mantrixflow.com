@@ -12,6 +12,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Organization } from '../../database/schemas/organizations';
+import { ActivityLogService } from '../activity-logs/activity-log.service';
+import {
+  ENTITY_TYPES,
+  ORG_ACTIONS,
+} from '../activity-logs/constants/activity-log-types';
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
@@ -27,6 +32,7 @@ export class OrganizationService {
     private readonly ownerRepository: OrganizationOwnerRepository,
     @Inject(forwardRef(() => UserRepository))
     private readonly userRepository: UserRepository,
+    private readonly activityLogService: ActivityLogService,
   ) {}
 
   /**
@@ -141,6 +147,25 @@ export class OrganizationService {
       console.error('Failed to add user as owner/member or set current organization:', error);
     }
 
+    // Log activity
+    try {
+      await this.activityLogService.logActivity({
+        organizationId: organization.id,
+        userId,
+        actionType: ORG_ACTIONS.CREATED,
+        entityType: ENTITY_TYPES.ORGANIZATION,
+        entityId: organization.id,
+        message: `Organization "${organization.name}" created`,
+        metadata: {
+          name: organization.name,
+          slug: organization.slug,
+        },
+      });
+    } catch (error) {
+      // Don't fail organization creation if logging fails
+      console.error('Failed to log organization creation activity:', error);
+    }
+
     return organization;
   }
 
@@ -228,7 +253,11 @@ export class OrganizationService {
   /**
    * Update organization
    */
-  async updateOrganization(id: string, dto: UpdateOrganizationDto): Promise<Organization> {
+  async updateOrganization(
+    id: string,
+    dto: UpdateOrganizationDto,
+    userId?: string,
+  ): Promise<Organization> {
     const organization = await this.getOrganization(id);
 
     // Check slug uniqueness if slug is being updated
@@ -239,7 +268,40 @@ export class OrganizationService {
       }
     }
 
-    return this.organizationRepository.update(id, dto);
+    const updated = await this.organizationRepository.update(id, dto);
+
+    // Log activity
+    try {
+      const changes: string[] = [];
+      if (dto.name && dto.name !== organization.name) {
+        changes.push(`name: "${organization.name}" → "${dto.name}"`);
+      }
+      if (dto.description !== undefined && dto.description !== organization.description) {
+        changes.push('description updated');
+      }
+      if (dto.slug && dto.slug !== organization.slug) {
+        changes.push(`slug: "${organization.slug}" → "${dto.slug}"`);
+      }
+
+      await this.activityLogService.logActivity({
+        organizationId: id,
+        userId: userId || null,
+        actionType: ORG_ACTIONS.UPDATED,
+        entityType: ENTITY_TYPES.ORGANIZATION,
+        entityId: id,
+        message: changes.length > 0
+          ? `Organization updated: ${changes.join(', ')}`
+          : 'Organization updated',
+        metadata: {
+          changes: dto,
+        },
+      });
+    } catch (error) {
+      // Don't fail update if logging fails
+      console.error('Failed to log organization update activity:', error);
+    }
+
+    return updated;
   }
 
   /**
@@ -276,6 +338,24 @@ export class OrganizationService {
 
     // Set as current organization
     await this.userRepository.setCurrentOrganization(userId, id);
+
+    // Log activity
+    try {
+      await this.activityLogService.logActivity({
+        organizationId: id,
+        userId,
+        actionType: ORG_ACTIONS.SELECTED,
+        entityType: ENTITY_TYPES.ORGANIZATION,
+        entityId: id,
+        message: `Organization "${organization.name}" selected`,
+        metadata: {
+          organizationName: organization.name,
+        },
+      });
+    } catch (error) {
+      // Don't fail organization switch if logging fails
+      console.error('Failed to log organization selection activity:', error);
+    }
 
     return organization;
   }

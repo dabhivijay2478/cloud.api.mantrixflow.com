@@ -356,10 +356,15 @@ export class DataPipelineController {
         };
 
         // Update with transformations
-        const updated = await this.pipelineService.updatePipeline(id, {
-          ...updates,
-          transformations: newTransformations,
-        });
+        const userId = req.user?.id;
+        const updated = await this.pipelineService.updatePipeline(
+          id,
+          {
+            ...updates,
+            transformations: newTransformations,
+          },
+          userId,
+        );
 
         return createSuccessResponse(updated, 'Pipeline updated successfully', HttpStatus.OK, {
           pipelineId: updated.id,
@@ -368,7 +373,8 @@ export class DataPipelineController {
       }
 
       // Regular update without transformations
-      const updated = await this.pipelineService.updatePipeline(id, updates);
+      const userId = req.user?.id;
+      const updated = await this.pipelineService.updatePipeline(id, updates, userId);
 
       return createSuccessResponse(updated, 'Pipeline updated successfully', HttpStatus.OK, {
         pipelineId: updated.id,

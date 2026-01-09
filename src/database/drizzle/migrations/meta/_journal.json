@@ -78,6 +78,13 @@
       "when": 1764008000000,
       "tag": "0010_add_organization_owners_table",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1764009000000,
+      "tag": "0011_add_activity_logs_table",
+      "breakpoints": true
     }
   ]
 }

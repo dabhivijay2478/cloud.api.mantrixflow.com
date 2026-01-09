@@ -225,8 +225,10 @@ export class OrganizationController {
   async updateOrganization(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateOrganizationDto,
+    @Request() req: ExpressRequestType,
   ) {
-    const organization = await this.organizationService.updateOrganization(id, dto);
+    const userId = req.user?.id;
+    const organization = await this.organizationService.updateOrganization(id, dto, userId);
     return createSuccessResponse(organization, 'Organization updated successfully');
   }
 

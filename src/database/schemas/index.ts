@@ -7,8 +7,11 @@
  * - organizations: Organization/workspace management
  * - data-sources: Connection management, query logs, sync jobs
  * - data-pipelines: Pipeline configurations and execution runs
+ * - activity-logs: Centralized audit logging for all activities
  */
 
+// Activity Logs Schemas
+export * from './activity-logs';
 // Data Pipelines Schemas
 export * from './data-pipelines';
 // Data Sources Schemas

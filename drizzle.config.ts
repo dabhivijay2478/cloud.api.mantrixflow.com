@@ -13,6 +13,8 @@ export default {
     './src/database/schemas/users/users.schema.ts',
     './src/database/schemas/organizations/organizations.schema.ts',
     './src/database/schemas/organizations/organization-members.schema.ts',
+    './src/database/schemas/organizations/organization-owners.schema.ts',
+    './src/database/schemas/activity-logs/activity-logs.schema.ts',
     './src/database/schemas/data-sources/connections/postgres-connections.schema.ts',
     './src/database/schemas/data-sources/query-logs/postgres-query-logs.schema.ts',
     './src/database/schemas/data-sources/sync-jobs/postgres-sync-jobs.schema.ts',

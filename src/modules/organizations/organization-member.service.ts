@@ -12,6 +12,11 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
 import type { OrganizationMember } from '../../database/schemas/organizations';
+import { ActivityLogService } from '../activity-logs/activity-log.service';
+import {
+  ENTITY_TYPES,
+  USER_ACTIONS,
+} from '../activity-logs/constants/activity-log-types';
 import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
 import { OrganizationRepository } from './repositories/organization.repository';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
@@ -24,6 +29,7 @@ export class OrganizationMemberService {
     private readonly memberRepository: OrganizationMemberRepository,
     private readonly organizationRepository: OrganizationRepository,
     private readonly configService: ConfigService,
+    private readonly activityLogService: ActivityLogService,
   ) {
     // Initialize Supabase admin client for sending invite emails
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
@@ -112,6 +118,26 @@ export class OrganizationMemberService {
       }
     }
 
+    // Log activity
+    try {
+      await this.activityLogService.logActivity({
+        organizationId,
+        userId: invitedByUserId,
+        actionType: USER_ACTIONS.INVITED,
+        entityType: ENTITY_TYPES.USER,
+        entityId: null, // User doesn't exist yet
+        message: `User "${email}" invited to organization with role "${dto.role}"`,
+        metadata: {
+          email,
+          role: dto.role,
+          invitedBy: invitedByUserId,
+        },
+      });
+    } catch (error) {
+      // Don't fail invite if logging fails
+      console.error('Failed to log user invite activity:', error);
+    }
+
     return member;
   }
 
@@ -142,15 +168,66 @@ export class OrganizationMemberService {
   /**
    * Update member
    */
-  async updateMember(id: string, dto: UpdateMemberDto): Promise<OrganizationMember> {
-    return this.memberRepository.update(id, dto);
+  async updateMember(
+    id: string,
+    dto: UpdateMemberDto,
+    updatedByUserId?: string,
+  ): Promise<OrganizationMember> {
+    const member = await this.getMember(id);
+    const updated = await this.memberRepository.update(id, dto);
+
+    // Log activity if role changed
+    if (dto.role && dto.role !== member.role) {
+      try {
+        await this.activityLogService.logActivity({
+          organizationId: member.organizationId,
+          userId: updatedByUserId || null,
+          actionType: USER_ACTIONS.ROLE_CHANGED,
+          entityType: ENTITY_TYPES.USER,
+          entityId: member.userId || null,
+          message: `User role changed from "${member.role}" to "${dto.role}"`,
+          metadata: {
+            email: member.email,
+            oldRole: member.role,
+            newRole: dto.role,
+            memberId: id,
+          },
+        });
+      } catch (error) {
+        // Don't fail update if logging fails
+        console.error('Failed to log role change activity:', error);
+      }
+    }
+
+    return updated;
   }
 
   /**
    * Remove member from organization
    */
-  async removeMember(id: string): Promise<void> {
-    await this.getMember(id); // Verify exists
+  async removeMember(id: string, removedByUserId?: string): Promise<void> {
+    const member = await this.getMember(id); // Verify exists
+
+    // Log activity before deletion
+    try {
+      await this.activityLogService.logActivity({
+        organizationId: member.organizationId,
+        userId: removedByUserId || null,
+        actionType: USER_ACTIONS.REMOVED,
+        entityType: ENTITY_TYPES.USER,
+        entityId: member.userId || null,
+        message: `User "${member.email}" removed from organization`,
+        metadata: {
+          email: member.email,
+          role: member.role,
+          memberId: id,
+        },
+      });
+    } catch (error) {
+      // Don't fail removal if logging fails
+      console.error('Failed to log user removal activity:', error);
+    }
+
     await this.memberRepository.delete(id);
   }
 
@@ -170,6 +247,27 @@ export class OrganizationMemberService {
     const updatedMembers: OrganizationMember[] = [];
     for (const invite of invites) {
       const updated = await this.memberRepository.linkUserToInvite(invite.id, userId);
+
+      // Log activity for invite acceptance
+      try {
+        await this.activityLogService.logActivity({
+          organizationId: invite.organizationId,
+          userId,
+          actionType: USER_ACTIONS.INVITE_ACCEPTED,
+          entityType: ENTITY_TYPES.USER,
+          entityId: userId,
+          message: `User accepted invite to organization`,
+          metadata: {
+            email: invite.email,
+            role: invite.role,
+            memberId: updated.id,
+          },
+        });
+      } catch (error) {
+        // Don't fail invite acceptance if logging fails
+        console.error('Failed to log invite acceptance activity:', error);
+      }
+
       updatedMembers.push(updated);
     }
 
