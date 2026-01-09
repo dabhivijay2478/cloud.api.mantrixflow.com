@@ -148,11 +148,7 @@ export class ActivityLogRepository {
    * Find activity log by ID
    */
   async findById(id: string): Promise<ActivityLog | null> {
-    const [log] = await this.db
-      .select()
-      .from(activityLogs)
-      .where(eq(activityLogs.id, id))
-      .limit(1);
+    const [log] = await this.db.select().from(activityLogs).where(eq(activityLogs.id, id)).limit(1);
     return log || null;
   }
 }

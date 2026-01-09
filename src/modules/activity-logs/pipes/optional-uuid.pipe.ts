@@ -16,13 +16,10 @@ export class OptionalUUIDPipe implements PipeTransform {
     const stringValue = Array.isArray(value) ? value[0] : String(value);
 
     // UUID v4 regex pattern
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
     if (!uuidRegex.test(stringValue)) {
-      throw new BadRequestException(
-        `Invalid UUID format: ${stringValue}. Must be a valid UUID.`,
-      );
+      throw new BadRequestException(`Invalid UUID format: ${stringValue}. Must be a valid UUID.`);
     }
 
     return stringValue;

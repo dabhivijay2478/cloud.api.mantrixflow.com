@@ -86,10 +86,7 @@ import type {
 } from '../../database/schemas';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import {
-  ENTITY_TYPES,
-  PIPELINE_ACTIONS,
-} from '../activity-logs/constants/activity-log-types';
+import { ENTITY_TYPES, PIPELINE_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import type {
   ColumnMapping,
   DryRunResult,
@@ -2719,9 +2716,8 @@ export class PostgresPipelineService {
         actionType: PIPELINE_ACTIONS.UPDATED,
         entityType: ENTITY_TYPES.PIPELINE,
         entityId: id,
-        message: changes.length > 0
-          ? `Pipeline updated: ${changes.join(', ')}`
-          : 'Pipeline updated',
+        message:
+          changes.length > 0 ? `Pipeline updated: ${changes.join(', ')}` : 'Pipeline updated',
         metadata: {
           changes: updates,
         },

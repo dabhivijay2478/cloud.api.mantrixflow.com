@@ -126,5 +126,4 @@ export type ActivityLogActionType =
 /**
  * Type for entity type values
  */
-export type ActivityLogEntityType =
-  | (typeof ENTITY_TYPES)[keyof typeof ENTITY_TYPES];
+export type ActivityLogEntityType = (typeof ENTITY_TYPES)[keyof typeof ENTITY_TYPES];

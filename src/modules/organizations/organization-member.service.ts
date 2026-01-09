@@ -13,10 +13,7 @@ import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
 import type { OrganizationMember } from '../../database/schemas/organizations';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import {
-  ENTITY_TYPES,
-  USER_ACTIONS,
-} from '../activity-logs/constants/activity-log-types';
+import { ENTITY_TYPES, USER_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
 import { OrganizationRepository } from './repositories/organization.repository';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';

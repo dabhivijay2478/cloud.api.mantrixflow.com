@@ -13,10 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Organization } from '../../database/schemas/organizations';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import {
-  ENTITY_TYPES,
-  ORG_ACTIONS,
-} from '../activity-logs/constants/activity-log-types';
+import { ENTITY_TYPES, ORG_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
@@ -289,9 +286,10 @@ export class OrganizationService {
         actionType: ORG_ACTIONS.UPDATED,
         entityType: ENTITY_TYPES.ORGANIZATION,
         entityId: id,
-        message: changes.length > 0
-          ? `Organization updated: ${changes.join(', ')}`
-          : 'Organization updated',
+        message:
+          changes.length > 0
+            ? `Organization updated: ${changes.join(', ')}`
+            : 'Organization updated',
         metadata: {
           changes: dto,
         },

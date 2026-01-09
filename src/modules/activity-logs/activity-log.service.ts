@@ -11,10 +11,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import type { ActivityLog } from '../../database/schemas/activity-logs';
-import type {
-  ActivityLogActionType,
-  ActivityLogEntityType,
-} from './constants/activity-log-types';
+import type { ActivityLogActionType, ActivityLogEntityType } from './constants/activity-log-types';
 import { ActivityLogRepository } from './repositories/activity-log.repository';
 
 export interface LogActivityParams {

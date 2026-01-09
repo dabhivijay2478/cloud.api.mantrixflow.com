@@ -3,22 +3,9 @@
  * REST API endpoints for activity log management
  */
 
-import {
-  Controller,
-  Get,
-  Query,
-  Request,
-  UseGuards,
-  BadRequestException,
-} from '@nestjs/common';
+import { Controller, Get, Query, Request, UseGuards, BadRequestException } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiQuery,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { createListResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { ActivityLogService } from './activity-log.service';
@@ -41,8 +28,7 @@ export class ActivityLogController {
   @Get()
   @ApiOperation({
     summary: 'Get activity logs',
-    description:
-      'Get activity logs for an organization with optional filtering and pagination',
+    description: 'Get activity logs for an organization with optional filtering and pagination',
   })
   @ApiQuery({
     name: 'organizationId',
@@ -107,9 +93,7 @@ export class ActivityLogController {
     // Validate limit
     const limitNum = limit ? parseInt(limit, 10) : 50;
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
-      throw new BadRequestException(
-        'Limit must be a number between 1 and 100',
-      );
+      throw new BadRequestException('Limit must be a number between 1 and 100');
     }
 
     const logs = await this.activityLogService.getActivityLogs(

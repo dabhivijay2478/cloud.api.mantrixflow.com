@@ -213,10 +213,7 @@ export class OrganizationMemberController {
     status: 200,
     description: 'Member removed successfully',
   })
-  async removeMember(
-    @Param('memberId') memberId: string,
-    @Request() req: ExpressRequestType,
-  ) {
+  async removeMember(@Param('memberId') memberId: string, @Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     await this.memberService.removeMember(memberId, userId);
     return createDeleteResponse(memberId, 'Member removed successfully');
