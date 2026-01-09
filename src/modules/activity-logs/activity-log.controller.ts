@@ -88,11 +88,11 @@ export class ActivityLogController {
     @Query('userId', OptionalUUIDPipe) userId?: string,
     @Query('limit') limit?: string,
     @Query('cursor', OptionalUUIDPipe) cursor?: string,
-    @Request() req?: ExpressRequestType,
+    @Request() _req?: ExpressRequestType,
   ) {
     // Validate limit
     const limitNum = limit ? parseInt(limit, 10) : 50;
-    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+    if (Number.isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
       throw new BadRequestException('Limit must be a number between 1 and 100');
     }
 
