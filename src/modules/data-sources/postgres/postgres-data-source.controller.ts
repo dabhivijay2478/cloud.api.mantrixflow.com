@@ -56,7 +56,7 @@ import { createErrorResponse } from './utils/error-mapper.util';
 @ApiTags('data-sources')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
-@Controller('api/data-sources/postgres')
+@Controller('data-sources/postgres')
 export class PostgresDataSourceController {
   constructor(private readonly postgresDataSourceService: PostgresDataSourceService) {}
 

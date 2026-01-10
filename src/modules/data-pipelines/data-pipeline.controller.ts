@@ -46,7 +46,7 @@ import { PostgresPipelineService } from './postgres-pipeline.service';
 @ApiTags('data-pipelines')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
-@Controller('api/data-pipelines')
+@Controller('data-pipelines')
 export class DataPipelineController {
   constructor(private readonly pipelineService: PostgresPipelineService) {}
 
