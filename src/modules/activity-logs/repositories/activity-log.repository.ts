@@ -85,13 +85,12 @@ export class ActivityLogRepository {
         throw new Error('Cursor must have both createdAt and id');
       }
 
-      // Ensure createdAt is a string (never a Date object)
+      // Cursor createdAt is already validated as ISO string in decodeCursor()
+      // Just ensure it's a string (should always be true after decoding)
       const cursorDateStr: string =
         typeof cursor.createdAt === 'string'
           ? cursor.createdAt
-          : cursor.createdAt instanceof Date
-            ? cursor.createdAt.toISOString()
-            : new Date(cursor.createdAt).toISOString();
+          : new Date(cursor.createdAt).toISOString();
 
       // Escape single quotes to prevent SQL injection
       const escapedDateStr = cursorDateStr.replace(/'/g, "''");
