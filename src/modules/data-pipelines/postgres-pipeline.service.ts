@@ -85,6 +85,8 @@ import type {
   PostgresPipelineRun,
 } from '../../database/schemas';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ActivityLogService } from '../activity-logs/activity-log.service';
+import { ENTITY_TYPES, PIPELINE_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import type {
   ColumnMapping,
   DryRunResult,
@@ -115,6 +117,7 @@ export class PostgresPipelineService {
     readonly _queryExecutor: PostgresQueryExecutorService,
     private readonly destinationService: PostgresDestinationService,
     readonly _schemaMapper: PostgresSchemaMapperService,
+    private readonly activityLogService: ActivityLogService,
   ) {}
 
   /**
@@ -622,6 +625,27 @@ export class PostgresPipelineService {
       }
 
       this.logger.log(`Successfully created pipeline: ${pipeline.id}`);
+
+      // Log activity
+      try {
+        await this.activityLogService.logActivity({
+          organizationId: data.orgId,
+          userId: data.userId,
+          actionType: PIPELINE_ACTIONS.CREATED,
+          entityType: ENTITY_TYPES.PIPELINE,
+          entityId: pipeline.id,
+          message: `Pipeline "${pipeline.name}" created`,
+          metadata: {
+            name: pipeline.name,
+            sourceType: data.sourceType,
+            syncMode: pipeline.syncMode,
+          },
+        });
+      } catch (error) {
+        // Don't fail pipeline creation if logging fails
+        this.logger.error('Failed to log pipeline creation activity:', error);
+      }
+
       return pipeline;
     } catch (error) {
       // Enhanced error logging - extract actual PostgreSQL error from Drizzle
@@ -797,6 +821,26 @@ export class PostgresPipelineService {
     this.logger.log(
       `[${run.id}] Pipeline migration state set to: ${runningPipeline.migrationState}`,
     );
+
+    // Log activity - pipeline run started
+    try {
+      await this.activityLogService.logActivity({
+        organizationId: pipeline.orgId,
+        userId: pipeline.userId,
+        actionType: PIPELINE_ACTIONS.RUN_STARTED,
+        entityType: ENTITY_TYPES.PIPELINE,
+        entityId: pipeline.id,
+        message: `Pipeline "${pipeline.name}" run started`,
+        metadata: {
+          runId: run.id,
+          pipelineName: pipeline.name,
+          syncMode: pipeline.syncMode,
+        },
+      });
+    } catch (error) {
+      // Don't fail execution if logging fails
+      this.logger.error('Failed to log pipeline run started activity:', error);
+    }
 
     const startTime = Date.now();
     const errors: PipelineError[] = [];
@@ -1370,7 +1414,7 @@ export class PostgresPipelineService {
         `[${run.id}] Pipeline execution completed successfully in ${durationSeconds}s`,
       );
 
-      return {
+      const result: PipelineRunResult = {
         runId: run.id,
         status: 'success',
         rowsRead: sourceData.rows.length,
@@ -1380,6 +1424,32 @@ export class PostgresPipelineService {
         durationSeconds,
         errors,
       };
+
+      // Log activity - pipeline run succeeded
+      try {
+        await this.activityLogService.logActivity({
+          organizationId: pipeline.orgId,
+          userId: pipeline.userId,
+          actionType: PIPELINE_ACTIONS.RUN_SUCCEEDED,
+          entityType: ENTITY_TYPES.PIPELINE,
+          entityId: pipeline.id,
+          message: `Pipeline "${pipeline.name}" run completed successfully`,
+          metadata: {
+            runId: run.id,
+            pipelineName: pipeline.name,
+            rowsRead: result.rowsRead,
+            rowsWritten: result.rowsWritten,
+            rowsSkipped: result.rowsSkipped,
+            rowsFailed: result.rowsFailed,
+            durationSeconds: result.durationSeconds,
+          },
+        });
+      } catch (error) {
+        // Don't fail execution if logging fails
+        this.logger.error('Failed to log pipeline run succeeded activity:', error);
+      }
+
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`[${run.id}] Pipeline execution failed: ${errorMessage}`);
@@ -1408,6 +1478,27 @@ export class PostgresPipelineService {
       this.logger.log(
         `[${run.id}] Pipeline migration state set to: ${failedPipeline.migrationState}`,
       );
+
+      // Log activity - pipeline run failed
+      try {
+        await this.activityLogService.logActivity({
+          organizationId: pipeline.orgId,
+          userId: pipeline.userId,
+          actionType: PIPELINE_ACTIONS.RUN_FAILED,
+          entityType: ENTITY_TYPES.PIPELINE,
+          entityId: pipeline.id,
+          message: `Pipeline "${pipeline.name}" run failed`,
+          metadata: {
+            runId: run.id,
+            pipelineName: pipeline.name,
+            errorMessage,
+            durationSeconds,
+          },
+        });
+      } catch (logError) {
+        // Don't fail execution if logging fails
+        this.logger.error('Failed to log pipeline run failed activity:', logError);
+      }
 
       throw error;
     }
@@ -2594,8 +2685,49 @@ export class PostgresPipelineService {
   /**
    * Update pipeline
    */
-  async updatePipeline(id: string, updates: Partial<PostgresPipeline>): Promise<PostgresPipeline> {
-    return await this.pipelineRepository.update(id, updates);
+  async updatePipeline(
+    id: string,
+    updates: Partial<PostgresPipeline>,
+    userId?: string,
+  ): Promise<PostgresPipeline> {
+    const pipeline = await this.pipelineRepository.findById(id);
+    if (!pipeline) {
+      throw new NotFoundException(`Pipeline ${id} not found`);
+    }
+
+    const updated = await this.pipelineRepository.update(id, updates);
+
+    // Log activity
+    try {
+      const changes: string[] = [];
+      if (updates.name && updates.name !== pipeline.name) {
+        changes.push(`name: "${pipeline.name}" → "${updates.name}"`);
+      }
+      if (updates.status && updates.status !== pipeline.status) {
+        changes.push(`status: "${pipeline.status}" → "${updates.status}"`);
+      }
+      if (updates.syncMode && updates.syncMode !== pipeline.syncMode) {
+        changes.push(`syncMode: "${pipeline.syncMode}" → "${updates.syncMode}"`);
+      }
+
+      await this.activityLogService.logActivity({
+        organizationId: pipeline.orgId,
+        userId: userId || pipeline.userId || null,
+        actionType: PIPELINE_ACTIONS.UPDATED,
+        entityType: ENTITY_TYPES.PIPELINE,
+        entityId: id,
+        message:
+          changes.length > 0 ? `Pipeline updated: ${changes.join(', ')}` : 'Pipeline updated',
+        metadata: {
+          changes: updates,
+        },
+      });
+    } catch (error) {
+      // Don't fail update if logging fails
+      this.logger.error('Failed to log pipeline update activity:', error);
+    }
+
+    return updated;
   }
 
   /**

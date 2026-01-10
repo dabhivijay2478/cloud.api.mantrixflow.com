@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createDrizzleDatabase } from '../../database/drizzle/database';
+import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { UserModule } from '../users/user.module';
 import { OrganizationController } from './organization.controller';
 import { OrganizationService } from './organization.service';
@@ -11,7 +12,7 @@ import { OrganizationMemberRepository } from './repositories/organization-member
 import { OrganizationOwnerRepository } from './repositories/organization-owner.repository';
 
 @Module({
-  imports: [forwardRef(() => UserModule)],
+  imports: [forwardRef(() => UserModule), ActivityLogModule],
   controllers: [OrganizationController, OrganizationMemberController],
   providers: [
     // Database provider

@@ -183,8 +183,13 @@ export class OrganizationMemberController {
     status: 200,
     description: 'Member updated successfully',
   })
-  async updateMember(@Param('memberId') memberId: string, @Body() dto: UpdateMemberDto) {
-    const member = await this.memberService.updateMember(memberId, dto);
+  async updateMember(
+    @Param('memberId') memberId: string,
+    @Body() dto: UpdateMemberDto,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    const member = await this.memberService.updateMember(memberId, dto, userId);
     return createSuccessResponse(member, 'Member updated successfully');
   }
 
@@ -208,8 +213,9 @@ export class OrganizationMemberController {
     status: 200,
     description: 'Member removed successfully',
   })
-  async removeMember(@Param('memberId') memberId: string) {
-    await this.memberService.removeMember(memberId);
+  async removeMember(@Param('memberId') memberId: string, @Request() req: ExpressRequestType) {
+    const userId = req.user?.id;
+    await this.memberService.removeMember(memberId, userId);
     return createDeleteResponse(memberId, 'Member removed successfully');
   }
 }

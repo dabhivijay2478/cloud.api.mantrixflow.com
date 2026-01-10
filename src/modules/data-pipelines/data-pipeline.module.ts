@@ -10,6 +10,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 // Database
 import { createDrizzleDatabase } from '../../database/drizzle/database';
 // Import data-sources module services (for connection access)
+import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { PostgresDataSourceModule } from '../data-sources/postgres/postgres-data-source.module';
 import { DataPipelineController } from './data-pipeline.controller';
 // Services
@@ -29,6 +30,8 @@ import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapp
   imports: [
     // Import data-sources module to access connection services
     PostgresDataSourceModule,
+    // Import activity log module for logging pipeline activities
+    ActivityLogModule,
     // Register BullMQ queue for pipeline jobs
     BullModule.registerQueue({
       name: 'postgres-pipeline',

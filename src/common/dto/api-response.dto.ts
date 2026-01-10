@@ -150,6 +150,7 @@ export class ApiListResponse<T = unknown> {
     limit: number;
     offset: number;
     hasMore: boolean;
+    nextCursor?: string | null; // Cursor for next page (cursor-based pagination)
   };
 
   constructor(
@@ -161,6 +162,7 @@ export class ApiListResponse<T = unknown> {
       limit: number;
       offset: number;
       hasMore: boolean;
+      nextCursor?: string | null;
     },
   ) {
     this.meta = {
@@ -230,6 +232,7 @@ export function createListResponse<T>(
     limit: number;
     offset: number;
     hasMore: boolean;
+    nextCursor?: string | null;
   },
 ): ApiListResponse<T> {
   return new ApiListResponse(data, message, 200, pagination);

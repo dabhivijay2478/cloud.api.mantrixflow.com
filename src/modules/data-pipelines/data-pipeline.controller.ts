@@ -40,7 +40,7 @@ import {
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { createErrorResponse } from '../data-sources/postgres/utils/error-mapper.util';
-import type { CreatePipelineDto, UpdatePipelineDto } from './dto/create-pipeline.dto';
+import { CreatePipelineDto, UpdatePipelineDto } from './dto/create-pipeline.dto';
 import { PostgresPipelineService } from './postgres-pipeline.service';
 
 @ApiTags('data-pipelines')
@@ -92,6 +92,50 @@ export class DataPipelineController {
         throw new BadRequestException('Invalid User ID format. Must be a valid UUID v4.');
       }
 
+      // Transform fieldMappings from object to array format if needed
+      const transformedCollectors:
+        | Array<{
+            id: string;
+            sourceId: string;
+            selectedTables: string[];
+            transformers?: Array<{
+              id: string;
+              name: string;
+              collectorId?: string;
+              emitterId?: string;
+              fieldMappings?: Array<{ source: string; destination: string }>;
+            }>;
+          }>
+        | undefined = dto.collectors?.map((collector) => ({
+        id: collector.id,
+        sourceId: collector.sourceId,
+        selectedTables: collector.selectedTables,
+        transformers: collector.transformers?.map((transformer) => {
+          // Convert object format to array format if needed
+          let fieldMappings: Array<{ source: string; destination: string }> | undefined;
+          if (transformer.fieldMappings) {
+            if (Array.isArray(transformer.fieldMappings)) {
+              fieldMappings = transformer.fieldMappings;
+            } else {
+              // Convert Record<string, string> to Array<{ source: string; destination: string }>
+              fieldMappings = Object.entries(
+                transformer.fieldMappings as Record<string, string>,
+              ).map(([source, destination]) => ({
+                source,
+                destination: destination as string,
+              }));
+            }
+          }
+          return {
+            id: transformer.id,
+            name: transformer.name,
+            collectorId: transformer.collectorId,
+            emitterId: transformer.emitterId,
+            fieldMappings,
+          };
+        }),
+      }));
+
       // Create pipeline with schemas
       const pipeline = await this.pipelineService.createPipeline({
         orgId: finalOrgId,
@@ -114,7 +158,7 @@ export class DataPipelineController {
         syncMode: dto.syncMode || 'full',
         incrementalColumn: dto.incrementalColumn,
         syncFrequency: dto.syncFrequency || 'manual',
-        collectors: dto.collectors,
+        collectors: transformedCollectors,
         emitters: dto.emitters,
       });
 
@@ -356,10 +400,15 @@ export class DataPipelineController {
         };
 
         // Update with transformations
-        const updated = await this.pipelineService.updatePipeline(id, {
-          ...updates,
-          transformations: newTransformations,
-        });
+        const userId = req.user?.id;
+        const updated = await this.pipelineService.updatePipeline(
+          id,
+          {
+            ...updates,
+            transformations: newTransformations,
+          },
+          userId,
+        );
 
         return createSuccessResponse(updated, 'Pipeline updated successfully', HttpStatus.OK, {
           pipelineId: updated.id,
@@ -368,7 +417,8 @@ export class DataPipelineController {
       }
 
       // Regular update without transformations
-      const updated = await this.pipelineService.updatePipeline(id, updates);
+      const userId = req.user?.id;
+      const updated = await this.pipelineService.updatePipeline(id, updates, userId);
 
       return createSuccessResponse(updated, 'Pipeline updated successfully', HttpStatus.OK, {
         pipelineId: updated.id,
