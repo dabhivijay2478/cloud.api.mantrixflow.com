@@ -4,13 +4,14 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, lte, or, sql } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
 import {
   type ActivityLog,
   type NewActivityLog,
   activityLogs,
 } from '../../../database/schemas/activity-logs';
+import type { ActivityLogCursor } from '../utils/cursor.util';
 
 export interface ActivityLogFilters {
   organizationId: string;
@@ -24,7 +25,7 @@ export interface ActivityLogFilters {
 
 export interface ActivityLogPagination {
   limit?: number;
-  cursor?: string; // ID of the last log from previous page
+  cursor?: ActivityLogCursor; // Decoded cursor with createdAt (ISO string) and id
 }
 
 @Injectable()
@@ -74,26 +75,38 @@ export class ActivityLogRepository {
     }
 
     // Cursor-based pagination
+    // Cursor is already decoded and contains createdAt (ISO string) and id
+    // We use these values directly - no database lookup needed
     if (pagination?.cursor) {
-      // Get the timestamp of the cursor log for efficient pagination
-      const [cursorLog] = await this.db
-        .select({ createdAt: activityLogs.createdAt })
-        .from(activityLogs)
-        .where(eq(activityLogs.id, pagination.cursor))
-        .limit(1);
-
-      if (cursorLog && pagination.cursor) {
-        const dateCondition = sql`${activityLogs.createdAt} < ${cursorLog.createdAt}`;
-        const idCondition = and(
-          eq(activityLogs.createdAt, cursorLog.createdAt),
-          sql`${activityLogs.id} < ${pagination.cursor}`,
-        );
-        if (idCondition) {
-          conditions.push(or(dateCondition, idCondition)!);
-        } else {
-          conditions.push(dateCondition);
-        }
+      const cursor = pagination.cursor;
+      
+      // Validate cursor has required fields
+      if (!cursor.createdAt || !cursor.id) {
+        throw new Error('Cursor must have both createdAt and id');
       }
+      
+      // Ensure createdAt is a string (never a Date object)
+      const cursorDateStr: string = typeof cursor.createdAt === 'string'
+        ? cursor.createdAt
+        : cursor.createdAt instanceof Date
+          ? cursor.createdAt.toISOString()
+          : new Date(cursor.createdAt).toISOString();
+      
+      // Escape single quotes to prevent SQL injection
+      const escapedDateStr = cursorDateStr.replace(/'/g, "''");
+      const escapedCursorId = cursor.id.replace(/'/g, "''");
+      
+      // Build pagination condition using string timestamps
+      // This ensures postgres-js receives string parameters, not Date objects
+      // Condition: (created_at < cursor.createdAt) OR (created_at = cursor.createdAt AND id < cursor.id)
+      const dateCondition = sql.raw(
+        `"activity_logs"."created_at" < '${escapedDateStr}'::timestamp`
+      );
+      const idCondition = sql.raw(
+        `"activity_logs"."created_at" = '${escapedDateStr}'::timestamp AND "activity_logs"."id" < '${escapedCursorId}'`
+      );
+      
+      conditions.push(or(dateCondition, idCondition)!);
     }
 
     const limit = pagination?.limit || 50;

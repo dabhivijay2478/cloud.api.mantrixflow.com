@@ -11,6 +11,7 @@ import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { ActivityLogService } from './activity-log.service';
 import { RequiredUUIDPipe } from './pipes/required-uuid.pipe';
 import { OptionalUUIDPipe } from './pipes/optional-uuid.pipe';
+import { decodeCursor } from './utils/cursor.util';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -96,7 +97,18 @@ export class ActivityLogController {
       throw new BadRequestException('Limit must be a number between 1 and 100');
     }
 
-    const logs = await this.activityLogService.getActivityLogs(
+    // Validate cursor if provided
+    if (cursor) {
+      try {
+        decodeCursor(cursor); // Validate cursor format
+      } catch (error) {
+        throw new BadRequestException(
+          `Invalid cursor format: ${error instanceof Error ? error.message : 'Malformed cursor'}`,
+        );
+      }
+    }
+
+    const result = await this.activityLogService.getActivityLogs(
       organizationId,
       {
         actionType,
@@ -110,6 +122,17 @@ export class ActivityLogController {
       },
     );
 
-    return createListResponse(logs, 'Activity logs retrieved successfully');
+    // Return response with nextCursor for pagination
+    return createListResponse(
+      result.logs,
+      'Activity logs retrieved successfully',
+      {
+        total: result.logs.length,
+        limit: limitNum,
+        offset: 0, // Cursor-based pagination doesn't use offset
+        hasMore: result.nextCursor !== null,
+        nextCursor: result.nextCursor, // Include nextCursor in response
+      },
+    );
   }
 }

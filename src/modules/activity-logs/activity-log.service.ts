@@ -13,6 +13,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { ActivityLog } from '../../database/schemas/activity-logs';
 import type { ActivityLogActionType, ActivityLogEntityType } from './constants/activity-log-types';
 import { ActivityLogRepository } from './repositories/activity-log.repository';
+import { decodeCursor, createCursorFromLog, type ActivityLogCursor } from './utils/cursor.util';
 
 export interface LogActivityParams {
   organizationId: string;
@@ -68,6 +69,7 @@ export class ActivityLogService {
 
   /**
    * Get activity logs with filters and pagination
+   * Returns logs and nextCursor for pagination
    */
   async getActivityLogs(
     organizationId: string,
@@ -81,16 +83,51 @@ export class ActivityLogService {
     },
     pagination?: {
       limit?: number;
-      cursor?: string;
+      cursor?: string; // Encoded cursor string from request
     },
-  ): Promise<ActivityLog[]> {
-    return this.activityLogRepository.findMany(
+  ): Promise<{
+    logs: ActivityLog[];
+    nextCursor: string | null; // Encoded cursor string for next page, or null if no more pages
+  }> {
+    // Decode cursor if provided
+    let decodedCursor: ActivityLogCursor | undefined;
+    if (pagination?.cursor) {
+      try {
+        decodedCursor = decodeCursor(pagination.cursor);
+      } catch (error) {
+        this.logger.warn(`Invalid cursor provided: ${pagination.cursor}`, error);
+        throw error; // Will be caught by controller and return 400
+      }
+    }
+    
+    // Fetch logs with decoded cursor
+    const logs = await this.activityLogRepository.findMany(
       {
         organizationId,
         ...filters,
       },
-      pagination,
+      {
+        limit: pagination?.limit,
+        cursor: decodedCursor,
+      },
     );
+    
+    // Generate nextCursor from last log if there are logs and we fetched a full page
+    let nextCursor: string | null = null;
+    if (logs.length > 0 && logs.length === (pagination?.limit || 50)) {
+      const lastLog = logs[logs.length - 1];
+      try {
+        nextCursor = createCursorFromLog(lastLog);
+      } catch (error) {
+        this.logger.error('Failed to create next cursor', error);
+        // Don't throw - just return null cursor (no more pages)
+      }
+    }
+    
+    return {
+      logs,
+      nextCursor,
+    };
   }
 
   /**
