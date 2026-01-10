@@ -34,6 +34,7 @@ import { OrganizationOwnerRepository } from './repositories/organization-owner.r
     OrganizationMemberService,
     OrganizationRepository,
     OrganizationMemberRepository,
+    OrganizationOwnerRepository,
   ],
 })
 export class OrganizationModule {}
