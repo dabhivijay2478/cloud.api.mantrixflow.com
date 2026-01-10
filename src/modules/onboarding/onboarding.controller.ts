@@ -18,7 +18,7 @@ import { UserService } from '../users/user.service';
 @ApiTags('onboarding')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
-@Controller('api/onboarding')
+@Controller('onboarding')
 export class OnboardingController {
   constructor(
     private readonly userService: UserService,

@@ -66,6 +66,6 @@ import { PostgresSchemaMapperService } from './transformers/postgres-schema-mapp
     // Jobs
     PostgresPipelineProcessor,
   ],
-  exports: [PostgresPipelineService, PostgresPipelineQueueService],
+  exports: [PostgresPipelineService, PostgresPipelineQueueService, PostgresPipelineRepository],
 })
 export class DataPipelineModule {}

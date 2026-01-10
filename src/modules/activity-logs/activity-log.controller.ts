@@ -18,7 +18,7 @@ type ExpressRequestType = ExpressRequest;
 @ApiTags('activity-logs')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
-@Controller('api/activity-logs')
+@Controller('activity-logs')
 export class ActivityLogController {
   constructor(private readonly activityLogService: ActivityLogService) {}
 

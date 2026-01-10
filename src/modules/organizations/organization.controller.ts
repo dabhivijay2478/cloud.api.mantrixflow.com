@@ -43,7 +43,7 @@ import { OrganizationService } from './organization.service';
 @ApiTags('organizations')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(SupabaseAuthGuard)
-@Controller('api/organizations')
+@Controller('organizations')
 export class OrganizationController {
   constructor(private readonly organizationService: OrganizationService) {}
 
