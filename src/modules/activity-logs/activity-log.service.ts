@@ -99,7 +99,7 @@ export class ActivityLogService {
         throw error; // Will be caught by controller and return 400
       }
     }
-    
+
     // Fetch logs with decoded cursor
     const logs = await this.activityLogRepository.findMany(
       {
@@ -111,7 +111,7 @@ export class ActivityLogService {
         cursor: decodedCursor,
       },
     );
-    
+
     // Generate nextCursor from last log if there are logs and we fetched a full page
     let nextCursor: string | null = null;
     if (logs.length > 0 && logs.length === (pagination?.limit || 50)) {
@@ -123,7 +123,7 @@ export class ActivityLogService {
         // Don't throw - just return null cursor (no more pages)
       }
     }
-    
+
     return {
       logs,
       nextCursor,

@@ -93,30 +93,34 @@ export class DataPipelineController {
       }
 
       // Transform fieldMappings from object to array format if needed
-      const transformedCollectors: Array<{
-        id: string;
-        sourceId: string;
-        selectedTables: string[];
-        transformers?: Array<{
-          id: string;
-          name: string;
-          collectorId?: string;
-          emitterId?: string;
-          fieldMappings?: Array<{ source: string; destination: string }>;
-        }>;
-      }> | undefined = dto.collectors?.map((collector) => ({
+      const transformedCollectors:
+        | Array<{
+            id: string;
+            sourceId: string;
+            selectedTables: string[];
+            transformers?: Array<{
+              id: string;
+              name: string;
+              collectorId?: string;
+              emitterId?: string;
+              fieldMappings?: Array<{ source: string; destination: string }>;
+            }>;
+          }>
+        | undefined = dto.collectors?.map((collector) => ({
         id: collector.id,
         sourceId: collector.sourceId,
         selectedTables: collector.selectedTables,
         transformers: collector.transformers?.map((transformer) => {
           // Convert object format to array format if needed
-          let fieldMappings: Array<{ source: string; destination: string }> | undefined = undefined;
+          let fieldMappings: Array<{ source: string; destination: string }> | undefined;
           if (transformer.fieldMappings) {
             if (Array.isArray(transformer.fieldMappings)) {
               fieldMappings = transformer.fieldMappings;
             } else {
               // Convert Record<string, string> to Array<{ source: string; destination: string }>
-              fieldMappings = Object.entries(transformer.fieldMappings as Record<string, string>).map(([source, destination]) => ({
+              fieldMappings = Object.entries(
+                transformer.fieldMappings as Record<string, string>,
+              ).map(([source, destination]) => ({
                 source,
                 destination: destination as string,
               }));

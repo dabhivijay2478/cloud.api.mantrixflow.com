@@ -123,16 +123,12 @@ export class ActivityLogController {
     );
 
     // Return response with nextCursor for pagination
-    return createListResponse(
-      result.logs,
-      'Activity logs retrieved successfully',
-      {
-        total: result.logs.length,
-        limit: limitNum,
-        offset: 0, // Cursor-based pagination doesn't use offset
-        hasMore: result.nextCursor !== null,
-        nextCursor: result.nextCursor, // Include nextCursor in response
-      },
-    );
+    return createListResponse(result.logs, 'Activity logs retrieved successfully', {
+      total: result.logs.length,
+      limit: limitNum,
+      offset: 0, // Cursor-based pagination doesn't use offset
+      hasMore: result.nextCursor !== null,
+      nextCursor: result.nextCursor, // Include nextCursor in response
+    });
   }
 }

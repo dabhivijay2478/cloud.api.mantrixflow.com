@@ -11,7 +11,6 @@ import {
   IsUUID,
   MaxLength,
   ValidateNested,
-  ValidateIf,
 } from 'class-validator';
 
 /**
