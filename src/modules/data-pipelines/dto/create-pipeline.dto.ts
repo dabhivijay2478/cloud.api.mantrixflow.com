@@ -11,7 +11,125 @@ import {
   IsUUID,
   MaxLength,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
+
+/**
+ * Field Mapping DTO (for transformers)
+ */
+export class FieldMappingDto {
+  @ApiProperty({ description: 'Source field path' })
+  @IsString()
+  @IsNotEmpty()
+  source: string;
+
+  @ApiProperty({ description: 'Destination field name' })
+  @IsString()
+  @IsNotEmpty()
+  destination: string;
+}
+
+/**
+ * Transformer DTO (within collectors)
+ */
+export class TransformerDto {
+  @ApiProperty({ description: 'Transformer ID' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Transformer name' })
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+
+  @ApiPropertyOptional({ description: 'Collector ID this transformer belongs to' })
+  @IsString()
+  @IsOptional()
+  collectorId?: string;
+
+  @ApiPropertyOptional({ description: 'Emitter ID this transformer belongs to' })
+  @IsString()
+  @IsOptional()
+  emitterId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Field mappings (object format: { "source": "destination" } or array format)',
+  })
+  @IsOptional()
+  // Note: fieldMappings can be either object or array, validation happens in controller
+  // Using any to allow both formats - controller will transform to array format
+  // We use @IsOptional() to whitelist the property, actual validation happens in controller
+  fieldMappings?: any;
+}
+
+/**
+ * Collector DTO
+ */
+export class CollectorDto {
+  @ApiProperty({ description: 'Collector ID' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Source connection ID' })
+  @IsUUID()
+  @IsNotEmpty()
+  sourceId: string;
+
+  @ApiProperty({ description: 'Selected tables', type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  @IsNotEmpty()
+  selectedTables: string[];
+
+  @ApiPropertyOptional({
+    description: 'Transformers for this collector',
+    type: [TransformerDto],
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TransformerDto)
+  @IsOptional()
+  transformers?: TransformerDto[];
+}
+
+/**
+ * Emitter DTO
+ */
+export class EmitterDto {
+  @ApiProperty({ description: 'Emitter ID' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Transformer ID this emitter uses' })
+  @IsString()
+  @IsNotEmpty()
+  transformId: string;
+
+  @ApiProperty({ description: 'Destination connection ID' })
+  @IsUUID()
+  @IsNotEmpty()
+  destinationId: string;
+
+  @ApiProperty({ description: 'Destination name' })
+  @IsString()
+  @IsNotEmpty()
+  destinationName: string;
+
+  @ApiProperty({ description: 'Destination type' })
+  @IsString()
+  @IsNotEmpty()
+  destinationType: string;
+
+  @ApiPropertyOptional({
+    description: 'Connection config (ignored - connection is referenced by destinationId)',
+  })
+  @IsObject()
+  @IsOptional()
+  connectionConfig?: Record<string, string>;
+}
 
 /**
  * Column Mapping DTO
@@ -224,19 +342,10 @@ export class CreatePipelineDto {
     isArray: true,
   })
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CollectorDto)
   @IsOptional()
-  collectors?: Array<{
-    id: string;
-    sourceId: string;
-    selectedTables: string[];
-    transformers?: Array<{
-      id: string;
-      name: string;
-      collectorId?: string;
-      emitterId?: string;
-      fieldMappings?: Array<{ source: string; destination: string }>; // JSON array format
-    }>;
-  }>;
+  collectors?: CollectorDto[];
 
   // Emitter configuration
   @ApiPropertyOptional({
@@ -246,15 +355,10 @@ export class CreatePipelineDto {
     isArray: true,
   })
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => EmitterDto)
   @IsOptional()
-  emitters?: Array<{
-    id: string;
-    transformId: string;
-    destinationId: string; // References existing connection (like collectors use sourceId)
-    destinationName: string;
-    destinationType: string;
-    connectionConfig?: Record<string, string>; // Optional, ignored - connection is referenced by destinationId
-  }>;
+  emitters?: EmitterDto[];
 }
 
 /**
@@ -345,19 +449,10 @@ export class UpdatePipelineDto {
     isArray: true,
   })
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CollectorDto)
   @IsOptional()
-  collectors?: Array<{
-    id: string;
-    sourceId: string;
-    selectedTables: string[];
-    transformers?: Array<{
-      id: string;
-      name: string;
-      collectorId?: string;
-      emitterId?: string;
-      fieldMappings?: Array<{ source: string; destination: string }>; // JSON array format
-    }>;
-  }>;
+  collectors?: CollectorDto[];
 
   // Emitter configuration (for updating pipeline transformations)
   @ApiPropertyOptional({
@@ -367,13 +462,8 @@ export class UpdatePipelineDto {
     isArray: true,
   })
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => EmitterDto)
   @IsOptional()
-  emitters?: Array<{
-    id: string;
-    transformId: string;
-    destinationId: string; // References existing connection (like collectors use sourceId)
-    destinationName: string;
-    destinationType: string;
-    connectionConfig?: Record<string, string>; // Optional, ignored - connection is referenced by destinationId
-  }>;
+  emitters?: EmitterDto[];
 }
