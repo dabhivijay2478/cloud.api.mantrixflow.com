@@ -18,13 +18,17 @@ export const organizationMemberStatusEnum = pgEnum('organization_member_status',
 
 /**
  * Enum for organization member role
+ * AUTHORITATIVE ROLES:
+ * - OWNER: Exactly ONE per organization. Full control including org settings, user management, and all data.
+ * - ADMIN: Can manage workspace data, data sources, pipelines, and users. Cannot update org details or change ownership.
+ * - EDITOR: Can edit workspace data, manage data sources and pipelines. Cannot manage users or org settings.
+ * - VIEWER: Read-only access. Can view all data but cannot edit anything.
  */
 export const organizationMemberRoleEnum = pgEnum('organization_member_role', [
-  'owner',
-  'admin',
-  'member',
-  'viewer',
-  'guest',
+  'OWNER',
+  'ADMIN',
+  'EDITOR',
+  'VIEWER',
 ]);
 
 /**
@@ -43,7 +47,9 @@ export const organizationMembers = pgTable('organization_members', {
   // Email (required for invites, may differ from user.email if user changes email)
   email: varchar('email', { length: 255 }).notNull(),
   // Role in the organization
-  role: organizationMemberRoleEnum('role').notNull().default('member'),
+  // AUTHORITATIVE: Must be one of OWNER, ADMIN, EDITOR, VIEWER
+  // OWNER role is enforced to be unique per organization (see migration)
+  role: organizationMemberRoleEnum('role').notNull().default('VIEWER'),
   // Status: invited -> accepted -> active
   status: organizationMemberStatusEnum('status').notNull().default('invited'),
   // Invite tracking

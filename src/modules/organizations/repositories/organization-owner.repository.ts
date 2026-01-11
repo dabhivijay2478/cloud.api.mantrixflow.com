@@ -76,7 +76,7 @@ export class OrganizationOwnerRepository {
   /**
    * Check if a user is an owner of an organization
    */
-  async isOwner(organizationId: string, userId: string): Promise<boolean> {
+  async isOwner(userId: string, organizationId: string): Promise<boolean> {
     const owner = await this.findByOrganizationAndUserId(organizationId, userId);
     return owner !== null;
   }

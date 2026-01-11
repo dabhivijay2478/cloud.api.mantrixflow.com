@@ -36,6 +36,7 @@ import {
   createListResponse,
   createSuccessResponse,
 } from '../../common/dto/api-response.dto';
+import { OrganizationRoleGuard, RequireRole } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
 import { OrganizationMemberService } from './organization-member.service';
@@ -49,12 +50,15 @@ export class OrganizationMemberController {
 
   /**
    * Invite a member to an organization
+   * AUTHORIZATION: Only OWNER and ADMIN can invite members
    */
   @Post(':organizationId/members/invite')
+  @UseGuards(OrganizationRoleGuard)
+  @RequireRole('OWNER', 'ADMIN')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Invite member to organization',
-    description: 'Invite a user to join the organization by email',
+    description: 'Invite a user to join the organization by email (OWNER/ADMIN only)',
   })
   @ApiParam({
     name: 'organizationId',
@@ -64,6 +68,10 @@ export class OrganizationMemberController {
   @ApiResponse({
     status: 201,
     description: 'Member invited successfully',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - Only OWNER and ADMIN can invite members',
   })
   @ApiResponse({
     status: 409,
@@ -164,11 +172,14 @@ export class OrganizationMemberController {
 
   /**
    * Update member
+   * AUTHORIZATION: Only OWNER can change roles. OWNER and ADMIN can update permissions.
    */
   @Patch(':organizationId/members/:memberId')
+  @UseGuards(OrganizationRoleGuard)
+  @RequireRole('OWNER', 'ADMIN')
   @ApiOperation({
     summary: 'Update organization member',
-    description: 'Update member role, permissions, or status',
+    description: 'Update member role (OWNER only), permissions, or status (OWNER/ADMIN)',
   })
   @ApiParam({
     name: 'organizationId',
@@ -195,11 +206,14 @@ export class OrganizationMemberController {
 
   /**
    * Remove member from organization
+   * AUTHORIZATION: Only OWNER and ADMIN can remove members
    */
   @Delete(':organizationId/members/:memberId')
+  @UseGuards(OrganizationRoleGuard)
+  @RequireRole('OWNER', 'ADMIN')
   @ApiOperation({
     summary: 'Remove organization member',
-    description: 'Remove a member from the organization',
+    description: 'Remove a member from the organization (OWNER/ADMIN only)',
   })
   @ApiParam({
     name: 'organizationId',

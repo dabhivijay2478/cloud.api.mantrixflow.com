@@ -21,10 +21,10 @@ export class OrganizationResponseDto {
   isOwner: boolean;
 
   @ApiPropertyOptional({
-    description: "User's role in the organization (if member)",
-    enum: ['owner', 'admin', 'member', 'viewer', 'guest'],
+    description: "User's role in the organization (if member). AUTHORITATIVE ROLES: OWNER, ADMIN, EDITOR, VIEWER",
+    enum: ['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'],
   })
-  role?: 'owner' | 'admin' | 'member' | 'viewer' | 'guest';
+  role?: 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER';
 
   @ApiProperty({ description: 'Created at timestamp' })
   createdAt: Date;
