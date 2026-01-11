@@ -9,6 +9,7 @@ import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.modul
 import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
+import { SearchModule } from './modules/search/search.module';
 import { UserModule } from './modules/users/user.module';
 
 @Module({
@@ -59,6 +60,7 @@ import { UserModule } from './modules/users/user.module';
     OnboardingModule,
     ActivityLogModule,
     DashboardModule,
+    SearchModule,
   ],
   controllers: [AppController],
   providers: [AppService],
