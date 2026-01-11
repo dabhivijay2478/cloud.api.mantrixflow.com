@@ -20,13 +20,16 @@ if (!connectionString) {
 }
 
 async function runRoleMigration() {
+  // TypeScript assertion: connectionString is guaranteed to be defined after the check above
+  const dbUrl = connectionString as string;
+
   console.log('🔄 Running role refactoring migration...');
-  console.log(`📦 Database: ${connectionString.split('@')[1] || 'unknown'}`);
+  console.log(`📦 Database: ${dbUrl.split('@')[1] || 'unknown'}`);
 
   // Import postgres
   const postgres = await import('postgres');
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
-  const sql = postgres.default(connectionString, { max: 1 });
+  const sql = postgres.default(dbUrl, { max: 1 });
 
   try {
     // Read the migration file
