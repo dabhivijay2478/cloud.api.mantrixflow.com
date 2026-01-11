@@ -11,6 +11,7 @@ import { SearchService } from './search.service';
 import { UserSearchHandler } from './handlers/user-search.handler';
 import { PipelineSearchHandler } from './handlers/pipeline-search.handler';
 import { DataSourceSearchHandler } from './handlers/data-source-search.handler';
+import { ConnectorSearchHandler } from './handlers/connector-search.handler';
 
 @Module({
   controllers: [SearchController],
@@ -27,6 +28,7 @@ import { DataSourceSearchHandler } from './handlers/data-source-search.handler';
     UserSearchHandler,
     PipelineSearchHandler,
     DataSourceSearchHandler,
+    ConnectorSearchHandler,
   ],
   exports: [SearchService],
 })
@@ -36,6 +38,7 @@ export class SearchModule implements OnModuleInit {
     private readonly userHandler: UserSearchHandler,
     private readonly pipelineHandler: PipelineSearchHandler,
     private readonly dataSourceHandler: DataSourceSearchHandler,
+    private readonly connectorHandler: ConnectorSearchHandler,
   ) {}
 
   onModuleInit() {
@@ -43,5 +46,6 @@ export class SearchModule implements OnModuleInit {
     this.searchService.registerHandler(this.userHandler);
     this.searchService.registerHandler(this.pipelineHandler);
     this.searchService.registerHandler(this.dataSourceHandler);
+    this.searchService.registerHandler(this.connectorHandler);
   }
 }

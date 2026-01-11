@@ -1,6 +1,7 @@
 /**
- * Data Source Search Handler
- * Searches PostgreSQL connections (data sources)
+ * Connector Search Handler
+ * Searches PostgreSQL connections (connectors)
+ * This is an alias for data-source search to provide better UX
  */
 
 import { Inject, Injectable } from '@nestjs/common';
@@ -11,8 +12,8 @@ import type { SearchHandler } from '../interfaces/search-handler.interface';
 import type { SearchResultDto } from '../dto/search-response.dto';
 
 @Injectable()
-export class DataSourceSearchHandler implements SearchHandler {
-  entityType = 'data-source';
+export class ConnectorSearchHandler implements SearchHandler {
+  entityType = 'connector';
 
   constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
@@ -46,11 +47,11 @@ export class DataSourceSearchHandler implements SearchHandler {
     return results.map((connection) => ({
       type: this.entityType,
       id: connection.id,
-      title: connection.name || 'Unnamed Connection',
+      title: connection.name || 'Unnamed Connector',
       subtitle: `${connection.host}/${connection.database}`,
       redirect: '/workspace/data-sources',
       filterKey: 'name',
-      filterValue: query, // Use the search query as filter value
+      filterValue: query,
     }));
   }
 }
