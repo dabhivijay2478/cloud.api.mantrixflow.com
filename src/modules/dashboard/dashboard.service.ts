@@ -9,7 +9,7 @@ import { PostgresPipelineRepository } from '../data-pipelines/repositories/postg
 import { OrganizationRepository } from '../organizations/repositories/organization.repository';
 import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
 import type { DashboardOverviewDto } from './dto/dashboard-response.dto';
-import { eq, and, isNull, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc, inArray } from 'drizzle-orm';
 import { postgresPipelineRuns } from '../../database/schemas';
 import type { DrizzleDatabase } from '../../database/drizzle/database';
 
@@ -48,7 +48,7 @@ export class DashboardService {
 
     // Get pipeline runs for status breakdown
     const pipelineIds = pipelines.map((p) => p.id);
-    let pipelineRunsByStatus = {
+    const pipelineRunsByStatus = {
       running: 0,
       completed: 0,
       failed: 0,
