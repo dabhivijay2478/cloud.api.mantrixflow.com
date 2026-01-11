@@ -1,0 +1,55 @@
+name: Format Check - API
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/api/**'
+      - 'apps/api/.github/workflows/format.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/api/**'
+      - 'apps/api/.github/workflows/format.yml'
+  merge_group:
+    branches:
+      - main
+      - develop
+
+jobs:
+  format-check:
+    name: Format Check - API
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format code
+        run: bun run format
+
+      - name: Check for formatting changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "❌ Code formatting issues found. Please run 'bun run format' and commit the changes."
+            git diff
+            exit 1
+          else
+            echo "✅ Code is properly formatted."
+          fi

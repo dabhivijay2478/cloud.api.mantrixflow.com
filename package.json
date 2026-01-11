@@ -25,6 +25,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun --bun src/database/drizzle/migrate.ts",
     "db:migrate:kit": "drizzle-kit migrate",
+    "db:migrate:roles": "bun --bun src/database/drizzle/run-role-migration.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:drop": "drizzle-kit drop",

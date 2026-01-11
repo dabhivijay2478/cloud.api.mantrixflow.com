@@ -35,6 +35,7 @@ import {
   createListResponse,
   createSuccessResponse,
 } from '../../common/dto/api-response.dto';
+import { OrganizationRoleGuard, RequireRole } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -175,12 +176,15 @@ export class OrganizationController {
 
   /**
    * Set current organization
+   * AUTHORIZATION: User must be a member of the organization
    */
   @Post(':id/set-current')
+  @UseGuards(OrganizationRoleGuard)
+  @RequireRole('OWNER', 'ADMIN', 'EDITOR', 'VIEWER')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Set current organization',
-    description: 'Set the active organization',
+    description: 'Set the active organization (must be a member)',
   })
   @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
   @ApiResponse({
@@ -190,6 +194,10 @@ export class OrganizationController {
   @ApiResponse({
     status: 400,
     description: 'Invalid UUID format',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - Not a member of this organization',
   })
   async setCurrentOrganization(
     @Param('id', ParseUUIDPipe) id: string,
@@ -202,11 +210,14 @@ export class OrganizationController {
 
   /**
    * Update organization
+   * AUTHORIZATION: Only OWNER can update organization details
    */
   @Patch(':id')
+  @UseGuards(OrganizationRoleGuard)
+  @RequireRole('OWNER')
   @ApiOperation({
     summary: 'Update organization',
-    description: 'Update organization details',
+    description: 'Update organization details (OWNER only)',
   })
   @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
   @ApiBody({ type: UpdateOrganizationDto })
@@ -217,6 +228,10 @@ export class OrganizationController {
   @ApiResponse({
     status: 400,
     description: 'Invalid UUID format',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - Only OWNER can update organization',
   })
   @ApiResponse({
     status: 404,

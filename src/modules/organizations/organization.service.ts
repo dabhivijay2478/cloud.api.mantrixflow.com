@@ -19,6 +19,7 @@ import type { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
 import { OrganizationOwnerRepository } from './repositories/organization-owner.repository';
 import { OrganizationRepository } from './repositories/organization.repository';
+import { OrganizationRoleService } from './services/organization-role.service';
 import { UserRepository } from '../users/repositories/user.repository';
 
 @Injectable()
@@ -30,6 +31,7 @@ export class OrganizationService {
     @Inject(forwardRef(() => UserRepository))
     private readonly userRepository: UserRepository,
     private readonly activityLogService: ActivityLogService,
+    private readonly roleService: OrganizationRoleService,
   ) {}
 
   /**
@@ -124,13 +126,13 @@ export class OrganizationService {
           userId: userId,
         });
 
-        // Create member record with owner role and active status
+        // Create member record with OWNER role and active status
         // Note: This membership does NOT have invitedBy set, indicating the user created the org
         await this.memberRepository.create({
           organizationId: organization.id,
           userId: userId,
           email: user.email.toLowerCase(),
-          role: 'owner',
+          role: 'OWNER',
           status: 'active',
           acceptedAt: new Date(),
           // invitedBy is intentionally NOT set - this indicates the user created the organization
@@ -217,7 +219,7 @@ export class OrganizationService {
         uniqueOrgs.set(org.id, {
           ...org,
           isOwner,
-          role: isOwner ? 'owner' : role,
+          role: isOwner ? 'OWNER' : (role as string | undefined),
         });
       }
     });
@@ -249,6 +251,8 @@ export class OrganizationService {
 
   /**
    * Update organization
+   * 
+   * AUTHORIZATION: Only OWNER can update organization details
    */
   async updateOrganization(
     id: string,
@@ -256,6 +260,16 @@ export class OrganizationService {
     userId?: string,
   ): Promise<Organization> {
     const organization = await this.getOrganization(id);
+
+    // AUTHORIZATION CHECK: Only OWNER can update organization details
+    if (userId) {
+      const canUpdate = await this.roleService.canUpdateOrganization(userId, id);
+      if (!canUpdate) {
+        throw new ForbiddenException(
+          'Only OWNER can update organization details',
+        );
+      }
+    }
 
     // Check slug uniqueness if slug is being updated
     if (dto.slug && dto.slug !== organization.slug) {
@@ -312,26 +326,54 @@ export class OrganizationService {
 
   /**
    * Get current organization for a user
+   * Returns organization with user's role information
    */
-  async getCurrentOrganization(userId: string): Promise<Organization | null> {
+  async getCurrentOrganization(
+    userId: string,
+  ): Promise<(Organization & { isOwner: boolean; role?: string }) | null> {
     const user = await this.userRepository.findById(userId);
     if (!user || !user.currentOrgId) {
       return null;
     }
-    return this.getOrganization(user.currentOrgId);
+
+    const organization = await this.getOrganization(user.currentOrgId);
+
+    // Get user's role in this organization
+    const isOwner = await this.ownerRepository.isOwner(userId, organization.id);
+    let role: string | undefined;
+
+    if (isOwner) {
+      role = 'OWNER';
+    } else {
+      const member = await this.memberRepository.findByOrganizationAndUserId(
+        organization.id,
+        userId,
+      );
+      if (member && (member.status === 'active' || member.status === 'accepted')) {
+        role = member.role;
+      }
+    }
+
+    return {
+      ...organization,
+      isOwner,
+      role,
+    };
   }
 
   /**
    * Set current organization for a user
+   * 
+   * AUTHORIZATION: User must be a member of the organization
    */
   async setCurrentOrganization(userId: string, id: string): Promise<Organization> {
     // Verify organization exists
     const organization = await this.getOrganization(id);
 
-    // Verify user is a member of this organization
-    const member = await this.memberRepository.findByOrganizationAndUserId(id, userId);
-    if (!member) {
-      throw new BadRequestException(`User is not a member of organization "${id}"`);
+    // AUTHORIZATION: Verify user is a member of this organization
+    const userRole = await this.roleService.getUserRole(userId, id);
+    if (!userRole) {
+      throw new ForbiddenException(`You are not a member of this organization`);
     }
 
     // Set as current organization

@@ -6,6 +6,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { ENTITY_TYPES, USER_ACTIONS } from '../activity-logs/constants/activity-
 import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
 import { OrganizationRepository } from './repositories/organization.repository';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
+import { OrganizationRoleService } from './services/organization-role.service';
 
 @Injectable()
 export class OrganizationMemberService {
@@ -27,6 +29,7 @@ export class OrganizationMemberService {
     private readonly organizationRepository: OrganizationRepository,
     private readonly configService: ConfigService,
     private readonly activityLogService: ActivityLogService,
+    private readonly roleService: OrganizationRoleService,
   ) {
     // Initialize Supabase admin client for sending invite emails
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
@@ -45,16 +48,36 @@ export class OrganizationMemberService {
   /**
    * Invite a user to an organization
    * Creates an invite record and sends an email via Supabase
+   * 
+   * AUTHORIZATION: Only OWNER and ADMIN can invite members
    */
   async inviteMember(
     organizationId: string,
     invitedByUserId: string,
     dto: InviteMemberDto,
   ): Promise<OrganizationMember> {
+    // AUTHORIZATION CHECK: Only OWNER and ADMIN can invite
+    const canInvite = await this.roleService.canInviteMembers(
+      invitedByUserId,
+      organizationId,
+    );
+    if (!canInvite) {
+      throw new ForbiddenException(
+        'Only OWNER and ADMIN can invite members to the organization',
+      );
+    }
+
     // Verify organization exists
     const organization = await this.organizationRepository.findById(organizationId);
     if (!organization) {
       throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
+    }
+
+    // AUTHORIZATION: Cannot invite users as OWNER (only one owner per org)
+    if (dto.role === 'OWNER') {
+      throw new BadRequestException(
+        'Cannot invite users as OWNER. Each organization can have only one OWNER.',
+      );
     }
 
     // Normalize email
@@ -164,6 +187,10 @@ export class OrganizationMemberService {
 
   /**
    * Update member
+   * 
+   * AUTHORIZATION:
+   * - Only OWNER can change roles
+   * - Only OWNER and ADMIN can update member permissions
    */
   async updateMember(
     id: string,
@@ -171,6 +198,46 @@ export class OrganizationMemberService {
     updatedByUserId?: string,
   ): Promise<OrganizationMember> {
     const member = await this.getMember(id);
+
+    if (updatedByUserId) {
+      // AUTHORIZATION: Check if user can update this member
+      const userRole = await this.roleService.getUserRole(
+        updatedByUserId,
+        member.organizationId,
+      );
+
+      if (!userRole) {
+        throw new ForbiddenException(
+          'You are not a member of this organization',
+        );
+      }
+
+      // AUTHORIZATION: Only OWNER can change roles
+      if (dto.role && dto.role !== member.role) {
+        if (userRole !== 'OWNER') {
+          throw new ForbiddenException(
+            'Only OWNER can change member roles',
+          );
+        }
+
+        // AUTHORIZATION: Cannot change role to OWNER (only one owner per org)
+        if (dto.role === 'OWNER') {
+          throw new BadRequestException(
+            'Cannot change member role to OWNER. Each organization can have only one OWNER.',
+          );
+        }
+      }
+
+      // AUTHORIZATION: Only OWNER and ADMIN can update member permissions
+      if (dto.agentPanelAccess !== undefined || dto.allowedModels !== undefined) {
+        if (userRole !== 'OWNER' && userRole !== 'ADMIN') {
+          throw new ForbiddenException(
+            'Only OWNER and ADMIN can update member permissions',
+          );
+        }
+      }
+    }
+
     const updated = await this.memberRepository.update(id, dto);
 
     // Log activity if role changed
@@ -201,9 +268,31 @@ export class OrganizationMemberService {
 
   /**
    * Remove member from organization
+   * 
+   * AUTHORIZATION: Only OWNER and ADMIN can remove members
    */
   async removeMember(id: string, removedByUserId?: string): Promise<void> {
     const member = await this.getMember(id); // Verify exists
+
+    if (removedByUserId) {
+      // AUTHORIZATION: Only OWNER and ADMIN can remove members
+      const canRemove = await this.roleService.canRemoveMembers(
+        removedByUserId,
+        member.organizationId,
+      );
+      if (!canRemove) {
+        throw new ForbiddenException(
+          'Only OWNER and ADMIN can remove members from the organization',
+        );
+      }
+
+      // AUTHORIZATION: Cannot remove OWNER
+      if (member.role === 'OWNER') {
+        throw new BadRequestException(
+          'Cannot remove OWNER from organization. Transfer ownership first.',
+        );
+      }
+    }
 
     // Log activity before deletion
     try {

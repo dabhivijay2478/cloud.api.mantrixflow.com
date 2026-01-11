@@ -15,14 +15,14 @@ export class InviteMemberDto {
   email: string;
 
   @ApiProperty({
-    description: 'Role to assign to the invited member',
-    enum: ['owner', 'admin', 'member', 'viewer', 'guest'],
-    example: 'member',
+    description: 'Role to assign to the invited member. AUTHORITATIVE ROLES: OWNER (cannot be invited), ADMIN, EDITOR, VIEWER',
+    enum: ['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'],
+    example: 'EDITOR',
   })
-  @IsEnum(['owner', 'admin', 'member', 'viewer', 'guest'], {
-    message: 'Role must be one of: owner, admin, member, viewer, guest',
+  @IsEnum(['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'], {
+    message: 'Role must be one of: OWNER, ADMIN, EDITOR, VIEWER',
   })
-  role: 'owner' | 'admin' | 'member' | 'viewer' | 'guest';
+  role: 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER';
 
   @ApiPropertyOptional({
     description: 'Whether the member should have agent panel access',
@@ -45,12 +45,12 @@ export class InviteMemberDto {
 
 export class UpdateMemberDto {
   @ApiPropertyOptional({
-    description: 'Role to assign to the member',
-    enum: ['owner', 'admin', 'member', 'viewer', 'guest'],
+    description: 'Role to assign to the member. AUTHORITATIVE ROLES: OWNER (only one per org), ADMIN, EDITOR, VIEWER',
+    enum: ['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'],
   })
-  @IsEnum(['owner', 'admin', 'member', 'viewer', 'guest'])
+  @IsEnum(['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'])
   @IsOptional()
-  role?: 'owner' | 'admin' | 'member' | 'viewer' | 'guest';
+  role?: 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER';
 
   @ApiPropertyOptional({
     description: 'Whether the member should have agent panel access',

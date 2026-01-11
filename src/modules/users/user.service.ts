@@ -292,12 +292,28 @@ export class UserService {
     // Also update Supabase user metadata
     if (this.supabaseAdmin && updatedUser.supabaseUserId) {
       try {
-        const userMetadata: Record<string, unknown> = {};
+        // Get existing user metadata to merge with new values
+        const { data: existingUser, error: getUserError } = await this.supabaseAdmin.auth.admin.getUserById(
+          updatedUser.supabaseUserId,
+        );
+
+        if (getUserError) {
+          console.error('Failed to get existing user metadata:', getUserError);
+          // Continue with update using only new values
+        }
+
+        // Start with existing metadata or empty object
+        const userMetadata: Record<string, unknown> = {
+          ...(existingUser?.user?.user_metadata || {}),
+        };
+
+        // Update only the fields that are provided
         if (data.firstName !== undefined) userMetadata.first_name = data.firstName;
         if (data.lastName !== undefined) userMetadata.last_name = data.lastName;
         if (data.fullName !== undefined) userMetadata.full_name = data.fullName;
         if (data.avatarUrl !== undefined) userMetadata.avatar_url = data.avatarUrl;
 
+        // Update Supabase user metadata with merged values
         await this.supabaseAdmin.auth.admin.updateUserById(updatedUser.supabaseUserId, {
           user_metadata: userMetadata,
         });

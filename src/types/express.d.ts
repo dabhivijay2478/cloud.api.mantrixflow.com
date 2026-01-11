@@ -12,6 +12,8 @@ declare global {
         id: string;
         email?: string;
         orgId?: string;
+        role?: 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER';
+        organizationId?: string;
       };
     }
   }
