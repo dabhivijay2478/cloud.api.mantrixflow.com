@@ -1,16 +1,23 @@
 /**
  * Billing Service
- * Stripe integration for billing management
- * One Stripe Customer per organization
+ * Provider-agnostic billing service
+ * Routes to appropriate provider (Razorpay, Stripe future) based on config
  */
 
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Stripe from 'stripe';
-import { BillingRepository } from './repositories/billing.repository';
+import { RazorpayBillingProvider } from './providers/razorpay-billing.provider';
+import { SubscriptionRepository } from './repositories/subscription.repository';
 import { OrganizationOwnerRepository } from '../organizations/repositories/organization-owner.repository';
 import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
 import { OrganizationRepository } from '../organizations/repositories/organization.repository';
+import { UserService } from '../users/user.service';
+import { billingConfig, getAllPlans, getPlanConfig, getPlanPrice } from '../../config/billing.config';
 import type {
   BillingInvoiceDto,
   BillingOverviewDto,
@@ -19,25 +26,24 @@ import type {
 
 @Injectable()
 export class BillingService {
-  private stripe: Stripe;
+  private provider: RazorpayBillingProvider;
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly billingRepository: BillingRepository,
+    private readonly subscriptionRepository: SubscriptionRepository,
     private readonly organizationRepository: OrganizationRepository,
     private readonly ownerRepository: OrganizationOwnerRepository,
     private readonly memberRepository: OrganizationMemberRepository,
+    private readonly userService: UserService,
+    razorpayProvider: RazorpayBillingProvider,
   ) {
-    const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    if (!stripeSecretKey) {
-      throw new Error('STRIPE_SECRET_KEY is required');
+    // Initialize provider based on config
+    const providerName = billingConfig.provider;
+    if (providerName === 'razorpay') {
+      this.provider = razorpayProvider;
+    } else {
+      throw new Error(`Unsupported billing provider: ${providerName}`);
     }
-
-    // Initialize Stripe with India configuration
-    this.stripe = new Stripe(stripeSecretKey, {
-      apiVersion: '2025-12-15.clover',
-      typescript: true,
-    });
   }
 
   /**
@@ -75,47 +81,6 @@ export class BillingService {
   }
 
   /**
-   * Get or create Stripe customer for organization
-   */
-  private async getOrCreateStripeCustomer(organizationId: string): Promise<string> {
-    // Check if billing subscription already exists
-    let billing = await this.billingRepository.findByOrganizationId(organizationId);
-
-    if (billing && billing.stripeCustomerId) {
-      return billing.stripeCustomerId;
-    }
-
-    // Get organization details
-    const organization = await this.organizationRepository.findById(organizationId);
-    if (!organization) {
-      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
-    }
-
-    // Create Stripe customer
-    const customer = await this.stripe.customers.create({
-      name: organization.name,
-      metadata: {
-        organizationId: organization.id,
-      },
-    });
-
-    // Create or update billing record
-    if (billing) {
-      await this.billingRepository.update(billing.id, {
-        stripeCustomerId: customer.id,
-      });
-    } else {
-      billing = await this.billingRepository.create({
-        organizationId: organization.id,
-        stripeCustomerId: customer.id,
-        billingStatus: 'incomplete',
-      });
-    }
-
-    return customer.id;
-  }
-
-  /**
    * Get billing overview for an organization
    */
   async getBillingOverview(
@@ -124,11 +89,11 @@ export class BillingService {
   ): Promise<BillingOverviewDto> {
     await this.checkBillingPermission(organizationId, userId);
 
-    // Get billing subscription
-    const billing = await this.billingRepository.findByOrganizationId(organizationId);
+    // Get subscription from database
+    const subscription = await this.subscriptionRepository.findByOrganizationId(organizationId);
 
-    if (!billing || !billing.stripeCustomerId) {
-      // No billing setup yet
+    if (!subscription) {
+      // No subscription - return free plan
       return {
         currentPlan: 'free',
         billingStatus: 'incomplete',
@@ -138,58 +103,30 @@ export class BillingService {
       };
     }
 
-    // Fetch subscription from Stripe
-    let subscription: Stripe.Subscription | null = null;
-    if (billing.stripeSubscriptionId) {
-      try {
-        subscription = await this.stripe.subscriptions.retrieve(
-          billing.stripeSubscriptionId,
-        );
-      } catch (error) {
-        // Subscription might not exist in Stripe
-        console.error('Error fetching Stripe subscription:', error);
-      }
-    }
-
-    // Determine plan and status
-    let currentPlan = billing.planId || 'free';
-    let billingStatus: 'active' | 'trial' | 'expired' | 'incomplete' = 'incomplete';
-    let nextBillingDate: Date | null = null;
-    let amount = 0;
-    const currency = 'INR'; // India
-
-    if (subscription) {
-      // Map Stripe status to our status
-      if (subscription.status === 'active' || subscription.status === 'trialing') {
-        billingStatus = subscription.status === 'trialing' ? 'trial' : 'active';
-        // Stripe uses snake_case properties
-        const currentPeriodEnd = (subscription as any).current_period_end;
-        if (currentPeriodEnd) {
-          nextBillingDate = new Date(currentPeriodEnd * 1000);
-        }
-        const unitAmount = (subscription.items.data[0]?.price as any)?.unit_amount;
-        amount = (unitAmount || 0) / 100; // Convert from cents
-      } else if (
-        subscription.status === 'canceled' ||
-        subscription.status === 'unpaid' ||
-        subscription.status === 'past_due'
-      ) {
-        billingStatus = 'expired';
-      }
-
-      // Get plan from subscription
-      const priceMetadata = (subscription.items.data[0]?.price as any)?.metadata;
-      if (priceMetadata?.planId) {
-        currentPlan = priceMetadata.planId;
-      }
+    // Get subscription status from provider
+    let subscriptionStatus;
+    try {
+      subscriptionStatus = await this.provider.getSubscription(
+        subscription.providerSubscriptionId,
+      );
+    } catch (error) {
+      console.error('Error fetching subscription from provider:', error);
+      // Return database status as fallback
+      return {
+        currentPlan: subscription.planId,
+        billingStatus: this.mapStatusToOverviewStatus(subscription.status),
+        nextBillingDate: subscription.currentPeriodEnd,
+        amount: subscription.amount ? Number(subscription.amount) : 0,
+        currency: subscription.currency || 'INR',
+      };
     }
 
     return {
-      currentPlan,
-      billingStatus,
-      nextBillingDate,
-      amount,
-      currency,
+      currentPlan: subscriptionStatus.planId,
+      billingStatus: this.mapStatusToOverviewStatus(subscriptionStatus.status),
+      nextBillingDate: subscriptionStatus.currentPeriodEnd,
+      amount: subscriptionStatus.amount,
+      currency: subscriptionStatus.currency,
     };
   }
 
@@ -202,17 +139,21 @@ export class BillingService {
   ): Promise<BillingUsageDto> {
     await this.checkBillingPermission(organizationId, userId);
 
-    // Mock usage data - in production, calculate from actual usage
-    // This should aggregate across all user's organizations if needed
-    const mockUsage: BillingUsageDto = {
-      pipelinesUsed: 5,
-      pipelinesLimit: 10,
-      dataSourcesUsed: 3,
-      dataSourcesLimit: 5,
-      migrationsRun: 150,
-    };
+    // Get subscription to determine plan limits
+    const subscription = await this.subscriptionRepository.findByOrganizationId(organizationId);
+    const planId = (subscription?.planId || 'free') as 'free' | 'pro' | 'scale';
+    const planConfig = getPlanConfig(planId);
 
-    return mockUsage;
+    // TODO: Calculate actual usage from pipelines, data sources, migrations
+    // For now, return mock data with plan limits
+    return {
+      pipelinesUsed: 5, // TODO: Calculate from actual data
+      pipelinesLimit: planConfig.limits.pipelines === -1 ? 999999 : planConfig.limits.pipelines,
+      dataSourcesUsed: 3, // TODO: Calculate from actual data
+      dataSourcesLimit:
+        planConfig.limits.dataSources === -1 ? 999999 : planConfig.limits.dataSources,
+      migrationsRun: 150, // TODO: Calculate from actual data
+    };
   }
 
   /**
@@ -224,229 +165,218 @@ export class BillingService {
   ): Promise<BillingInvoiceDto[]> {
     await this.checkBillingPermission(organizationId, userId);
 
-    // Get billing subscription
-    const billing = await this.billingRepository.findByOrganizationId(organizationId);
+    // Get subscription
+    const subscription = await this.subscriptionRepository.findByOrganizationId(organizationId);
 
-    if (!billing || !billing.stripeCustomerId) {
+    if (!subscription) {
       return [];
     }
 
-    // Fetch invoices from Stripe
-    const invoices = await this.stripe.invoices.list({
-      customer: billing.stripeCustomerId,
-      limit: 10,
-    });
-
-    return invoices.data.map((invoice) => {
-      const invoiceAny = invoice as any;
-      return {
-        invoiceId: invoice.id,
-        date: new Date(invoice.created * 1000),
-        amount: (invoiceAny.amount_paid || 0) / 100, // Convert from cents
-        status: invoiceAny.paid ? 'paid' : 'pending',
-        downloadUrl: invoiceAny.hosted_invoice_url || invoiceAny.invoice_pdf || '',
-      };
-    });
+    // TODO: Fetch invoices from Razorpay
+    // For now, return empty array - invoices will be available in Razorpay dashboard
+    // In production, you can fetch from Razorpay API
+    return [];
   }
 
   /**
-   * Create Stripe Customer Portal session
-   */
-  async createPortalSession(organizationId: string, userId: string, returnUrl: string): Promise<string> {
-    await this.checkBillingPermission(organizationId, userId);
-
-    const stripeCustomerId = await this.getOrCreateStripeCustomer(organizationId);
-
-    const session = await this.stripe.billingPortal.sessions.create({
-      customer: stripeCustomerId,
-      return_url: returnUrl,
-    });
-
-    const sessionUrl = (session as any).url;
-    if (!sessionUrl) {
-      throw new Error('Failed to create portal session URL');
-    }
-
-    return sessionUrl;
-  }
-
-  /**
-   * Create Stripe Checkout session
+   * Create checkout session for subscription
    */
   async createCheckoutSession(
     organizationId: string,
     userId: string,
     planId: string,
-    successUrl: string,
+    interval: 'month' | 'year',
+    returnUrl: string,
     cancelUrl: string,
-  ): Promise<string> {
+  ): Promise<{ checkoutData: Record<string, unknown>; subscriptionId: string }> {
     await this.checkBillingPermission(organizationId, userId);
 
-    const stripeCustomerId = await this.getOrCreateStripeCustomer(organizationId);
+    // Validate plan
+    if (!['free', 'pro', 'scale'].includes(planId)) {
+      throw new BadRequestException(`Invalid plan: ${planId}`);
+    }
+    const planConfig = getPlanConfig(planId as 'free' | 'pro' | 'scale');
 
-    // Get price ID from environment or config
-    // For now, using a placeholder - you should configure this based on your Stripe products
-    const priceId = this.configService.get<string>(`STRIPE_PRICE_ID_${planId.toUpperCase()}`);
-    if (!priceId) {
-      throw new BadRequestException(`Price ID not configured for plan: ${planId}`);
+    // Get organization
+    const organization = await this.organizationRepository.findById(organizationId);
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
     }
 
-    const session = await this.stripe.checkout.sessions.create({
-      customer: stripeCustomerId,
-      mode: 'subscription',
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      metadata: {
-        organizationId,
-        planId,
-      },
-    });
+    // Get owner email for customer
+    const owners = await this.ownerRepository.findByOrganizationId(organizationId);
+    let customerEmail = 'customer@example.com'; // Fallback
+    let customerName = organization.name;
 
-    const sessionUrl = (session as any).url;
-    if (!sessionUrl) {
-      throw new Error('Failed to create checkout session URL');
-    }
-
-    return sessionUrl;
-  }
-
-  /**
-   * Verify Stripe webhook signature
-   */
-  async verifyWebhookSignature(
-    rawBody: Buffer | string | object,
-    signature: string,
-    webhookSecret: string,
-  ): Promise<Stripe.Event> {
-    // Convert object to string if needed (for development/testing)
-    const bodyString = typeof rawBody === 'object' && !Buffer.isBuffer(rawBody)
-      ? JSON.stringify(rawBody)
-      : rawBody;
-    
-    return this.stripe.webhooks.constructEvent(
-      bodyString as string | Buffer,
-      signature,
-      webhookSecret,
-    );
-  }
-
-  /**
-   * Handle Stripe webhook events
-   */
-  async handleWebhookEvent(event: Stripe.Event): Promise<void> {
-    switch (event.type) {
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription;
-        await this.handleSubscriptionUpdate(subscription);
-        break;
+    if (owners && owners.length > 0) {
+      // Get first owner's email
+      const owner = owners[0];
+      const ownerUser = await this.userService.getUserById(owner.userId);
+      if (ownerUser?.email) {
+        customerEmail = ownerUser.email;
+        customerName = ownerUser.fullName || ownerUser.email.split('@')[0] || organization.name;
       }
-
-      case 'customer.subscription.deleted': {
-        const subscription = event.data.object as Stripe.Subscription;
-        await this.handleSubscriptionDeleted(subscription);
-        break;
-      }
-
-      case 'invoice.payment_succeeded':
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
-        await this.handleInvoiceEvent(invoice, event.type);
-        break;
-      }
-
-      default:
-        console.log(`Unhandled webhook event type: ${event.type}`);
-    }
-  }
-
-  /**
-   * Handle subscription created/updated
-   */
-  private async handleSubscriptionUpdate(subscription: Stripe.Subscription): Promise<void> {
-    const billing = await this.billingRepository.findByStripeCustomerId(
-      subscription.customer as string,
-    );
-
-    if (!billing) {
-      console.error(`Billing record not found for customer: ${subscription.customer}`);
-      return;
     }
 
-    // Get plan ID from price metadata
-    const planId =
-      subscription.items.data[0]?.price.metadata?.planId ||
-      subscription.items.data[0]?.price.nickname ||
-      'unknown';
-
-    // Map Stripe status to our billing status
-    const billingStatus = subscription.status as
-      | 'active'
-      | 'trialing'
-      | 'past_due'
-      | 'canceled'
-      | 'unpaid'
-      | 'incomplete'
-      | 'incomplete_expired'
-      | 'paused';
-
-    await this.billingRepository.update(billing.id, {
-      stripeSubscriptionId: subscription.id,
+    // Create subscription via provider
+    const result = await this.provider.createSubscription({
+      organizationId,
       planId,
-      billingStatus,
+      interval,
+      customerEmail,
+      customerName,
+      returnUrl,
+      cancelUrl,
     });
+
+    // Save subscription to database
+    await this.subscriptionRepository.create({
+      organizationId,
+      provider: billingConfig.provider,
+      planId,
+      providerSubscriptionId: result.subscriptionId,
+      status: result.status,
+      currency: 'INR',
+    });
+
+    // Update organization billing fields
+    await this.organizationRepository.update(organizationId, {
+      billingProvider: billingConfig.provider,
+      billingPlanId: planId,
+      billingSubscriptionId: result.subscriptionId,
+      billingStatus: result.status,
+    });
+
+    // Add Razorpay key ID to checkout data (safe to expose - it's public key)
+    const checkoutDataWithKey = {
+      ...result.checkoutData,
+      keyId: this.configService.get<string>('RAZORPAY_KEY_ID'),
+    };
+
+    return {
+      checkoutData: checkoutDataWithKey || {},
+      subscriptionId: result.subscriptionId,
+    };
   }
 
   /**
-   * Handle subscription deleted
+   * Cancel subscription
    */
-  private async handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
-    const billing = await this.billingRepository.findByStripeCustomerId(
-      subscription.customer as string,
-    );
-
-    if (!billing) {
-      console.error(`Billing record not found for customer: ${subscription.customer}`);
-      return;
-    }
-
-    await this.billingRepository.update(billing.id, {
-      stripeSubscriptionId: null,
-      billingStatus: 'canceled',
-    });
-  }
-
-  /**
-   * Handle invoice events
-   */
-  private async handleInvoiceEvent(
-    invoice: Stripe.Invoice,
-    eventType: string,
+  async cancelSubscription(
+    organizationId: string,
+    userId: string,
+    cancelImmediately: boolean = false,
   ): Promise<void> {
-    if (!invoice.customer) {
+    await this.checkBillingPermission(organizationId, userId);
+
+    const subscription = await this.subscriptionRepository.findByOrganizationId(organizationId);
+    if (!subscription) {
+      throw new NotFoundException('No active subscription found');
+    }
+
+    await this.provider.cancelSubscription({
+      subscriptionId: subscription.providerSubscriptionId,
+      organizationId,
+      cancelImmediately,
+    });
+
+    // Update subscription status
+    await this.subscriptionRepository.update(subscription.id, {
+      status: 'canceled',
+      cancelAtPeriodEnd: !cancelImmediately,
+    });
+  }
+
+  /**
+   * Handle webhook event
+   */
+  async handleWebhookEvent(event: unknown, signature: string): Promise<void> {
+    // Verify signature
+    const payloadString = typeof event === 'string' ? event : JSON.stringify(event);
+    const isValid = this.provider.verifyWebhookSignature(payloadString, signature);
+
+    if (!isValid) {
+      throw new Error('Invalid webhook signature');
+    }
+
+    // Handle event via provider
+    await this.provider.handleWebhookEvent(event, signature);
+
+    // Update database based on event
+    const eventData = event as any;
+    await this.syncSubscriptionFromWebhook(eventData);
+  }
+
+  /**
+   * Sync subscription from webhook event
+   */
+  private async syncSubscriptionFromWebhook(event: any): Promise<void> {
+    // Extract subscription ID from Razorpay webhook payload
+    const subscriptionId =
+      event.payload?.subscription?.entity?.id ||
+      event.payload?.subscription_id ||
+      event.subscription_id;
+
+    if (!subscriptionId) {
+      console.warn('No subscription ID found in webhook event');
       return;
     }
 
-    const billing = await this.billingRepository.findByStripeCustomerId(
-      invoice.customer as string,
-    );
+    // Get subscription status from provider
+    try {
+      const status = await this.provider.getSubscription(subscriptionId);
 
-    if (!billing) {
-      console.error(`Billing record not found for customer: ${invoice.customer}`);
-      return;
-    }
+      // Update database
+      const dbSubscription = await this.subscriptionRepository.findByProviderSubscriptionId(
+        subscriptionId,
+      );
 
-    // Update billing status based on payment result
-    if (eventType === 'invoice.payment_failed' && billing.billingStatus === 'active') {
-      await this.billingRepository.update(billing.id, {
-        billingStatus: 'past_due',
-      });
+      if (dbSubscription) {
+        await this.subscriptionRepository.update(dbSubscription.id, {
+          status: status.status,
+          currentPeriodStart: status.currentPeriodStart,
+          currentPeriodEnd: status.currentPeriodEnd,
+          cancelAtPeriodEnd: status.cancelAtPeriodEnd,
+          amount: status.amount.toString(),
+          currency: status.currency,
+        });
+
+        // Update organization
+        await this.organizationRepository.update(dbSubscription.organizationId, {
+          billingStatus: status.status,
+          billingCurrentPeriodEnd: status.currentPeriodEnd,
+        });
+      } else {
+        // Subscription not found in DB - might be new, log for investigation
+        console.warn(`Subscription ${subscriptionId} not found in database`);
+      }
+    } catch (error) {
+      console.error('Error syncing subscription from webhook:', error);
     }
+  }
+
+  /**
+   * Map subscription status to overview status
+   */
+  private mapStatusToOverviewStatus(
+    status: string,
+  ): 'active' | 'trial' | 'expired' | 'incomplete' {
+    const statusMap: Record<string, 'active' | 'trial' | 'expired' | 'incomplete'> = {
+      active: 'active',
+      trialing: 'trial',
+      past_due: 'expired',
+      canceled: 'expired',
+      unpaid: 'expired',
+      incomplete: 'incomplete',
+    };
+
+    return statusMap[status] || 'incomplete';
+  }
+
+  /**
+   * Get all available plans
+   */
+  getAvailablePlans() {
+    return getAllPlans();
   }
 }

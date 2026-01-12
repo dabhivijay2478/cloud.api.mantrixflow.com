@@ -1,6 +1,6 @@
 /**
  * Billing Controller
- * REST API endpoints for billing information and Stripe integration
+ * REST API endpoints for billing information and Razorpay integration
  */
 
 import { Body, Controller, Get, Post, Query, Request, UseGuards } from '@nestjs/common';
@@ -157,75 +157,33 @@ export class BillingController {
   }
 
   /**
-   * Create Stripe Customer Portal session
+   * Get available plans
    */
-  @Post('create-portal-session')
+  @Get('plans')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
-    summary: 'Create Stripe Customer Portal session',
-    description: 'Create a Stripe Customer Portal session URL for managing billing',
-  })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        organizationId: {
-          type: 'string',
-          description: 'Organization ID',
-        },
-        returnUrl: {
-          type: 'string',
-          description: 'URL to return to after portal session',
-        },
-      },
-      required: ['organizationId', 'returnUrl'],
-    },
+    summary: 'Get available billing plans',
+    description: 'Get all available billing plans with pricing and features',
   })
   @ApiResponse({
     status: 200,
-    description: 'Portal session URL created successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'Stripe Customer Portal URL',
-        },
-      },
-    },
+    description: 'Plans retrieved successfully',
   })
-  @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Only owners and admins can access billing',
-  })
-  async createPortalSession(
-    @Body() body: { organizationId: string; returnUrl: string },
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-
-    const url = await this.billingService.createPortalSession(
-      body.organizationId,
-      userId,
-      body.returnUrl,
-    );
-
-    return createSuccessResponse({ url }, 'Portal session created successfully');
+  async getPlans() {
+    const plans = this.billingService.getAvailablePlans();
+    return createSuccessResponse(plans, 'Plans retrieved successfully');
   }
 
   /**
-   * Create Stripe Checkout session
+   * Create checkout session for subscription
    */
-  @Post('create-checkout-session')
+  @Post('checkout')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
-    summary: 'Create Stripe Checkout session',
-    description: 'Create a Stripe Checkout session URL for subscribing to a plan',
+    summary: 'Create checkout session',
+    description: 'Create a checkout session for subscribing to a plan',
   })
   @ApiBody({
     schema: {
@@ -237,32 +195,29 @@ export class BillingController {
         },
         planId: {
           type: 'string',
-          description: 'Plan ID (e.g., pro, enterprise)',
+          description: 'Plan ID (free, pro, scale)',
+          enum: ['free', 'pro', 'scale'],
         },
-        successUrl: {
+        interval: {
           type: 'string',
-          description: 'URL to redirect to after successful checkout',
+          description: 'Billing interval',
+          enum: ['month', 'year'],
+        },
+        returnUrl: {
+          type: 'string',
+          description: 'URL to return to after successful checkout',
         },
         cancelUrl: {
           type: 'string',
-          description: 'URL to redirect to after canceled checkout',
+          description: 'URL to return to after canceled checkout',
         },
       },
-      required: ['organizationId', 'planId', 'successUrl', 'cancelUrl'],
+      required: ['organizationId', 'planId', 'interval', 'returnUrl', 'cancelUrl'],
     },
   })
   @ApiResponse({
     status: 200,
-    description: 'Checkout session URL created successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'Stripe Checkout URL',
-        },
-      },
-    },
+    description: 'Checkout session created successfully',
   })
   @ApiResponse({
     status: 403,
@@ -273,7 +228,8 @@ export class BillingController {
     body: {
       organizationId: string;
       planId: string;
-      successUrl: string;
+      interval: 'month' | 'year';
+      returnUrl: string;
       cancelUrl: string;
     },
     @Request() req: ExpressRequestType,
@@ -283,60 +239,97 @@ export class BillingController {
       throw new Error('User ID is required');
     }
 
-    const url = await this.billingService.createCheckoutSession(
+    const result = await this.billingService.createCheckoutSession(
       body.organizationId,
       userId,
       body.planId,
-      body.successUrl,
+      body.interval,
+      body.returnUrl,
       body.cancelUrl,
     );
 
-    return createSuccessResponse({ url }, 'Checkout session created successfully');
+    return createSuccessResponse(result, 'Checkout session created successfully');
   }
 
   /**
-   * Stripe webhook endpoint
+   * Cancel subscription
+   */
+  @Post('cancel')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Cancel subscription',
+    description: 'Cancel an active subscription',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        organizationId: {
+          type: 'string',
+          description: 'Organization ID',
+        },
+        cancelImmediately: {
+          type: 'boolean',
+          description: 'Cancel immediately or at period end',
+          default: false,
+        },
+      },
+      required: ['organizationId'],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Subscription cancelled successfully',
+  })
+  async cancelSubscription(
+    @Body() body: { organizationId: string; cancelImmediately?: boolean },
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    await this.billingService.cancelSubscription(
+      body.organizationId,
+      userId,
+      body.cancelImmediately || false,
+    );
+
+    return createSuccessResponse(null, 'Subscription cancelled successfully');
+  }
+
+  /**
+   * Razorpay webhook endpoint
    * This endpoint should NOT use SupabaseAuthGuard
-   * It uses Stripe webhook signature verification instead
-   * 
-   * IMPORTANT: Configure NestJS to preserve raw body for webhook signature verification
-   * You may need to use a custom body parser middleware for this route
+   * It uses Razorpay webhook signature verification instead
    */
   @Post('webhook')
   @ApiOperation({
-    summary: 'Stripe webhook handler',
-    description: 'Handle Stripe webhook events for subscription and invoice updates',
+    summary: 'Razorpay webhook handler',
+    description: 'Handle Razorpay webhook events for subscription and payment updates',
   })
   @ApiResponse({
     status: 200,
     description: 'Webhook processed successfully',
   })
   async handleWebhook(@Request() req: ExpressRequestType) {
-    const sig = req.headers['stripe-signature'] as string;
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const signature = req.headers['x-razorpay-signature'] as string;
 
-    if (!webhookSecret) {
-      throw new Error('STRIPE_WEBHOOK_SECRET is required');
+    if (!signature) {
+      throw new Error('Razorpay signature header is missing');
     }
 
-    if (!sig) {
-      throw new Error('Stripe signature header is missing');
-    }
+    // Get raw body for signature verification
+    const rawBody = (req as any).rawBody || JSON.stringify(req.body);
 
-    let event;
     try {
-      // Get raw body for Stripe signature verification
-      // Note: You may need to configure NestJS body parser to preserve raw body
-      // For Stripe webhooks, the raw body is required for signature verification
-      const rawBody = (req as any).rawBody || req.body;
-      event = await this.billingService.verifyWebhookSignature(rawBody, sig, webhookSecret);
-    } catch (err) {
-      console.error('Webhook signature verification failed:', err);
-      throw new Error('Webhook signature verification failed');
+      await this.billingService.handleWebhookEvent(rawBody, signature);
+      return { received: true };
+    } catch (error) {
+      console.error('Webhook processing failed:', error);
+      throw error;
     }
-
-    await this.billingService.handleWebhookEvent(event);
-
-    return { received: true };
   }
 }

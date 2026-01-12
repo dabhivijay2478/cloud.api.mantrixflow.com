@@ -18,6 +18,13 @@ export const organizations = pgTable('organizations', {
   settings: jsonb('settings'), // Organization settings
   // Status
   isActive: boolean('is_active').notNull().default(true),
+  // Billing fields (provider-agnostic)
+  billingProvider: varchar('billing_provider', { length: 50 }),
+  billingCustomerId: varchar('billing_customer_id', { length: 255 }),
+  billingSubscriptionId: varchar('billing_subscription_id', { length: 255 }),
+  billingPlanId: varchar('billing_plan_id', { length: 100 }),
+  billingStatus: varchar('billing_status', { length: 50 }).default('incomplete'),
+  billingCurrentPeriodEnd: timestamp('billing_current_period_end'),
   // Timestamps
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),

@@ -1,1 +1,1 @@
-export * from './billing.schema';
+export * from './subscriptions.schema';
