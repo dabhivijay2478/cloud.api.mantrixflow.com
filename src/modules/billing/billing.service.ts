@@ -425,18 +425,55 @@ export class BillingService {
   }
 
   /**
-   * Change subscription plan - creates a checkout session for the new plan
-   * After payment, webhook will update the subscription with new subscription ID
+   * Determine proration mode based on plan tier comparison
+   * Upgrades typically charge immediately, downgrades can be immediate or at period end
+   */
+  private determineProrationMode(
+    currentPlan: SubscriptionPlan | string,
+    newPlan: SubscriptionPlan | string,
+  ): 'prorated_immediately' | 'difference_immediately' | 'difference_at_period_end' {
+    // Plan tier order: BASIC < PRO < ENTERPRISE
+    // Map both enum values and string values to tier numbers
+    const getPlanTier = (plan: SubscriptionPlan | string): number => {
+      const planStr = String(plan).toLowerCase();
+      if (planStr === 'basic' || planStr === SubscriptionPlan.BASIC) return 1;
+      if (planStr === 'pro' || planStr === SubscriptionPlan.PRO) return 2;
+      if (planStr === 'enterprise' || planStr === SubscriptionPlan.ENTERPRISE) return 3;
+      return 1; // Default to basic tier
+    };
+
+    const currentTier = getPlanTier(currentPlan);
+    const newTier = getPlanTier(newPlan);
+
+    if (newTier > currentTier) {
+      // Upgrade: charge difference immediately
+      return 'difference_immediately';
+    } else if (newTier < currentTier) {
+      // Downgrade: apply difference immediately (can also use 'difference_at_period_end' if preferred)
+      return 'difference_immediately';
+    } else {
+      // Same tier (shouldn't happen, but handle gracefully)
+      return 'prorated_immediately';
+    }
+  }
+
+  /**
+   * Change subscription plan - uses Dodo Payments changePlan API directly
+   * According to official docs: https://docs.dodopayments.com/features/subscription
    */
   async changePlan(
     userId: string,
-    userEmail: string,
-    userName: string,
+    _userEmail: string,
+    _userName: string,
     dto: ChangePlanDto,
-  ): Promise<{ checkoutUrl: string; sessionId: string }> {
+  ): Promise<{ success: boolean; message: string }> {
     const subscription = await this.subscriptionRepository.findByUserId(userId);
     if (!subscription) {
       throw new NotFoundException('Subscription not found');
+    }
+
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
     }
 
     // Map plan to product ID (should be configured in env or database)
@@ -453,68 +490,56 @@ export class BillingService {
       throw new Error(`Product ID not found for plan: ${dto.planId}`);
     }
 
+    // Check if plan is actually changing
+    if (subscription.planId === dto.planId) {
+      this.logger.log(`Plan is already ${dto.planId}, no change needed`);
+      return {
+        success: true,
+        message: `You are already on the ${dto.planId} plan.`,
+      };
+    }
+
+    // Determine proration mode based on upgrade/downgrade
+    // Cast planId to SubscriptionPlan enum for type safety
+    const currentPlan = subscription.planId as SubscriptionPlan;
+    const newPlan = dto.planId as SubscriptionPlan;
+    const prorationMode = this.determineProrationMode(currentPlan, newPlan);
+
     this.logger.log(
-      `🔄 Creating checkout session for plan change: ${dto.planId} for user ${userId}`,
+      `🔄 Changing plan from ${subscription.planId} to ${dto.planId} for user ${userId}`,
     );
+    this.logger.log(`📊 Using proration mode: ${prorationMode}`);
 
-    // Prepare metadata - only strings allowed by Dodo API
-    const metadata = {
-      userId: String(userId),
-      planId: String(dto.planId),
-    };
+    try {
+      // Use changePlan API directly - no checkout session needed!
+      // According to Dodo Payments docs: subscriptions.changePlan()
+      await this.dodoClient.subscriptions.changePlan(subscription.dodoSubscriptionId, {
+        product_id: productId,
+        quantity: 1,
+        proration_billing_mode: prorationMode,
+      });
 
-    this.logger.log(`📦 Metadata being sent:`, JSON.stringify(metadata, null, 2));
-    console.log(`📦 Metadata being sent:`, JSON.stringify(metadata, null, 2));
+      this.logger.log(`✅ Plan change successful via Dodo Payments API`);
 
-    // Create checkout session for the new plan
-    // This will create a new subscription after payment
-    const session = await this.dodoClient.checkoutSessions.create({
-      product_cart: [
-        {
-          product_id: productId,
-          quantity: 1,
-        },
-      ],
-      customer: {
-        email: userEmail,
-        name: userName,
-      },
-      return_url:
-        dto.returnUrl ||
-        `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000'}/workspace/billing?payment=success&planChanged=true`,
-      metadata: metadata,
-    });
+      // Update local DB immediately (webhook will also update, but this provides immediate feedback)
+      await this.subscriptionRepository.update(subscription.id, {
+        planId: dto.planId,
+        updatedAt: new Date(),
+      });
 
-    this.logger.log('Dodo Payments response type:', typeof session);
-    this.logger.log('Dodo Payments response keys:', Object.keys(session || {}));
-    this.logger.debug('Dodo Payments full response:', JSON.stringify(session, null, 2));
+      this.logger.log(`✅ Updated local subscription record: ${subscription.id}`);
 
-    // Extract session_id (required field)
-    const sessionId = (session as any).session_id;
-    if (!sessionId) {
-      this.logger.error('No session_id in response:', JSON.stringify(session, null, 2));
-      throw new Error('Failed to get session_id from Dodo Payments response');
+      return {
+        success: true,
+        message: `Plan successfully changed to ${dto.planId}. Changes will be reflected immediately.`,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to change plan via Dodo Payments API:`, error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to change plan: ${error.message}`);
+      }
+      throw new Error('Failed to change plan. Please try again.');
     }
-
-    this.logger.log(`Checkout session created for plan change - user ${userId}: ${sessionId}`);
-
-    // Extract checkout_url (optional field, can be null)
-    const checkoutUrl = (session as any).checkout_url;
-
-    if (!checkoutUrl || checkoutUrl === null || checkoutUrl === undefined) {
-      this.logger.error('checkout_url is missing, null, or undefined');
-      this.logger.error('Full response:', JSON.stringify(session, null, 2));
-      throw new Error(
-        'Checkout URL is not available. Please verify your product configuration in the Dodo Payments dashboard.',
-      );
-    }
-
-    this.logger.log(`Checkout URL for plan change: ${checkoutUrl}`);
-
-    return {
-      checkoutUrl: checkoutUrl as string,
-      sessionId: sessionId as string,
-    };
   }
 
   /**
@@ -902,6 +927,148 @@ export class BillingService {
       await this.subscriptionRepository.update(subscription.id, {
         status: SubscriptionStatus.FAILED,
       });
+    }
+  }
+
+  /**
+   * Cancel subscription at period end
+   * According to Dodo Payments docs: https://docs.dodopayments.com/features/subscription
+   */
+  async cancelAtPeriodEnd(userId: string): Promise<{ success: boolean; message: string }> {
+    const subscription = await this.subscriptionRepository.findByUserId(userId);
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
+    }
+
+    this.logger.log(`🛑 Canceling subscription at period end for user ${userId}`);
+
+    try {
+      // Use subscriptions.update API to set cancel_at_period_end
+      await this.dodoClient.subscriptions.update(subscription.dodoSubscriptionId, {
+        cancel_at_period_end: true,
+      });
+
+      this.logger.log(`✅ Subscription will be canceled at period end`);
+
+      // Update local DB
+      // Store the current period end date as the cancellation date
+      const cancelDate = subscription.currentPeriodEnd || new Date();
+      await this.subscriptionRepository.update(subscription.id, {
+        cancelAtPeriodEnd: cancelDate,
+        updatedAt: new Date(),
+      });
+
+      return {
+        success: true,
+        message: 'Subscription will be canceled at the end of the current billing period.',
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to cancel subscription:`, error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to cancel subscription: ${error.message}`);
+      }
+      throw new Error('Failed to cancel subscription. Please try again.');
+    }
+  }
+
+  /**
+   * Resume subscription (undo cancel)
+   */
+  async resumeSubscription(userId: string): Promise<{ success: boolean; message: string }> {
+    const subscription = await this.subscriptionRepository.findByUserId(userId);
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
+    }
+
+    this.logger.log(`▶️  Resuming subscription for user ${userId}`);
+
+    try {
+      // Use subscriptions.update API to unset cancel_at_period_end
+      await this.dodoClient.subscriptions.update(subscription.dodoSubscriptionId, {
+        cancel_at_period_end: false,
+      });
+
+      this.logger.log(`✅ Subscription resumed`);
+
+      // Update local DB
+      // Set to null to indicate cancellation is no longer scheduled
+      await this.subscriptionRepository.update(subscription.id, {
+        cancelAtPeriodEnd: null,
+        updatedAt: new Date(),
+      });
+
+      return {
+        success: true,
+        message: 'Subscription has been resumed and will continue after the current period.',
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to resume subscription:`, error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to resume subscription: ${error.message}`);
+      }
+      throw new Error('Failed to resume subscription. Please try again.');
+    }
+  }
+
+  /**
+   * Update payment method for subscription
+   * According to Dodo Payments docs: https://docs.dodopayments.com/features/subscription
+   * Useful for handling failed payments (on_hold status)
+   */
+  async updatePaymentMethod(
+    userId: string,
+    returnUrl: string,
+  ): Promise<{ url: string; sessionId?: string }> {
+    const subscription = await this.subscriptionRepository.findByUserId(userId);
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
+    }
+
+    this.logger.log(`💳 Updating payment method for subscription: ${subscription.dodoSubscriptionId}`);
+
+    try {
+      // Use subscriptions.updatePaymentMethod API
+      const response = await this.dodoClient.subscriptions.updatePaymentMethod(
+        subscription.dodoSubscriptionId,
+        {
+          type: 'new',
+          return_url: returnUrl,
+        },
+      );
+
+      this.logger.log(`✅ Payment method update URL generated`);
+
+      // Extract URL from response
+      const url = (response as any).url || (response as any).checkout_url;
+      const sessionId = (response as any).session_id;
+
+      if (!url) {
+        this.logger.error('No URL in payment method update response:', JSON.stringify(response, null, 2));
+        throw new Error('Failed to get payment method update URL from Dodo Payments');
+      }
+
+      return {
+        url: url as string,
+        sessionId: sessionId as string | undefined,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to update payment method:`, error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to update payment method: ${error.message}`);
+      }
+      throw new Error('Failed to update payment method. Please try again.');
     }
   }
 }

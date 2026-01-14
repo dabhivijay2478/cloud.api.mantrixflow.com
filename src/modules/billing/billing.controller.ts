@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Headers, HttpCode, Post, Request, UseGuards } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request as ExpressRequest } from 'express';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
@@ -12,7 +13,10 @@ type ExpressRequestType = ExpressRequest;
 @ApiTags('billing')
 @Controller('billing')
 export class BillingController {
-  constructor(private readonly billingService: BillingService) {}
+  constructor(
+    private readonly billingService: BillingService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Post('create-checkout')
   @UseGuards(SupabaseAuthGuard)
@@ -111,11 +115,15 @@ export class BillingController {
   @Post('change-plan')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
-  @ApiOperation({ summary: 'Change subscription plan - creates checkout session for new plan' })
+  @ApiOperation({
+    summary: 'Change subscription plan',
+    description:
+      'Changes the subscription plan using Dodo Payments changePlan API. No checkout session needed.',
+  })
   async changePlan(
     @Request() req: ExpressRequestType,
     @Body() dto: ChangePlanDto,
-  ): Promise<{ checkoutUrl: string; sessionId: string }> {
+  ): Promise<{ success: boolean; message: string }> {
     const userId = req.user?.id;
     const userEmail = req.user?.email || '';
     const userName = req.user?.email?.split('@')[0] || userEmail;
@@ -124,16 +132,7 @@ export class BillingController {
       throw new Error('User not authenticated');
     }
 
-    const result = await this.billingService.changePlan(userId, userEmail, userName, dto);
-
-    // Ensure we return both fields
-    if (!result.checkoutUrl) {
-      throw new Error('Checkout URL is missing from service response');
-    }
-
-    console.log('Plan change checkout response:', JSON.stringify(result, null, 2));
-
-    return result;
+    return await this.billingService.changePlan(userId, userEmail, userName, dto);
   }
 
   @Get('customer-portal')
@@ -149,6 +148,70 @@ export class BillingController {
     }
 
     return await this.billingService.getCustomerPortalUrl(userId, userEmail);
+  }
+
+  @Post('cancel')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Cancel subscription at period end',
+    description: 'Cancels the subscription at the end of the current billing period',
+  })
+  async cancelAtPeriodEnd(
+    @Request() req: ExpressRequestType,
+  ): Promise<{ success: boolean; message: string }> {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    return await this.billingService.cancelAtPeriodEnd(userId);
+  }
+
+  @Post('resume')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Resume subscription',
+    description: 'Resumes a subscription that was scheduled to cancel at period end',
+  })
+  async resumeSubscription(
+    @Request() req: ExpressRequestType,
+  ): Promise<{ success: boolean; message: string }> {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    return await this.billingService.resumeSubscription(userId);
+  }
+
+  @Post('update-payment-method')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Update payment method for subscription',
+    description:
+      'Generates a URL to update payment method. Useful when subscription is on_hold due to failed payment.',
+  })
+  async updatePaymentMethod(
+    @Request() req: ExpressRequestType,
+    @Body() body: { returnUrl?: string },
+  ): Promise<{ url: string; sessionId?: string }> {
+    const userId = req.user?.id;
+    const frontendUrl =
+      this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
+    const returnUrl =
+      body.returnUrl ||
+      `${frontendUrl}/workspace/billing?paymentMethodUpdated=true`;
+
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    return await this.billingService.updatePaymentMethod(userId, returnUrl);
   }
 
   @Post('webhook')
