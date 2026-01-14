@@ -1,7 +1,7 @@
 /**
  * Billing Provider Interface
  * Provider-agnostic interface for billing operations
- * Implementations: RazorpayBillingProvider, StripeBillingProvider (future)
+ * Implementations: DodoBillingProvider, RazorpayBillingProvider (deprecated), StripeBillingProvider (future)
  */
 
 export interface CreateSubscriptionInput {
@@ -10,6 +10,7 @@ export interface CreateSubscriptionInput {
   interval: 'month' | 'year';
   customerEmail: string;
   customerName: string;
+  customerId?: string; // Optional: existing customer ID (provider-specific)
   returnUrl: string;
   cancelUrl: string;
 }
@@ -17,7 +18,7 @@ export interface CreateSubscriptionInput {
 export interface SubscriptionResult {
   subscriptionId: string;
   checkoutUrl?: string; // For redirect-based checkout
-  checkoutData?: Record<string, unknown>; // For custom checkout (Razorpay)
+  checkoutData?: Record<string, unknown>; // For custom checkout (deprecated - use checkoutUrl)
   status: 'pending' | 'active' | 'trialing';
 }
 

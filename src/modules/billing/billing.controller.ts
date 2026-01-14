@@ -1,6 +1,6 @@
 /**
  * Billing Controller
- * REST API endpoints for billing information and Razorpay integration
+ * REST API endpoints for billing information and Dodo Payments integration
  */
 
 import { Body, Controller, Get, Post, Query, Request, UseGuards } from '@nestjs/common';
@@ -177,13 +177,14 @@ export class BillingController {
 
   /**
    * Create checkout session for subscription
+   * Returns Dodo-hosted checkout URL
    */
   @Post('checkout')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Create checkout session',
-    description: 'Create a checkout session for subscribing to a plan',
+    description: 'Create a checkout session and get Dodo-hosted checkout URL',
   })
   @ApiBody({
     schema: {
@@ -195,8 +196,8 @@ export class BillingController {
         },
         planId: {
           type: 'string',
-          description: 'Plan ID (free, pro, scale)',
-          enum: ['free', 'pro', 'scale'],
+          description: 'Plan ID (pro, scale)',
+          enum: ['pro', 'scale'],
         },
         interval: {
           type: 'string',
@@ -252,6 +253,44 @@ export class BillingController {
   }
 
   /**
+   * Get customer portal URL
+   * Returns Dodo-hosted billing portal URL
+   */
+  @Get('portal')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Get customer portal URL',
+    description: 'Get Dodo-hosted billing portal URL for managing subscription',
+  })
+  @ApiQuery({
+    name: 'organizationId',
+    required: true,
+    description: 'Organization ID',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Portal URL retrieved successfully',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - Only owners and admins can access billing',
+  })
+  async getCustomerPortal(
+    @Query('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const portalUrl = await this.billingService.getCustomerPortalUrl(organizationId, userId);
+    return createSuccessResponse({ url: portalUrl }, 'Portal URL retrieved successfully');
+  }
+
+  /**
    * Cancel subscription
    */
   @Post('cancel')
@@ -301,24 +340,24 @@ export class BillingController {
   }
 
   /**
-   * Razorpay webhook endpoint
+   * Dodo Payments webhook endpoint
    * This endpoint should NOT use SupabaseAuthGuard
-   * It uses Razorpay webhook signature verification instead
+   * It uses Dodo webhook signature verification instead
    */
   @Post('webhook')
   @ApiOperation({
-    summary: 'Razorpay webhook handler',
-    description: 'Handle Razorpay webhook events for subscription and payment updates',
+    summary: 'Dodo Payments webhook handler',
+    description: 'Handle Dodo Payments webhook events for subscription and payment updates',
   })
   @ApiResponse({
     status: 200,
     description: 'Webhook processed successfully',
   })
   async handleWebhook(@Request() req: ExpressRequestType) {
-    const signature = req.headers['x-razorpay-signature'] as string;
+    const signature = req.headers['x-dodo-signature'] as string;
 
     if (!signature) {
-      throw new Error('Razorpay signature header is missing');
+      throw new Error('Dodo signature header is missing');
     }
 
     // Get raw body for signature verification

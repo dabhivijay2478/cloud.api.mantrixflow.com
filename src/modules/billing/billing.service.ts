@@ -1,7 +1,7 @@
 /**
  * Billing Service
  * Provider-agnostic billing service
- * Routes to appropriate provider (Razorpay, Stripe future) based on config
+ * Routes to appropriate provider (Dodo, Razorpay, Stripe) based on config
  */
 
 import {
@@ -11,8 +11,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RazorpayBillingProvider } from './providers/razorpay-billing.provider';
+import { DodoBillingProvider } from './providers/dodo-billing.provider';
 import { SubscriptionRepository } from './repositories/subscription.repository';
+import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
 import { OrganizationOwnerRepository } from '../organizations/repositories/organization-owner.repository';
 import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
 import { OrganizationRepository } from '../organizations/repositories/organization.repository';
@@ -26,21 +27,22 @@ import type {
 
 @Injectable()
 export class BillingService {
-  private provider: RazorpayBillingProvider;
+  private provider: DodoBillingProvider;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly subscriptionRepository: SubscriptionRepository,
+    private readonly subscriptionEventRepository: SubscriptionEventRepository,
     private readonly organizationRepository: OrganizationRepository,
     private readonly ownerRepository: OrganizationOwnerRepository,
     private readonly memberRepository: OrganizationMemberRepository,
     private readonly userService: UserService,
-    razorpayProvider: RazorpayBillingProvider,
+    dodoProvider: DodoBillingProvider,
   ) {
     // Initialize provider based on config
     const providerName = billingConfig.provider;
-    if (providerName === 'razorpay') {
-      this.provider = razorpayProvider;
+    if (providerName === 'dodo') {
+      this.provider = dodoProvider;
     } else {
       throw new Error(`Unsupported billing provider: ${providerName}`);
     }
@@ -172,14 +174,15 @@ export class BillingService {
       return [];
     }
 
-    // TODO: Fetch invoices from Razorpay
-    // For now, return empty array - invoices will be available in Razorpay dashboard
-    // In production, you can fetch from Razorpay API
+    // TODO: Fetch invoices from Dodo Payments API
+    // For now, return empty array - invoices will be available in Dodo dashboard
+    // In production, you can fetch from Dodo API
     return [];
   }
 
   /**
    * Create checkout session for subscription
+   * Returns Dodo-hosted checkout URL
    */
   async createCheckoutSession(
     organizationId: string,
@@ -188,7 +191,7 @@ export class BillingService {
     interval: 'month' | 'year',
     returnUrl: string,
     cancelUrl: string,
-  ): Promise<{ checkoutData: Record<string, unknown>; subscriptionId: string }> {
+  ): Promise<{ checkoutUrl: string; subscriptionId: string }> {
     await this.checkBillingPermission(organizationId, userId);
 
     // Validate plan
@@ -196,6 +199,11 @@ export class BillingService {
       throw new BadRequestException(`Invalid plan: ${planId}`);
     }
     const planConfig = getPlanConfig(planId as 'free' | 'pro' | 'scale');
+
+    // Free plan doesn't require checkout
+    if (planId === 'free') {
+      throw new BadRequestException('Free plan does not require payment');
+    }
 
     // Get organization
     const organization = await this.organizationRepository.findById(organizationId);
@@ -218,18 +226,23 @@ export class BillingService {
       }
     }
 
-    // Create subscription via provider
+    // Replace {organizationId} placeholder in URLs if present
+    const processedReturnUrl = returnUrl.replace('{organizationId}', organizationId);
+    const processedCancelUrl = cancelUrl.replace('{organizationId}', organizationId);
+
+    // Create checkout session via provider (returns Dodo-hosted checkout URL)
     const result = await this.provider.createSubscription({
       organizationId,
       planId,
       interval,
       customerEmail,
       customerName,
-      returnUrl,
-      cancelUrl,
+      customerId: organization.billingCustomerId || undefined,
+      returnUrl: processedReturnUrl,
+      cancelUrl: processedCancelUrl,
     });
 
-    // Save subscription to database
+    // Save subscription to database (pending status until payment completes)
     await this.subscriptionRepository.create({
       organizationId,
       provider: billingConfig.provider,
@@ -247,16 +260,37 @@ export class BillingService {
       billingStatus: result.status,
     });
 
-    // Add Razorpay key ID to checkout data (safe to expose - it's public key)
-    const checkoutDataWithKey = {
-      ...result.checkoutData,
-      keyId: this.configService.get<string>('RAZORPAY_KEY_ID'),
-    };
-
     return {
-      checkoutData: checkoutDataWithKey || {},
+      checkoutUrl: result.checkoutUrl || '',
       subscriptionId: result.subscriptionId,
     };
+  }
+
+  /**
+   * Get customer portal URL
+   * Redirects to Dodo-hosted billing portal
+   */
+  async getCustomerPortalUrl(
+    organizationId: string,
+    userId: string,
+  ): Promise<string> {
+    await this.checkBillingPermission(organizationId, userId);
+
+    // Get organization
+    const organization = await this.organizationRepository.findById(organizationId);
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
+    }
+
+    if (!organization.billingCustomerId) {
+      throw new BadRequestException('No active subscription found');
+    }
+
+    // TODO: Call Dodo API to get portal URL
+    // For now, return a placeholder
+    // In production, implement Dodo portal API call
+    const portalUrl = `${billingConfig.dodo.apiBaseUrl}/portal?customer_id=${organization.billingCustomerId}`;
+    return portalUrl;
   }
 
   /**
@@ -299,11 +333,20 @@ export class BillingService {
       throw new Error('Invalid webhook signature');
     }
 
+    const eventData = event as any;
+
+    // Store raw webhook event for audit log
+    await this.subscriptionEventRepository.create({
+      provider: billingConfig.provider,
+      eventType: eventData.event_type || eventData.type || 'unknown',
+      payload: eventData,
+      organizationId: eventData.data?.subscription?.metadata?.organization_id,
+    });
+
     // Handle event via provider
     await this.provider.handleWebhookEvent(event, signature);
 
     // Update database based on event
-    const eventData = event as any;
     await this.syncSubscriptionFromWebhook(eventData);
   }
 
@@ -311,11 +354,11 @@ export class BillingService {
    * Sync subscription from webhook event
    */
   private async syncSubscriptionFromWebhook(event: any): Promise<void> {
-    // Extract subscription ID from Razorpay webhook payload
+    // Extract subscription ID from Dodo webhook payload
     const subscriptionId =
-      event.payload?.subscription?.entity?.id ||
-      event.payload?.subscription_id ||
-      event.subscription_id;
+      event.data?.subscription?.id ||
+      event.subscription_id ||
+      event.subscription?.id;
 
     if (!subscriptionId) {
       console.warn('No subscription ID found in webhook event');

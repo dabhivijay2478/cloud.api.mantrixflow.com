@@ -2,9 +2,10 @@
  * Billing Configuration
  * Centralized configuration for billing plans, pricing, and features
  * All pricing and feature limits are defined here for easy updates
+ * Provider configuration is also centralized here
  */
 
-export type BillingProvider = 'razorpay' | 'stripe';
+export type BillingProvider = 'dodo' | 'razorpay' | 'stripe';
 
 export type PlanId = 'free' | 'pro' | 'scale';
 export type BillingInterval = 'month' | 'year';
@@ -33,6 +34,8 @@ export interface PlanConfig {
     dataSources: number;
     migrationsPerMonth: number;
   };
+  // Dodo Payments product ID (only for paid plans)
+  dodoProductId?: string;
 }
 
 /**
@@ -59,6 +62,7 @@ export const billingPlans: Record<PlanId, PlanConfig> = {
       dataSources: 1,
       migrationsPerMonth: 100,
     },
+    // Free plan doesn't use Dodo Payments
   },
   pro: {
     id: 'pro',
@@ -87,6 +91,8 @@ export const billingPlans: Record<PlanId, PlanConfig> = {
       dataSources: 5,
       migrationsPerMonth: 1000,
     },
+    // Dodo Payments product ID - set via environment variable
+    dodoProductId: process.env.DODO_PRO_PRODUCT_ID,
   },
   scale: {
     id: 'scale',
@@ -115,6 +121,8 @@ export const billingPlans: Record<PlanId, PlanConfig> = {
       dataSources: -1,
       migrationsPerMonth: -1,
     },
+    // Dodo Payments product ID - set via environment variable
+    dodoProductId: process.env.DODO_SCALE_PRODUCT_ID,
   },
 };
 
@@ -156,15 +164,35 @@ export function getAllPlans(): PlanConfig[] {
 
 /**
  * Billing Provider Configuration
+ * All provider configs are centralized here
  */
 export const billingConfig = {
-  provider: (process.env.BILLING_PROVIDER || 'razorpay') as BillingProvider,
+  provider: (process.env.BILLING_PROVIDER || 'dodo') as BillingProvider,
+  
+  // Dodo Payments Configuration
+  dodo: {
+    apiKey: process.env.DODO_API_KEY || '',
+    webhookSecret: process.env.DODO_WEBHOOK_SECRET || '',
+    // Product IDs for paid plans (set in Dodo Payments dashboard)
+    productIds: {
+      pro: process.env.DODO_PRO_PRODUCT_ID || '',
+      scale: process.env.DODO_SCALE_PRODUCT_ID || '',
+    },
+    // URLs for redirects
+    successUrl: process.env.DODO_SUCCESS_URL || '',
+    cancelUrl: process.env.DODO_CANCEL_URL || '',
+    // Base URL for Dodo Payments API
+    apiBaseUrl: process.env.DODO_API_BASE_URL || 'https://api.dodopayments.com',
+  },
+  
+  // Razorpay config (deprecated - will be removed)
   razorpay: {
     keyId: process.env.RAZORPAY_KEY_ID || '',
     keySecret: process.env.RAZORPAY_KEY_SECRET || '',
     webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
   },
-  // Stripe config (for future use)
+  
+  // Stripe config (deprecated - will be removed)
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY || '',
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',

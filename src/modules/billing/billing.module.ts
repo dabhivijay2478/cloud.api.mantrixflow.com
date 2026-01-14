@@ -12,7 +12,8 @@ import { UserModule } from '../users/user.module';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { SubscriptionRepository } from './repositories/subscription.repository';
-import { RazorpayBillingProvider } from './providers/razorpay-billing.provider';
+import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
+import { DodoBillingProvider } from './providers/dodo-billing.provider';
 
 @Module({
   imports: [OrganizationModule, UserModule],
@@ -27,9 +28,10 @@ import { RazorpayBillingProvider } from './providers/razorpay-billing.provider';
       },
     },
     // Billing providers
-    RazorpayBillingProvider,
+    DodoBillingProvider,
     // Repositories
     SubscriptionRepository,
+    SubscriptionEventRepository,
     // Services
     BillingService,
   ],

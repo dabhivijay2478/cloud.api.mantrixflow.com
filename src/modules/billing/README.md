@@ -1,35 +1,43 @@
-# Billing Module - Razorpay Integration
+# Billing Module - Dodo Payments Integration
 
-This module provides Razorpay billing integration for organizations. Billing is organization-scoped with OWNER/ADMIN access control.
+This module provides Dodo Payments billing integration for organizations. Billing is organization-scoped with OWNER/ADMIN access control.
 
 ## Architecture
 
 - **Provider-Agnostic**: Uses `IBillingProvider` interface for easy provider switching
 - **One Subscription per Organization**: Each organization has a single subscription
 - **Config-Driven Pricing**: All pricing and features defined in `billing.config.ts`
-- **Custom Checkout**: Uses Razorpay Checkout JS with custom UI
-- **Webhook-Driven**: Subscription updates are handled via Razorpay webhooks
+- **Dodo-Hosted Checkout**: Uses Dodo-hosted checkout pages (no custom payment UI)
+- **Webhook-Driven**: Subscription updates are handled via Dodo Payments webhooks
 
 ## Database Schema
 
 ### Organizations Table (Updated)
-Added billing fields:
-- `billing_provider` - Provider name ('razorpay')
-- `billing_customer_id` - Razorpay customer ID
-- `billing_subscription_id` - Razorpay subscription ID
+Billing fields:
+- `billing_provider` - Provider name ('dodo')
+- `billing_customer_id` - Dodo customer ID
+- `billing_subscription_id` - Dodo subscription ID
 - `billing_plan_id` - Plan ID ('free', 'pro', 'scale')
 - `billing_status` - Current billing status
 - `billing_current_period_end` - Next billing date
 
-### Subscriptions Table (New)
+### Subscriptions Table
 Provider-agnostic subscription records:
 - `organization_id` - Reference to organization
-- `provider` - Provider name ('razorpay')
+- `provider` - Provider name ('dodo')
 - `plan_id` - Plan identifier
-- `provider_subscription_id` - Razorpay subscription ID
+- `provider_subscription_id` - Dodo subscription ID
 - `status` - Subscription status
 - `current_period_start/end` - Billing period
 - `amount`, `currency` - Pricing info
+
+### Subscription Events Table (New)
+Webhook audit log:
+- `organization_id` - Reference to organization
+- `provider` - Provider name ('dodo')
+- `event_type` - Webhook event type
+- `payload` - Raw webhook payload (JSONB)
+- `created_at` - Event timestamp
 
 ## Configuration
 
@@ -42,14 +50,17 @@ export const billingPlans = {
   free: {
     pricing: { month: 0, year: 0 },
     limits: { pipelines: 2, dataSources: 1, migrationsPerMonth: 100 },
+    // Free plan doesn't use Dodo Payments
   },
   pro: {
     pricing: { month: 1, year: 10 }, // Testing prices
     limits: { pipelines: 10, dataSources: 5, migrationsPerMonth: 1000 },
+    dodoProductId: process.env.DODO_PRO_PRODUCT_ID, // From .env
   },
   scale: {
     pricing: { month: 1, year: 10 }, // Testing prices
     limits: { pipelines: -1, dataSources: -1, migrationsPerMonth: -1 }, // -1 = unlimited
+    dodoProductId: process.env.DODO_SCALE_PRODUCT_ID, // From .env
   },
 };
 ```
@@ -58,19 +69,26 @@ export const billingPlans = {
 
 ### Environment Variables
 
-Required environment variables:
+Required environment variables (see `.env.example`):
 
 ```bash
 # Billing Provider
-BILLING_PROVIDER=razorpay
+BILLING_PROVIDER=dodo
 
-# Razorpay API Keys (get from Razorpay Dashboard)
-RAZORPAY_KEY_ID=rzp_test_...  # or rzp_live_... for production
-RAZORPAY_KEY_SECRET=...       # Secret key (server-side only)
-RAZORPAY_WEBHOOK_SECRET=...   # Webhook signing secret
+# Dodo Payments API Keys (get from Dodo Payments Dashboard)
+DODO_API_KEY=your_dodo_api_key_here
+DODO_WEBHOOK_SECRET=your_dodo_webhook_secret_here
 
-# Frontend (for Razorpay Checkout JS)
-NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_...  # Public key (safe to expose)
+# Dodo Payments Product IDs (for Pro and Scale plans)
+DODO_PRO_PRODUCT_ID=prod_pro_xxxxx
+DODO_SCALE_PRODUCT_ID=prod_scale_xxxxx
+
+# Dodo Payments API Base URL (optional, defaults to production)
+DODO_API_BASE_URL=https://api.dodopayments.com
+
+# Redirect URLs after checkout (use {organizationId} placeholder)
+DODO_SUCCESS_URL=https://your-domain.com/organizations/{organizationId}/billing?success=true
+DODO_CANCEL_URL=https://your-domain.com/organizations/{organizationId}/billing?canceled=true
 ```
 
 ## Setup Instructions
@@ -79,22 +97,27 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_...  # Public key (safe to expose)
 
 ```bash
 # Run the billing schema migration
-psql $DATABASE_URL -f apps/api/src/database/drizzle/migrations/0013_update_billing_schema_razorpay.sql
+psql $DATABASE_URL -f apps/api/src/database/drizzle/migrations/0014_update_billing_schema_dodo.sql
 ```
 
-### 2. Configure Razorpay
+### 2. Configure Dodo Payments
 
-1. Create Razorpay account (India)
-2. Get API keys from Razorpay Dashboard > Settings > API Keys
-3. Create Plans in Razorpay Dashboard (or let the system create them automatically)
-4. Set up webhook endpoint:
+1. Create Dodo Payments account
+2. Create Products in Dodo Dashboard:
+   - Pro plan (monthly/yearly)
+   - Scale plan (monthly/yearly)
+3. Get API keys from Dodo Dashboard > Settings > API Keys
+4. Copy Product IDs to `.env` file
+5. Set up webhook endpoint:
    - URL: `https://your-api-domain.com/api/billing/webhook`
    - Events to listen for:
-     - `subscription.activated`
-     - `subscription.charged`
+     - `subscription.created`
+     - `subscription.active`
+     - `subscription.updated`
      - `subscription.cancelled`
+     - `payment.succeeded`
      - `payment.failed`
-5. Copy webhook signing secret to `RAZORPAY_WEBHOOK_SECRET`
+6. Copy webhook signing secret to `DODO_WEBHOOK_SECRET`
 
 ### 3. Update Pricing (When Ready)
 
@@ -103,12 +126,19 @@ Edit `apps/api/src/config/billing.config.ts`:
 ```typescript
 pro: {
   pricing: {
-    month: 29,  // $29/month (or ₹2400)
-    year: 290,  // $290/year
+    month: 29,  // Change from 1 to 29
+    year: 290,  // Change from 10 to 290
   },
-  // ...
-}
+},
+scale: {
+  pricing: {
+    month: 99,  // Change from 1 to 99
+    year: 990,  // Change from 10 to 990
+  },
+},
 ```
+
+**No code changes needed** - just update the config file!
 
 ## API Endpoints
 
@@ -135,7 +165,13 @@ Returns all available plans with pricing and features.
 POST /api/billing/checkout
 Body: { organizationId, planId, interval, returnUrl, cancelUrl }
 ```
-Creates Razorpay subscription and returns checkout data.
+Creates Dodo checkout session and returns Dodo-hosted checkout URL.
+
+### Get Customer Portal URL
+```
+GET /api/billing/portal?organizationId=UUID
+```
+Returns Dodo-hosted billing portal URL.
 
 ### Cancel Subscription
 ```
@@ -148,35 +184,46 @@ Cancels active subscription.
 ```
 POST /api/billing/webhook
 ```
-Handles Razorpay webhook events. **No authentication required** - uses Razorpay signature verification.
+Handles Dodo Payments webhook events. **No authentication required** - uses Dodo signature verification.
 
 ## Frontend Flow
 
-1. **Billing Page** (`/workspace/billing`):
+1. **Billing Page** (`/organizations/[id]/billing`):
    - Shows current plan and usage
    - Displays pricing cards for all plans
-   - "Upgrade" button → creates checkout session → redirects to checkout page
+   - "Upgrade" button → calls `/api/billing/checkout` → redirects to Dodo-hosted checkout
+   - "Manage Billing" button → calls `/api/billing/portal` → redirects to Dodo-hosted portal
 
-2. **Checkout Page** (`/workspace/billing/checkout`):
-   - Custom payment form
-   - Uses Razorpay Checkout JS
-   - Handles payment completion
+2. **No Custom Checkout Page**:
+   - All payment collection happens on Dodo-hosted pages
+   - No card/UPI inputs in our frontend
+   - Fully PCI-compliant
 
 ## Webhook Configuration
 
-**Important**: For Razorpay webhook signature verification, you need to preserve the raw request body.
+**Important**: For Dodo webhook signature verification, you need to preserve the raw request body.
 
 In production, configure your NestJS app to preserve raw body for the webhook route.
+
+## Security
+
+- ✅ No card/UPI data collection
+- ✅ No custom checkout UI
+- ✅ No payment data storage
+- ✅ Webhooks are source of truth
+- ✅ Server-side validation only
+- ✅ Signature verification for webhooks
 
 ## Testing
 
 ### Local Testing
 
-1. Use Razorpay test mode API keys
-2. Test cards:
-   - Success: `4111 1111 1111 1111`
-   - Decline: `4000 0000 0000 0002`
-3. Test webhooks using Razorpay Dashboard > Webhooks > Test
+1. Use Dodo Payments test mode API keys
+2. Test checkout flow:
+   - Click "Upgrade" on billing page
+   - Redirects to Dodo checkout
+   - Complete payment on Dodo-hosted page
+   - Redirects back to billing page
 
 ### Test Pricing
 
@@ -187,22 +234,23 @@ Current testing prices (defined in `billing.config.ts`):
 
 ## Production Checklist
 
-- [ ] Set `BILLING_PROVIDER=razorpay`
-- [ ] Set `RAZORPAY_KEY_ID` to live key
-- [ ] Set `RAZORPAY_KEY_SECRET` to live secret
-- [ ] Configure webhook endpoint in Razorpay Dashboard
-- [ ] Set `RAZORPAY_WEBHOOK_SECRET` from Razorpay Dashboard
-- [ ] Set `NEXT_PUBLIC_RAZORPAY_KEY_ID` to live public key
+- [ ] Set `BILLING_PROVIDER=dodo`
+- [ ] Set `DODO_API_KEY` to live key
+- [ ] Set `DODO_WEBHOOK_SECRET` from Dodo Dashboard
+- [ ] Set `DODO_PRO_PRODUCT_ID` to live product ID
+- [ ] Set `DODO_SCALE_PRODUCT_ID` to live product ID
+- [ ] Configure webhook endpoint in Dodo Dashboard
 - [ ] Update pricing in `billing.config.ts` to production values
+- [ ] Set `DODO_SUCCESS_URL` and `DODO_CANCEL_URL` to production URLs
 - [ ] Test webhook delivery
 - [ ] Configure raw body parsing for webhook route
 - [ ] Set up monitoring for webhook failures
 
-## Future: Adding Stripe Support
+## Migration from Razorpay
 
-To add Stripe later (without code changes):
+All Razorpay code has been removed. The system now uses Dodo Payments exclusively.
 
-1. Create `StripeBillingProvider` implementing `IBillingProvider`
+To switch providers in the future:
+1. Create new provider implementation (e.g., `StripeBillingProvider`)
 2. Set `BILLING_PROVIDER=stripe` in environment
-3. Add Stripe config to `billing.config.ts`
-4. No database migration needed - same schema supports both providers!
+3. No database migration needed - same schema supports all providers!
