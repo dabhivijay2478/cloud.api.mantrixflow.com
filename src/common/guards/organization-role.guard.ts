@@ -1,7 +1,7 @@
 /**
  * Organization Role Guard
  * Enforces role-based access control for organization-scoped endpoints
- * 
+ *
  * Usage:
  * @UseGuards(SupabaseAuthGuard, OrganizationRoleGuard)
  * @RequireRole('OWNER', 'ADMIN')
@@ -36,8 +36,7 @@ export const REQUIRED_ROLES_KEY = 'required_roles';
  * @param roles - Array of roles that can access this endpoint
  * @example @RequireRole('OWNER', 'ADMIN')
  */
-export const RequireRole = (...roles: OrganizationRole[]) =>
-  SetMetadata(REQUIRED_ROLES_KEY, roles);
+export const RequireRole = (...roles: OrganizationRole[]) => SetMetadata(REQUIRED_ROLES_KEY, roles);
 
 /**
  * Get user's role in an organization
@@ -56,10 +55,7 @@ export async function getUserRoleInOrganization(
   }
 
   // Check membership and get role
-  const member = await memberRepository.findByOrganizationAndUserId(
-    organizationId,
-    userId,
-  );
+  const member = await memberRepository.findByOrganizationAndUserId(organizationId, userId);
 
   if (!member) {
     return null;
@@ -83,10 +79,10 @@ export class OrganizationRoleGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Get required roles from metadata
-    const requiredRoles = this.reflector.getAllAndOverride<OrganizationRole[]>(
-      REQUIRED_ROLES_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const requiredRoles = this.reflector.getAllAndOverride<OrganizationRole[]>(REQUIRED_ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
 
     // If no roles required, allow access
     if (!requiredRoles || requiredRoles.length === 0) {
@@ -123,9 +119,7 @@ export class OrganizationRoleGuard implements CanActivate {
     );
 
     if (!userRole) {
-      throw new ForbiddenException(
-        'You are not a member of this organization',
-      );
+      throw new ForbiddenException('You are not a member of this organization');
     }
 
     // Check if user's role is in the required roles list

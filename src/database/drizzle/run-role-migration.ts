@@ -1,7 +1,7 @@
 /**
  * Run Role Migration Script
  * Applies the role refactoring migration manually
- * 
+ *
  * Usage: bun run src/database/drizzle/run-role-migration.ts
  */
 
@@ -47,7 +47,7 @@ async function runRoleMigration() {
     const migrationSQL = fs.readFileSync(migrationPath, 'utf-8');
 
     console.log('📄 Executing migration SQL...');
-    
+
     // Execute the migration
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     await sql.unsafe(migrationSQL);

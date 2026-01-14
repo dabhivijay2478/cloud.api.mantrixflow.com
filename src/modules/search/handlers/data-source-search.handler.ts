@@ -16,11 +16,7 @@ export class DataSourceSearchHandler implements SearchHandler {
 
   constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
-  async search(
-    organizationId: string,
-    query: string,
-    limit: number,
-  ): Promise<SearchResultDto[]> {
+  async search(organizationId: string, query: string, limit: number): Promise<SearchResultDto[]> {
     const searchPattern = `%${query}%`;
 
     const results = await this.db

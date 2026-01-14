@@ -14,6 +14,8 @@ export default {
     './src/database/schemas/organizations/organizations.schema.ts',
     './src/database/schemas/organizations/organization-members.schema.ts',
     './src/database/schemas/organizations/organization-owners.schema.ts',
+    './src/database/schemas/billing/subscriptions.schema.ts',
+    './src/database/schemas/billing/subscription-events.schema.ts',
     './src/database/schemas/activity-logs/activity-logs.schema.ts',
     './src/database/schemas/data-sources/connections/postgres-connections.schema.ts',
     './src/database/schemas/data-sources/query-logs/postgres-query-logs.schema.ts',

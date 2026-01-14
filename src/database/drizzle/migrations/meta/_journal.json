@@ -85,6 +85,20 @@
       "when": 1764009000000,
       "tag": "0011_add_activity_logs_table",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1764010000000,
+      "tag": "0012_refactor_roles_and_enforce_owner_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1764011000000,
+      "tag": "0013_add_billing_tables",
+      "breakpoints": true
     }
   ]
 }
