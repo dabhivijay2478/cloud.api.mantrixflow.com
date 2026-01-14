@@ -3,7 +3,7 @@
  * REST API endpoints for billing information and Dodo Payments integration
  */
 
-import { Body, Controller, Get, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
 import {
   ApiBearerAuth,
@@ -15,7 +15,6 @@ import {
 } from '@nestjs/swagger';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { createListResponse, createSuccessResponse } from '../../common/dto/api-response.dto';
-import { RequiredUUIDPipe } from '../activity-logs/pipes/required-uuid.pipe';
 import { BillingService } from './billing.service';
 import {
   BillingInvoiceDto,
@@ -32,19 +31,14 @@ export class BillingController {
 
   /**
    * Get billing overview
+   * User-scoped billing (no organizationId needed)
    */
   @Get('overview')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Get billing overview',
-    description: 'Get billing overview for an organization including current plan, status, and next billing date',
-  })
-  @ApiQuery({
-    name: 'organizationId',
-    required: true,
-    description: 'Organization ID',
-    type: String,
+    description: 'Get billing overview for the authenticated user including current plan, status, and next billing date',
   })
   @ApiResponse({
     status: 200,
@@ -52,41 +46,29 @@ export class BillingController {
     type: BillingOverviewDto,
   })
   @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Only owners and admins can access billing',
-  })
-  @ApiResponse({
     status: 404,
-    description: 'Organization not found',
+    description: 'User not found',
   })
-  async getBillingOverview(
-    @Query('organizationId', RequiredUUIDPipe) organizationId: string,
-    @Request() req: ExpressRequestType,
-  ) {
+  async getBillingOverview(@Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     if (!userId) {
       throw new Error('User ID is required');
     }
 
-    const overview = await this.billingService.getBillingOverview(organizationId, userId);
+    const overview = await this.billingService.getBillingOverview(userId);
     return createSuccessResponse(overview, 'Billing overview retrieved successfully');
   }
 
   /**
    * Get billing usage
+   * User-scoped billing (no organizationId needed)
    */
   @Get('usage')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Get billing usage',
-    description: 'Get usage statistics for an organization including pipelines, migrations, and data sources',
-  })
-  @ApiQuery({
-    name: 'organizationId',
-    required: true,
-    description: 'Organization ID',
-    type: String,
+    description: 'Get usage statistics for the authenticated user including pipelines, migrations, and data sources',
   })
   @ApiResponse({
     status: 200,
@@ -94,41 +76,29 @@ export class BillingController {
     type: BillingUsageDto,
   })
   @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Only owners and admins can access billing',
-  })
-  @ApiResponse({
     status: 404,
-    description: 'Organization not found',
+    description: 'User not found',
   })
-  async getBillingUsage(
-    @Query('organizationId', RequiredUUIDPipe) organizationId: string,
-    @Request() req: ExpressRequestType,
-  ) {
+  async getBillingUsage(@Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     if (!userId) {
       throw new Error('User ID is required');
     }
 
-    const usage = await this.billingService.getBillingUsage(organizationId, userId);
+    const usage = await this.billingService.getBillingUsage(userId);
     return createSuccessResponse(usage, 'Billing usage retrieved successfully');
   }
 
   /**
    * Get billing invoices
+   * User-scoped billing (no organizationId needed)
    */
   @Get('invoices')
   @UseGuards(SupabaseAuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Get billing invoices',
-    description: 'Get list of invoices for an organization',
-  })
-  @ApiQuery({
-    name: 'organizationId',
-    required: true,
-    description: 'Organization ID',
-    type: String,
+    description: 'Get list of invoices for the authenticated user',
   })
   @ApiResponse({
     status: 200,
@@ -136,15 +106,40 @@ export class BillingController {
     type: [BillingInvoiceDto],
   })
   @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Only owners and admins can access billing',
+    status: 404,
+    description: 'User not found',
+  })
+  async getBillingInvoices(@Request() req: ExpressRequestType) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const invoices = await this.billingService.getBillingInvoices(userId);
+    return createListResponse(invoices, 'Billing invoices retrieved successfully');
+  }
+
+  /**
+   * Get invoice download URL
+   * User-scoped billing (no organizationId needed)
+   */
+  @Get('invoices/:invoiceId/download')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Get invoice download URL',
+    description: 'Get download URL for a specific invoice from Dodo Payments',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Invoice download URL retrieved successfully',
   })
   @ApiResponse({
     status: 404,
-    description: 'Organization not found',
+    description: 'Invoice not found',
   })
-  async getBillingInvoices(
-    @Query('organizationId', RequiredUUIDPipe) organizationId: string,
+  async getInvoiceDownloadUrl(
+    @Param('invoiceId') invoiceId: string,
     @Request() req: ExpressRequestType,
   ) {
     const userId = req.user?.id;
@@ -152,8 +147,12 @@ export class BillingController {
       throw new Error('User ID is required');
     }
 
-    const invoices = await this.billingService.getBillingInvoices(organizationId, userId);
-    return createListResponse(invoices, 'Billing invoices retrieved successfully');
+    if (!invoiceId) {
+      throw new Error('Invoice ID is required');
+    }
+
+    const downloadUrl = await this.billingService.getInvoiceDownloadUrl(userId, invoiceId);
+    return createSuccessResponse({ downloadUrl }, 'Invoice download URL retrieved successfully');
   }
 
   /**
@@ -178,6 +177,7 @@ export class BillingController {
   /**
    * Create checkout session for subscription
    * Returns Dodo-hosted checkout URL
+   * User-scoped billing (no organizationId needed)
    */
   @Post('checkout')
   @UseGuards(SupabaseAuthGuard)
@@ -190,10 +190,6 @@ export class BillingController {
     schema: {
       type: 'object',
       properties: {
-        organizationId: {
-          type: 'string',
-          description: 'Organization ID',
-        },
         planId: {
           type: 'string',
           description: 'Plan ID (pro, scale)',
@@ -213,21 +209,16 @@ export class BillingController {
           description: 'URL to return to after canceled checkout',
         },
       },
-      required: ['organizationId', 'planId', 'interval', 'returnUrl', 'cancelUrl'],
+      required: ['planId', 'interval', 'returnUrl', 'cancelUrl'],
     },
   })
   @ApiResponse({
     status: 200,
     description: 'Checkout session created successfully',
   })
-  @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Only owners and admins can access billing',
-  })
   async createCheckoutSession(
     @Body()
     body: {
-      organizationId: string;
       planId: string;
       interval: 'month' | 'year';
       returnUrl: string;
@@ -241,7 +232,6 @@ export class BillingController {
     }
 
     const result = await this.billingService.createCheckoutSession(
-      body.organizationId,
       userId,
       body.planId,
       body.interval,
@@ -255,6 +245,7 @@ export class BillingController {
   /**
    * Get customer portal URL
    * Returns Dodo-hosted billing portal URL
+   * User-scoped billing (no organizationId needed)
    */
   @Get('portal')
   @UseGuards(SupabaseAuthGuard)
@@ -263,35 +254,27 @@ export class BillingController {
     summary: 'Get customer portal URL',
     description: 'Get Dodo-hosted billing portal URL for managing subscription',
   })
-  @ApiQuery({
-    name: 'organizationId',
-    required: true,
-    description: 'Organization ID',
-    type: String,
-  })
   @ApiResponse({
     status: 200,
     description: 'Portal URL retrieved successfully',
   })
   @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Only owners and admins can access billing',
+    status: 404,
+    description: 'User not found or no active subscription',
   })
-  async getCustomerPortal(
-    @Query('organizationId', RequiredUUIDPipe) organizationId: string,
-    @Request() req: ExpressRequestType,
-  ) {
+  async getCustomerPortal(@Request() req: ExpressRequestType) {
     const userId = req.user?.id;
     if (!userId) {
       throw new Error('User ID is required');
     }
 
-    const portalUrl = await this.billingService.getCustomerPortalUrl(organizationId, userId);
+    const portalUrl = await this.billingService.getCustomerPortalUrl(userId);
     return createSuccessResponse({ url: portalUrl }, 'Portal URL retrieved successfully');
   }
 
   /**
    * Cancel subscription
+   * User-scoped billing (no organizationId needed)
    */
   @Post('cancel')
   @UseGuards(SupabaseAuthGuard)
@@ -304,17 +287,12 @@ export class BillingController {
     schema: {
       type: 'object',
       properties: {
-        organizationId: {
-          type: 'string',
-          description: 'Organization ID',
-        },
         cancelImmediately: {
           type: 'boolean',
           description: 'Cancel immediately or at period end',
           default: false,
         },
       },
-      required: ['organizationId'],
     },
   })
   @ApiResponse({
@@ -322,7 +300,7 @@ export class BillingController {
     description: 'Subscription cancelled successfully',
   })
   async cancelSubscription(
-    @Body() body: { organizationId: string; cancelImmediately?: boolean },
+    @Body() body: { cancelImmediately?: boolean },
     @Request() req: ExpressRequestType,
   ) {
     const userId = req.user?.id;
@@ -330,11 +308,7 @@ export class BillingController {
       throw new Error('User ID is required');
     }
 
-    await this.billingService.cancelSubscription(
-      body.organizationId,
-      userId,
-      body.cancelImmediately || false,
-    );
+    await this.billingService.cancelSubscription(userId, body.cancelImmediately || false);
 
     return createSuccessResponse(null, 'Subscription cancelled successfully');
   }
@@ -343,6 +317,9 @@ export class BillingController {
    * Dodo Payments webhook endpoint
    * This endpoint should NOT use SupabaseAuthGuard
    * It uses Dodo webhook signature verification instead
+   * 
+   * IMPORTANT: Configure webhook URL in Dodo Dashboard as:
+   * https://your-domain.com/api/billing/webhook
    */
   @Post('webhook')
   @ApiOperation({
@@ -354,21 +331,59 @@ export class BillingController {
     description: 'Webhook processed successfully',
   })
   async handleWebhook(@Request() req: ExpressRequestType) {
-    const signature = req.headers['x-dodo-signature'] as string;
+    console.log('📥 Dodo webhook received');
+    console.log('Headers:', {
+      'webhook-id': req.headers['webhook-id'],
+      'webhook-timestamp': req.headers['webhook-timestamp'],
+      'webhook-signature': req.headers['webhook-signature'] ? 'present' : 'missing',
+      'x-dodo-signature': req.headers['x-dodo-signature'] ? 'present' : 'missing',
+    });
 
-    if (!signature) {
+    // Dodo sends signature in 'webhook-signature' header (not 'x-dodo-signature')
+    // Format: "v1,<signature>" or just "<signature>"
+    const signatureHeader = 
+      (req.headers['webhook-signature'] as string) ||
+      (req.headers['x-dodo-signature'] as string); // Fallback for compatibility
+
+    // Get webhook metadata headers
+    const webhookId = req.headers['webhook-id'] as string;
+    const webhookTimestamp = req.headers['webhook-timestamp'] as string;
+
+    // Get raw body for signature verification
+    // With bodyParser.raw middleware in main.ts, req.body is a Buffer
+    // Convert to string for signature verification
+    const rawBody = (req as any).rawBody 
+      ? (req as any).rawBody.toString('utf8')
+      : Buffer.isBuffer(req.body)
+        ? req.body.toString('utf8')
+        : JSON.stringify(req.body);
+
+    // If signature header is missing, allow in dev mode (for testing)
+    const skipVerification = process.env.DODO_SKIP_WEBHOOK_SIGNATURE === 'true';
+    if (!signatureHeader && !skipVerification) {
+      console.error('❌ Dodo webhook signature header missing. Available headers:', Object.keys(req.headers));
       throw new Error('Dodo signature header is missing');
     }
 
-    // Get raw body for signature verification
-    const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+    // Extract signature from "v1,<signature>" format if present
+    const signature = signatureHeader && signatureHeader.includes(',') 
+      ? signatureHeader.split(',')[1]?.trim() 
+      : signatureHeader || '';
 
     try {
-      await this.billingService.handleWebhookEvent(rawBody, signature);
+      await this.billingService.handleWebhookEvent(
+        rawBody, 
+        signature,
+        webhookId,
+        webhookTimestamp
+      );
+      console.log('✅ Webhook processed successfully');
       return { received: true };
     } catch (error) {
-      console.error('Webhook processing failed:', error);
-      throw error;
+      console.error('❌ Webhook processing failed:', error);
+      // Return 200 to prevent Dodo from retrying on our errors
+      // But log the error for debugging
+      return { received: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 }

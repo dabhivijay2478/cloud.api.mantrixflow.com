@@ -101,14 +101,20 @@ export class BillingInvoiceDto {
 
   @ApiProperty({
     description: 'Invoice status',
-    enum: ['paid', 'pending'],
+    enum: ['paid', 'pending', 'failed'],
     example: 'paid',
   })
-  status: 'paid' | 'pending';
+  status: 'paid' | 'pending' | 'failed';
 
-  @ApiProperty({
-    description: 'Download URL for the invoice (mock)',
-    example: 'https://example.com/invoices/inv_1234567890.pdf',
+  @ApiPropertyOptional({
+    description: 'Currency code',
+    example: 'INR',
   })
-  downloadUrl: string;
+  currency?: string;
+
+  @ApiPropertyOptional({
+    description: 'Download URL for the invoice from Dodo Payments',
+    example: 'https://dodopayments.com/invoices/inv_1234567890.pdf',
+  })
+  downloadUrl?: string;
 }

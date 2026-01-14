@@ -37,6 +37,13 @@ export const users = pgTable('users', {
   // Onboarding
   onboardingCompleted: boolean('onboarding_completed').notNull().default(false),
   onboardingStep: varchar('onboarding_step', { length: 50 }),
+  // Billing fields (user-scoped billing)
+  billingProvider: varchar('billing_provider', { length: 50 }),
+  billingCustomerId: varchar('billing_customer_id', { length: 255 }),
+  billingSubscriptionId: varchar('billing_subscription_id', { length: 255 }),
+  billingPlanId: varchar('billing_plan_id', { length: 100 }),
+  billingStatus: varchar('billing_status', { length: 50 }).default('incomplete'),
+  billingCurrentPeriodEnd: timestamp('billing_current_period_end'),
   // Timestamps
   lastLoginAt: timestamp('last_login_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),

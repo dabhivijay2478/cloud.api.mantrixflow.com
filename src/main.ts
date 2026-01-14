@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -10,6 +11,10 @@ async function bootstrap() {
 
   // Set global API prefix
   app.setGlobalPrefix('api');
+
+  // IMPORTANT: Preserve raw body for Dodo webhook signature verification
+  // This must be BEFORE other middleware
+  app.use('/api/billing/webhook', bodyParser.raw({ type: 'application/json' }));
 
   // Enable validation pipe globally
   app.useGlobalPipes(

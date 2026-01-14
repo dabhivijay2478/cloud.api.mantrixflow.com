@@ -28,7 +28,20 @@ export class SubscriptionRepository {
   }
 
   /**
-   * Find subscription by organization ID
+   * Find subscription by user ID (billing is user-scoped)
+   */
+  async findByUserId(userId: string): Promise<Subscription | null> {
+    const [subscription] = await this.db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .orderBy(subscriptions.createdAt)
+      .limit(1);
+    return subscription || null;
+  }
+
+  /**
+   * Find subscription by organization ID (for reference, but billing is user-scoped)
    */
   async findByOrganizationId(organizationId: string): Promise<Subscription | null> {
     const [subscription] = await this.db

@@ -246,11 +246,12 @@ Current testing prices (defined in `billing.config.ts`):
 - [ ] Configure raw body parsing for webhook route
 - [ ] Set up monitoring for webhook failures
 
-## Migration from Razorpay
+## Provider Switching
 
-All Razorpay code has been removed. The system now uses Dodo Payments exclusively.
-
-To switch providers in the future:
-1. Create new provider implementation (e.g., `StripeBillingProvider`)
-2. Set `BILLING_PROVIDER=stripe` in environment
-3. No database migration needed - same schema supports all providers!
+The system is designed to be provider-agnostic. To add a new provider in the future:
+1. Create new provider implementation (e.g., `NewBillingProvider`)
+2. Implement `IBillingProvider` interface
+3. Add provider to `BillingProvider` type in `billing.config.ts`
+4. Add provider config to `billingConfig` object
+5. Update `BillingService` to support the new provider
+6. No database migration needed - same schema supports all providers!

@@ -1,16 +1,19 @@
 import { boolean, decimal, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { organizations } from '../organizations/organizations.schema';
+import { users } from '../users/users.schema';
 
 /**
  * Subscriptions Table
  * Provider-agnostic subscription records
- * Supports Razorpay, Stripe (future), and other providers
+ * Billing is user-scoped (one user can have subscriptions for multiple organizations)
  */
 export const subscriptions = pgTable('subscriptions', {
   id: uuid('id').primaryKey().defaultRandom(),
-  organizationId: uuid('organization_id')
+  userId: uuid('user_id')
     .notNull()
-    .references(() => organizations.id, { onDelete: 'cascade' }),
+    .references(() => users.id, { onDelete: 'cascade' }), // User who owns the subscription
+  organizationId: uuid('organization_id')
+    .references(() => organizations.id, { onDelete: 'cascade' }), // Organization this subscription applies to (optional reference)
   provider: varchar('provider', { length: 50 }).notNull(), // 'razorpay' | 'stripe'
   planId: varchar('plan_id', { length: 100 }).notNull(), // 'free' | 'pro' | 'scale'
   providerSubscriptionId: varchar('provider_subscription_id', { length: 255 })

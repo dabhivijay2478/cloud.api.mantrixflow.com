@@ -16,6 +16,7 @@ export class SubscriptionEventRepository {
    * Create a new subscription event record
    */
   async create(data: {
+    userId?: string;
     organizationId?: string;
     provider: string;
     eventType: string;
@@ -24,6 +25,7 @@ export class SubscriptionEventRepository {
     const [event] = await this.db
       .insert(subscriptionEvents)
       .values({
+        userId: data.userId,
         organizationId: data.organizationId,
         provider: data.provider,
         eventType: data.eventType,

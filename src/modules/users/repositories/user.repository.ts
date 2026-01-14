@@ -48,6 +48,18 @@ export class UserRepository {
   }
 
   /**
+   * Find user by billing customer ID (Dodo customer_id)
+   */
+  async findByBillingCustomerId(billingCustomerId: string): Promise<User | null> {
+    const [user] = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.billingCustomerId, billingCustomerId))
+      .limit(1);
+    return user || null;
+  }
+
+  /**
    * Update user
    */
   async update(id: string, data: Partial<NewUser>): Promise<User> {

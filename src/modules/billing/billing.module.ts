@@ -1,6 +1,6 @@
 /**
  * Billing Module
- * Module for billing information and Razorpay integration
+ * Module for billing information and Dodo Payments integration
  * Provider-agnostic billing system
  */
 

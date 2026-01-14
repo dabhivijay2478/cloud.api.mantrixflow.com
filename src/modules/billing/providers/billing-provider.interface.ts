@@ -1,11 +1,11 @@
 /**
  * Billing Provider Interface
  * Provider-agnostic interface for billing operations
- * Implementations: DodoBillingProvider, RazorpayBillingProvider (deprecated), StripeBillingProvider (future)
+ * Implementations: DodoBillingProvider
  */
 
 export interface CreateSubscriptionInput {
-  organizationId: string;
+  organizationId?: string; // Optional: for metadata only (billing is user-scoped)
   planId: string;
   interval: 'month' | 'year';
   customerEmail: string;
@@ -20,6 +20,7 @@ export interface SubscriptionResult {
   checkoutUrl?: string; // For redirect-based checkout
   checkoutData?: Record<string, unknown>; // For custom checkout (deprecated - use checkoutUrl)
   status: 'pending' | 'active' | 'trialing';
+  customerId?: string; // Customer ID returned from provider (for storing in user table)
 }
 
 export interface SubscriptionStatus {
@@ -31,12 +32,22 @@ export interface SubscriptionStatus {
   cancelAtPeriodEnd: boolean;
   amount: number;
   currency: string;
+  customerId?: string; // Customer ID from provider (for storing in user table)
 }
 
 export interface CancelSubscriptionInput {
   subscriptionId: string;
-  organizationId: string;
+  organizationId?: string; // Optional: for metadata only (billing is user-scoped)
   cancelImmediately?: boolean;
+}
+
+export interface InvoiceDto {
+  invoiceId: string;
+  date: Date;
+  amount: number;
+  currency: string;
+  status: 'paid' | 'pending' | 'failed';
+  downloadUrl?: string;
 }
 
 /**
@@ -60,6 +71,22 @@ export interface IBillingProvider {
   cancelSubscription(input: CancelSubscriptionInput): Promise<void>;
 
   /**
+   * Get invoices for a subscription
+   */
+  getInvoices(subscriptionId: string): Promise<InvoiceDto[]>;
+
+  /**
+   * Get invoice download URL
+   */
+  getInvoiceDownloadUrl(subscriptionId: string, invoiceId: string): Promise<string>;
+
+  /**
+   * Get customer portal URL
+   * Returns Dodo-hosted customer portal session URL
+   */
+  getCustomerPortalUrl(customerId: string, returnUrl?: string): Promise<string>;
+
+  /**
    * Handle webhook event
    */
   handleWebhookEvent(event: unknown, signature: string): Promise<void>;
@@ -67,5 +94,10 @@ export interface IBillingProvider {
   /**
    * Verify webhook signature
    */
-  verifyWebhookSignature(payload: string | Buffer, signature: string): boolean;
+  verifyWebhookSignature(
+    payload: string | Buffer, 
+    signature: string,
+    webhookId?: string,
+    webhookTimestamp?: string
+  ): boolean;
 }

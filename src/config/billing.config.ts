@@ -5,7 +5,7 @@
  * Provider configuration is also centralized here
  */
 
-export type BillingProvider = 'dodo' | 'razorpay' | 'stripe';
+export type BillingProvider = 'dodo';
 
 export type PlanId = 'free' | 'pro' | 'scale';
 export type BillingInterval = 'month' | 'year';
@@ -168,7 +168,6 @@ export function getAllPlans(): PlanConfig[] {
  */
 export const billingConfig = {
   provider: (process.env.BILLING_PROVIDER || 'dodo') as BillingProvider,
-  
   // Dodo Payments Configuration
   dodo: {
     apiKey: process.env.DODO_API_KEY || '',
@@ -181,20 +180,8 @@ export const billingConfig = {
     // URLs for redirects
     successUrl: process.env.DODO_SUCCESS_URL || '',
     cancelUrl: process.env.DODO_CANCEL_URL || '',
-    // Base URL for Dodo Payments API
-    apiBaseUrl: process.env.DODO_API_BASE_URL || 'https://api.dodopayments.com',
-  },
-  
-  // Razorpay config (deprecated - will be removed)
-  razorpay: {
-    keyId: process.env.RAZORPAY_KEY_ID || '',
-    keySecret: process.env.RAZORPAY_KEY_SECRET || '',
-    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
-  },
-  
-  // Stripe config (deprecated - will be removed)
-  stripe: {
-    secretKey: process.env.STRIPE_SECRET_KEY || '',
-    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    // Base URL for Dodo Payments API (optional - SDK handles this automatically)
+    // Set to 'test.dodopayments.com' for test mode, or leave empty for SDK default
+    apiBaseUrl: process.env.DODO_API_BASE_URL || '',
   },
 };

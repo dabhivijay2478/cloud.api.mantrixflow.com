@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_organizations_billing_provider ON organizations(b
 CREATE TABLE IF NOT EXISTS subscription_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
-  provider VARCHAR(50) NOT NULL, -- 'dodo' | 'razorpay' | 'stripe'
+  provider VARCHAR(50) NOT NULL, -- 'dodo'
   event_type VARCHAR(100) NOT NULL,
   payload JSONB NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
