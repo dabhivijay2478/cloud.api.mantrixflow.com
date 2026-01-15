@@ -32,4 +32,16 @@ export class SubscriptionEventRepository {
       .where(eq(subscriptionEvents.subscriptionId, subscriptionId))
       .orderBy(subscriptionEvents.createdAt);
   }
+
+  async update(
+    id: string,
+    data: Partial<Pick<SubscriptionEvent, 'processed' | 'error'>>,
+  ): Promise<SubscriptionEvent> {
+    const [event] = await this.db
+      .update(subscriptionEvents)
+      .set(data)
+      .where(eq(subscriptionEvents.id, id))
+      .returning();
+    return event;
+  }
 }

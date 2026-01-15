@@ -1,16 +1,13 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import axios from 'axios';
 
 import DodoPayments from 'dodopayments';
 import { SubscriptionRepository } from './repositories/subscription.repository';
 import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
 import { DodoCustomerRepository } from './repositories/dodo-customer.repository';
-import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
-import { OrganizationOwnerRepository } from '../organizations/repositories/organization-owner.repository';
 import type { CreateCheckoutDto } from './dto/create-checkout.dto';
 import type { ChangePlanDto } from './dto/change-plan.dto';
-import type { ManageSeatsDto } from './dto/manage-seats.dto';
-import type { OnDemandChargeDto } from './dto/on-demand-charge.dto';
 import { SubscriptionPlan, SubscriptionStatus } from './entities/subscription.entity';
 
 @Injectable()
@@ -24,8 +21,6 @@ export class BillingService {
     private readonly subscriptionRepository: SubscriptionRepository,
     private readonly subscriptionEventRepository: SubscriptionEventRepository,
     private readonly dodoCustomerRepository: DodoCustomerRepository,
-    private readonly organizationMemberRepository: OrganizationMemberRepository,
-    private readonly organizationOwnerRepository: OrganizationOwnerRepository,
   ) {
     const apiKey = this.configService.get<string>('DODO_PAYMENTS_API_KEY');
     const environment = this.configService.get<string>('DODO_PAYMENTS_ENVIRONMENT', 'test_mode');
@@ -42,6 +37,35 @@ export class BillingService {
       bearerToken: apiKey || '',
       environment: environment as 'test_mode' | 'live_mode',
     });
+
+    // Validate product IDs at startup
+    this.validateProductIds();
+  }
+
+  /**
+   * Validate that all required product IDs are configured
+   */
+  private validateProductIds(): void {
+    const proProductId = this.configService.get<string>('DODO_PRODUCT_ID_PRO') || process.env.DODO_PRODUCT_ID_PRO;
+    const scaleProductId = this.configService.get<string>('DODO_PRODUCT_ID_SCALE') || process.env.DODO_PRODUCT_ID_SCALE;
+    const enterpriseProductId = this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || process.env.DODO_PRODUCT_ID_ENTERPRISE;
+
+    this.logger.log('🔍 Validating product IDs at startup:');
+    this.logger.log(`   DODO_PRODUCT_ID_PRO: ${proProductId || 'NOT SET'}`);
+    this.logger.log(`   DODO_PRODUCT_ID_SCALE: ${scaleProductId || 'NOT SET'}`);
+    this.logger.log(`   DODO_PRODUCT_ID_ENTERPRISE: ${enterpriseProductId || 'NOT SET'}`);
+
+    if (!proProductId) {
+      this.logger.error('❌ DODO_PRODUCT_ID_PRO is not set! Checkout for PRO plan will fail.');
+    }
+    if (!scaleProductId && !proProductId) {
+      this.logger.error('❌ Neither DODO_PRODUCT_ID_SCALE nor DODO_PRODUCT_ID_PRO is set! Checkout for SCALE plan will fail.');
+    } else if (!scaleProductId && proProductId) {
+      this.logger.warn('⚠️  DODO_PRODUCT_ID_SCALE not set. Will use DODO_PRODUCT_ID_PRO as fallback for SCALE plan.');
+    }
+    if (!enterpriseProductId) {
+      this.logger.error('❌ DODO_PRODUCT_ID_ENTERPRISE is not set! Checkout for ENTERPRISE plan will fail.');
+    }
   }
 
   /**
@@ -53,7 +77,9 @@ export class BillingService {
     userName: string,
     dto: CreateCheckoutDto,
   ): Promise<{ checkoutUrl: string; sessionId: string }> {
+    this.logger.log(`🛒 Creating checkout session for plan: ${dto.planId}`);
     const productId = this.getProductIdForPlan(dto.planId);
+    this.logger.log(`📦 Product ID for ${dto.planId}: ${productId}`);
     if (!productId) {
       throw new Error(`Product ID not found for plan: ${dto.planId}`);
     }
@@ -62,18 +88,6 @@ export class BillingService {
     const existingSubscription = await this.subscriptionRepository.findByUserId(userId);
     const isUpgrade = existingSubscription && existingSubscription.planId !== dto.planId;
 
-    // Calculate seat add-ons if seat count is provided
-    const seatConfig = this.getSeatConfig(dto.planId);
-    const addons: Array<{ addon_id: string; quantity: number }> = [];
-    
-    if (dto.seatCount && dto.seatCount > seatConfig.includedSeats && seatConfig.addonId) {
-      const extraSeats = dto.seatCount - seatConfig.includedSeats;
-      addons.push({
-        addon_id: seatConfig.addonId,
-        quantity: extraSeats,
-      });
-      this.logger.log(`Adding ${extraSeats} extra seats to checkout`);
-    }
 
     // Build metadata object (all values must be strings for Dodo Payments)
     const metadata: Record<string, string> = {
@@ -94,7 +108,6 @@ export class BillingService {
         {
           product_id: productId,
           quantity: 1,
-          ...(addons.length > 0 && { addons }),
         },
       ],
       customer: {
@@ -297,13 +310,6 @@ export class BillingService {
     console.log('========================================\n');
 
     try {
-      // Check if event already processed (idempotency)
-      const existingEvent = await this.subscriptionEventRepository.findByDodoEventId(eventId);
-      if (existingEvent) {
-        this.logger.log(`⏭️  Event ${eventId} already processed, skipping`);
-        return;
-      }
-
       // Extract data from payload - Dodo Payments wraps data in a 'data' field
       let eventData = payload;
       if (payload && typeof payload === 'object' && 'data' in payload) {
@@ -319,6 +325,28 @@ export class BillingService {
       // Create/update customer record if we have customer ID and userId
       if (customerId && userId) {
         await this.createOrUpdateCustomer(userId, customerId, data?.customer || data);
+      }
+
+      // Check if event already processed (idempotency)
+      // For critical events like cancellation/updates, we allow re-processing to ensure DB is in sync
+      const existingEvent = await this.subscriptionEventRepository.findByDodoEventId(eventId);
+      const isCriticalEvent = [
+        'subscription.updated',
+        'subscription.canceled',
+        'subscription.cancelled',
+        'subscription.on_hold',
+        'subscription.failed',
+      ].includes(eventType);
+
+      if (existingEvent && !isCriticalEvent) {
+        this.logger.log(`⏭️  Event ${eventId} already processed, skipping`);
+        return;
+      }
+
+      if (existingEvent && isCriticalEvent) {
+        this.logger.log(
+          `⚠️  Event ${eventId} was previously processed, but re-processing critical event to ensure DB sync`,
+        );
       }
 
       // Process based on event type
@@ -345,7 +373,8 @@ export class BillingService {
           await this.handleSubscriptionUpdated(eventData);
           break;
         case 'subscription.canceled':
-          this.logger.log('❌ Processing subscription.canceled event');
+        case 'subscription.cancelled':
+          this.logger.log('❌ Processing subscription.canceled/cancelled event');
           await this.handleSubscriptionCanceled(eventData);
           break;
         case 'subscription.failed':
@@ -491,6 +520,17 @@ export class BillingService {
           const existingEvent = await this.subscriptionEventRepository.findByDodoEventId(eventId);
           if (existingEvent) {
             this.logger.log(`ℹ️  Event already stored (idempotency check): ${eventId}`);
+            // For critical events, update the processed timestamp to reflect re-processing
+            if (isCriticalEvent) {
+              try {
+                await this.subscriptionEventRepository.update(existingEvent.id, {
+                  processed: new Date(),
+                });
+                this.logger.log(`🔄 Updated event processed timestamp for re-processing: ${eventId}`);
+              } catch (error) {
+                this.logger.warn(`⚠️  Failed to update event timestamp:`, error);
+              }
+            }
           } else {
             try {
               await this.subscriptionEventRepository.create({
@@ -628,22 +668,120 @@ export class BillingService {
       `🔄 Changing plan from ${subscription.planId} to ${dto.planId} for user ${userId}`,
     );
     this.logger.log(`📊 Using proration mode: ${prorationMode}`);
+    this.logger.log(`🔍 Subscription ID: ${subscription.dodoSubscriptionId}`);
+    this.logger.log(`🔍 Product ID: ${productId}`);
 
     try {
-      // Get current seat add-ons from subscription (if any)
-      // Note: We'll need to fetch current subscription details from Dodo to get add-ons
-      // For now, we'll change the plan and seats can be managed separately
-      // In a production system, you'd want to preserve seat add-ons when changing plans
-      
+      // First, verify the subscription exists in Dodo Payments
+      // This helps catch cases where the subscription ID in our DB doesn't match Dodo Payments
+      let dodoSubscription;
+      try {
+        dodoSubscription = await this.dodoClient.subscriptions.retrieve(subscription.dodoSubscriptionId);
+        this.logger.log(`✅ Subscription verified in Dodo Payments: ${subscription.dodoSubscriptionId}`);
+        this.logger.debug(`📦 Dodo subscription details:`, JSON.stringify(dodoSubscription, null, 2));
+      } catch (retrieveError: any) {
+        // If subscription doesn't exist (404), log the issue and re-throw with better context
+        if (retrieveError?.status === 404 || retrieveError?.error?.code === 'NOT_FOUND') {
+          this.logger.error(
+            `❌ Subscription ${subscription.dodoSubscriptionId} not found in Dodo Payments. ` +
+            `This might indicate the subscription was deleted or the ID is incorrect.`,
+          );
+          this.logger.error(`📦 Current subscription in DB:`, {
+            id: subscription.id,
+            userId: subscription.userId,
+            planId: subscription.planId,
+            dodoSubscriptionId: subscription.dodoSubscriptionId,
+            dodoCustomerId: subscription.dodoCustomerId,
+          });
+          
+          // Re-throw as NotFoundException with helpful message
+          throw new NotFoundException(
+            `Subscription not found in payment system. The subscription ID (${subscription.dodoSubscriptionId}) ` +
+            `does not exist in Dodo Payments. This might indicate the subscription was deleted or the ID is incorrect. ` +
+            `Please contact support or use the checkout flow to create a new subscription.`,
+          );
+        }
+        // Re-throw other errors
+        throw retrieveError;
+      }
+
       // Use changePlan API directly - no checkout session needed!
-      // According to Dodo Payments docs: subscriptions.changePlan()
-      await this.dodoClient.subscriptions.changePlan(subscription.dodoSubscriptionId, {
-        product_id: productId,
-        quantity: 1,
-        proration_billing_mode: prorationMode,
-        // Note: Add-ons are preserved automatically by Dodo Payments when changing plans
-        // If you want to reset add-ons, pass addons: []
-      });
+      // According to Dodo Payments docs: POST /subscriptions/{subscription_id}/change-plan
+      // Make direct HTTP call using axios since SDK method might not exist or be working correctly
+      const apiKey = this.configService.get<string>('DODO_PAYMENTS_API_KEY');
+      const environment = this.configService.get<string>('DODO_PAYMENTS_ENVIRONMENT', 'test_mode');
+      const baseUrl = environment === 'live_mode' 
+        ? 'https://api.dodopayments.com' 
+        : 'https://api-sandbox.dodopayments.com';
+
+      this.logger.log(`📡 Making direct API call to change plan`);
+      this.logger.log(`   URL: ${baseUrl}/subscriptions/${subscription.dodoSubscriptionId}/change-plan`);
+      this.logger.log(`   Product ID: ${productId}`);
+      this.logger.log(`   Proration Mode: ${prorationMode}`);
+
+      try {
+        // Make direct HTTP call to Dodo Payments API
+        const response = await axios.post(
+          `${baseUrl}/subscriptions/${subscription.dodoSubscriptionId}/change-plan`,
+          {
+            product_id: productId,
+            quantity: 1,
+            proration_billing_mode: prorationMode,
+            addons: [],
+          },
+          {
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        this.logger.log(`✅ Change plan API call successful:`, JSON.stringify(response.data, null, 2));
+      } catch (apiError: any) {
+        this.logger.error(`❌ Direct API call failed:`, {
+          status: apiError?.response?.status,
+          statusText: apiError?.response?.statusText,
+          data: apiError?.response?.data,
+          message: apiError?.message,
+          url: apiError?.config?.url,
+        });
+
+        // If direct API call fails, try SDK method as fallback (if it exists)
+        if (typeof this.dodoClient.subscriptions.changePlan === 'function') {
+          this.logger.log(`🔄 Trying SDK changePlan method as fallback`);
+          try {
+            await this.dodoClient.subscriptions.changePlan(subscription.dodoSubscriptionId, {
+              product_id: productId,
+              quantity: 1,
+              proration_billing_mode: prorationMode,
+              addons: [],
+            });
+            this.logger.log(`✅ Plan changed using SDK method`);
+          } catch (sdkError: any) {
+            this.logger.error(`❌ SDK method also failed:`, sdkError);
+            // Re-throw the original API error with more context
+            if (apiError?.response?.status === 404) {
+              throw new NotFoundException(
+                `Change plan endpoint not found. The subscription ID (${subscription.dodoSubscriptionId}) may be invalid, ` +
+                `or the change-plan endpoint may not be available for this subscription. ` +
+                `Error: ${apiError?.response?.data?.message || apiError?.message}`
+              );
+            }
+            throw new Error(`Failed to change plan: ${apiError?.response?.data?.message || apiError?.message}`);
+          }
+        } else {
+          // No SDK fallback, throw the original error
+          if (apiError?.response?.status === 404) {
+            throw new NotFoundException(
+              `Change plan endpoint not found. The subscription ID (${subscription.dodoSubscriptionId}) may be invalid, ` +
+              `or the change-plan endpoint may not be available for this subscription. ` +
+              `Error: ${apiError?.response?.data?.message || apiError?.message}`
+            );
+          }
+          throw new Error(`Failed to change plan: ${apiError?.response?.data?.message || apiError?.message}`);
+        }
+      }
 
       this.logger.log(`✅ Plan change successful via Dodo Payments API`);
 
@@ -659,8 +797,20 @@ export class BillingService {
         success: true,
         message: `Plan successfully changed to ${dto.planId}. Changes will be reflected immediately.`,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Failed to change plan via Dodo Payments API:`, error);
+      
+      // Handle 404 errors specifically
+      if (error?.status === 404 || error?.error?.code === 'NOT_FOUND') {
+        this.logger.error(
+          `❌ Subscription ${subscription.dodoSubscriptionId} not found in Dodo Payments. ` +
+          `This might indicate the subscription was deleted or the ID is incorrect.`,
+        );
+        throw new NotFoundException(
+          'Subscription not found in payment system. The subscription ID may be invalid or the subscription may have been deleted. Please contact support.',
+        );
+      }
+      
       if (error instanceof Error) {
         throw new Error(`Failed to change plan: ${error.message}`);
       }
@@ -862,27 +1012,87 @@ export class BillingService {
       subscription_id: string;
       current_period_start?: string;
       current_period_end?: string;
+      next_billing_date?: string;
       status?: string;
+      cancelled_at?: string;
+      cancel_at_next_billing_date?: boolean;
+      cancel_at_period_end?: boolean;
+      metadata?: { userId?: string };
     };
 
-    const subscription = await this.subscriptionRepository.findByDodoSubscriptionId(
+    let subscription = await this.subscriptionRepository.findByDodoSubscriptionId(
       data.subscription_id,
     );
 
+    // If not found by subscription_id, try to find by userId from metadata
+    if (!subscription && data.metadata?.userId) {
+      this.logger.log(
+        `🔍 Subscription not found by subscription_id, trying to find by userId: ${data.metadata.userId}`,
+      );
+      subscription = await this.subscriptionRepository.findByUserId(data.metadata.userId);
+      if (subscription) {
+        // Update subscription with the new subscription_id if it's different
+        if (subscription.dodoSubscriptionId !== data.subscription_id) {
+          this.logger.log(
+            `🔄 Updating subscription ${subscription.id} with new subscription_id: ${data.subscription_id}`,
+          );
+          subscription = await this.subscriptionRepository.update(subscription.id, {
+            dodoSubscriptionId: data.subscription_id,
+          });
+        }
+      }
+    }
+
     if (subscription) {
       const updateData: any = {};
+      
+      // Update period dates
       if (data.current_period_start) {
         updateData.currentPeriodStart = new Date(data.current_period_start);
       }
       if (data.current_period_end) {
         updateData.currentPeriodEnd = new Date(data.current_period_end);
       }
+      
+      // Update status
       if (data.status) {
         updateData.status = data.status as SubscriptionStatus;
       }
+      
+      // Handle cancellation fields
+      if (data.cancelled_at) {
+        updateData.canceledAt = new Date(data.cancelled_at);
+        // If cancelled_at is set, status should be canceled
+        if (!data.status || data.status !== 'cancelled') {
+          updateData.status = SubscriptionStatus.CANCELED;
+        }
+      }
+      
+      // Handle cancel_at_period_end
+      if (data.cancel_at_next_billing_date !== undefined || data.cancel_at_period_end !== undefined) {
+        const shouldCancelAtPeriodEnd = data.cancel_at_next_billing_date || data.cancel_at_period_end;
+        if (shouldCancelAtPeriodEnd && data.current_period_end) {
+          updateData.cancelAtPeriodEnd = new Date(data.current_period_end);
+        } else if (!shouldCancelAtPeriodEnd) {
+          updateData.cancelAtPeriodEnd = null;
+        }
+      }
 
       await this.subscriptionRepository.update(subscription.id, updateData);
-      this.logger.log(`✅ Updated subscription: ${subscription.id}`);
+      this.logger.log(`✅ Updated subscription: ${subscription.id}`, JSON.stringify(updateData, null, 2));
+      
+      // Check if currentPeriodEnd has passed and handle accordingly
+      if (updateData.currentPeriodEnd) {
+        const periodEnd = new Date(updateData.currentPeriodEnd);
+        const now = new Date();
+        if (periodEnd < now && updateData.status === SubscriptionStatus.CANCELED) {
+          this.logger.log(
+            `⏰ Subscription ${subscription.id} period has ended and is cancelled. Stopping all work.`,
+          );
+          // TODO: Add logic to stop all work for this subscription
+          // This could include: stopping pipelines, revoking access, etc.
+        }
+      }
     } else {
       this.logger.warn(`⚠️  Subscription not found: ${data.subscription_id}`);
     }
@@ -1084,18 +1294,93 @@ export class BillingService {
    * Handle subscription canceled event
    */
   private async handleSubscriptionCanceled(payload: unknown): Promise<void> {
+    this.logger.log('❌ handleSubscriptionCanceled called');
     const data = payload as {
       subscription_id: string;
+      cancelled_at?: string;
       canceled_at?: string;
+      current_period_end?: string;
+      next_billing_date?: string;
+      cancel_at_next_billing_date?: boolean;
+      status?: string;
+      metadata?: { userId?: string };
     };
-    const subscription = await this.subscriptionRepository.findByDodoSubscriptionId(
+    
+    let subscription = await this.subscriptionRepository.findByDodoSubscriptionId(
       data.subscription_id,
     );
+
+    // If not found by subscription_id, try to find by userId from metadata
+    if (!subscription && data.metadata?.userId) {
+      this.logger.log(
+        `🔍 Subscription not found by subscription_id, trying to find by userId: ${data.metadata.userId}`,
+      );
+      subscription = await this.subscriptionRepository.findByUserId(data.metadata.userId);
+      if (subscription) {
+        // Update subscription with the new subscription_id if it's different
+        if (subscription.dodoSubscriptionId !== data.subscription_id) {
+          this.logger.log(
+            `🔄 Updating subscription ${subscription.id} with new subscription_id: ${data.subscription_id}`,
+          );
+          subscription = await this.subscriptionRepository.update(subscription.id, {
+            dodoSubscriptionId: data.subscription_id,
+          });
+        }
+      }
+    }
+    
     if (subscription) {
-      await this.subscriptionRepository.update(subscription.id, {
+      const updateData: any = {
         status: SubscriptionStatus.CANCELED,
-        canceledAt: data.canceled_at ? new Date(data.canceled_at) : new Date(),
-      });
+      };
+      
+      // Set canceledAt - try both spellings (cancelled_at and canceled_at)
+      const cancelledAt = data.cancelled_at || data.canceled_at;
+      if (cancelledAt) {
+        updateData.canceledAt = new Date(cancelledAt);
+      } else {
+        updateData.canceledAt = new Date();
+      }
+      
+      // Update currentPeriodEnd if provided
+      if (data.current_period_end) {
+        updateData.currentPeriodEnd = new Date(data.current_period_end);
+      } else if (data.next_billing_date) {
+        // Use next_billing_date as fallback for period end
+        updateData.currentPeriodEnd = new Date(data.next_billing_date);
+      }
+      
+      // Handle cancel_at_period_end
+      if (data.cancel_at_next_billing_date !== undefined) {
+        if (data.cancel_at_next_billing_date && updateData.currentPeriodEnd) {
+          updateData.cancelAtPeriodEnd = updateData.currentPeriodEnd;
+        } else {
+          updateData.cancelAtPeriodEnd = null;
+        }
+      }
+      
+      await this.subscriptionRepository.update(subscription.id, updateData);
+      this.logger.log(`✅ Cancelled subscription: ${subscription.id}`, JSON.stringify(updateData, null, 2));
+      
+      // Check if currentPeriodEnd has passed - if so, immediately stop all work
+      const periodEnd = updateData.currentPeriodEnd || subscription.currentPeriodEnd;
+      if (periodEnd) {
+        const periodEndDate = new Date(periodEnd);
+        const now = new Date();
+        if (periodEndDate < now) {
+          this.logger.log(
+            `⏰ Subscription ${subscription.id} period has ended and is cancelled. Stopping all work immediately.`,
+          );
+          // TODO: Add logic to immediately stop all work for this subscription
+          // This could include: stopping pipelines, revoking access, disabling features, etc.
+        } else {
+          this.logger.log(
+            `⏰ Subscription ${subscription.id} will remain active until ${periodEndDate.toISOString()}`,
+          );
+        }
+      }
+    } else {
+      this.logger.warn(`⚠️  Subscription not found for cancellation: ${data.subscription_id}`);
     }
   }
 
@@ -1202,364 +1487,91 @@ export class BillingService {
     }
   }
 
-  /**
-   * Update payment method for subscription
-   * According to Dodo Payments docs: https://docs.dodopayments.com/features/subscription
-   * Useful for handling failed payments (on_hold status)
-   */
-  async updatePaymentMethod(
-    userId: string,
-    returnUrl: string,
-  ): Promise<{ url: string; sessionId?: string }> {
-    const subscription = await this.subscriptionRepository.findByUserId(userId);
-    if (!subscription) {
-      throw new NotFoundException('Subscription not found');
-    }
 
-    if (!subscription.dodoSubscriptionId) {
-      throw new NotFoundException('Active subscription ID not found. Please contact support.');
-    }
-
-    this.logger.log(`💳 Updating payment method for subscription: ${subscription.dodoSubscriptionId}`);
-
-    try {
-      // Use subscriptions.updatePaymentMethod API
-      const response = await this.dodoClient.subscriptions.updatePaymentMethod(
-        subscription.dodoSubscriptionId,
-        {
-          type: 'new',
-          return_url: returnUrl,
-        },
-      );
-
-      this.logger.log(`✅ Payment method update URL generated`);
-
-      // Extract URL from response
-      const url = (response as any).url || (response as any).checkout_url;
-      const sessionId = (response as any).session_id;
-
-      if (!url) {
-        this.logger.error('No URL in payment method update response:', JSON.stringify(response, null, 2));
-        throw new Error('Failed to get payment method update URL from Dodo Payments');
-      }
-
-      return {
-        url: url as string,
-        sessionId: sessionId as string | undefined,
-      };
-    } catch (error) {
-      this.logger.error(`❌ Failed to update payment method:`, error);
-      if (error instanceof Error) {
-        throw new Error(`Failed to update payment method: ${error.message}`);
-      }
-      throw new Error('Failed to update payment method. Please try again.');
-    }
-  }
-
-  /**
-   * Calculate billable seats for an organization
-   * Counts OWNER, ADMIN, EDITOR roles (VIEWER does not count)
-   */
-  async calculateBillableSeats(organizationId: string): Promise<number> {
-    // Count owners (from organization_owners table)
-    const owners = await this.organizationOwnerRepository.findByOrganizationId(organizationId);
-    const ownerCount = owners.length;
-
-    // Count members with billable roles (ADMIN, EDITOR - not VIEWER)
-    const members = await this.organizationMemberRepository.findByOrganizationId(organizationId);
-    const billableMembers = members.filter(
-      (m) =>
-        (m.status === 'active' || m.status === 'accepted') &&
-        (m.role === 'ADMIN' || m.role === 'EDITOR'),
-    );
-
-    return ownerCount + billableMembers.length;
-  }
-
-  /**
-   * Get seat configuration for a plan
-   */
-  getSeatConfig(planId: SubscriptionPlan): {
-    includedSeats: number;
-    extraSeatPrice: number; // in cents
-    addonId: string;
-  } {
-    const configs: Record<SubscriptionPlan, { includedSeats: number; extraSeatPrice: number; addonId: string }> = {
-      [SubscriptionPlan.FREE]: {
-        includedSeats: 1,
-        extraSeatPrice: 0,
-        addonId: '',
-      },
-      [SubscriptionPlan.PRO]: {
-        includedSeats: 3,
-        extraSeatPrice: 500, // $5.00 in cents
-        addonId: this.configService.get<string>('DODO_ADDON_ID_PRO_SEAT') || 'addon_pro_seat',
-      },
-      [SubscriptionPlan.SCALE]: {
-        includedSeats: 10,
-        extraSeatPrice: 400, // $4.00 in cents
-        addonId: this.configService.get<string>('DODO_ADDON_ID_SCALE_SEAT') || 'addon_scale_seat',
-      },
-      [SubscriptionPlan.ENTERPRISE]: {
-        includedSeats: 0, // Contract-based
-        extraSeatPrice: 300, // $3.00 in cents (typical)
-        addonId: this.configService.get<string>('DODO_ADDON_ID_ENTERPRISE_SEAT') || 'addon_enterprise_seat',
-      },
-    };
-
-    return configs[planId] || configs[SubscriptionPlan.FREE];
-  }
-
-  /**
-   * Manage seats for a subscription
-   * Adds or removes seats based on the desired count
-   */
-  async manageSeats(
-    userId: string,
-    organizationId: string,
-    dto: ManageSeatsDto,
-  ): Promise<{ success: boolean; message: string; newSeatCount: number }> {
-    const subscription = await this.subscriptionRepository.findByUserId(userId);
-    if (!subscription) {
-      throw new NotFoundException('Subscription not found');
-    }
-
-    if (!subscription.dodoSubscriptionId) {
-      throw new NotFoundException('Active subscription ID not found. Please contact support.');
-    }
-
-    // Get current billable seats
-    const currentBillableSeats = await this.calculateBillableSeats(organizationId);
-    const seatConfig = this.getSeatConfig(subscription.planId as SubscriptionPlan);
-
-    // Validate seat count
-    if (dto.seatCount < seatConfig.includedSeats) {
-      throw new BadRequestException(
-        `Minimum seat count for ${subscription.planId} plan is ${seatConfig.includedSeats}`,
-      );
-    }
-
-    // Calculate extra seats needed
-    const extraSeatsNeeded = Math.max(0, dto.seatCount - seatConfig.includedSeats);
-
-    this.logger.log(
-      `🪑 Managing seats for user ${userId}: Current=${currentBillableSeats}, Desired=${dto.seatCount}, Extra=${extraSeatsNeeded}`,
-    );
-
-    try {
-      // Use changePlan API to update seat add-ons
-      const addons = extraSeatsNeeded > 0
-        ? [{ addon_id: seatConfig.addonId, quantity: extraSeatsNeeded }]
-        : [];
-
-      await this.dodoClient.subscriptions.changePlan(subscription.dodoSubscriptionId, {
-        product_id: this.getProductIdForPlan(subscription.planId as SubscriptionPlan),
-        quantity: 1,
-        proration_billing_mode: 'prorated_immediately',
-        addons,
-      });
-
-      this.logger.log(`✅ Seats updated successfully`);
-
-      return {
-        success: true,
-        message: `Seats updated to ${dto.seatCount} (${seatConfig.includedSeats} included + ${extraSeatsNeeded} extra)`,
-        newSeatCount: dto.seatCount,
-      };
-    } catch (error) {
-      this.logger.error(`❌ Failed to manage seats:`, error);
-      if (error instanceof Error) {
-        throw new Error(`Failed to manage seats: ${error.message}`);
-      }
-      throw new Error('Failed to manage seats. Please try again.');
-    }
-  }
 
   /**
    * Get product ID for a plan
    */
   private getProductIdForPlan(planId: SubscriptionPlan): string {
-    const productIdMap: Record<SubscriptionPlan, string> = {
-      [SubscriptionPlan.FREE]: '',
-      [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
-      [SubscriptionPlan.SCALE]:
-        this.configService.get<string>('DODO_PRODUCT_ID_SCALE') || 'prod_scale',
-      [SubscriptionPlan.ENTERPRISE]:
-        this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
-    };
+    // Read environment variables - use process.env directly as fallback to ensure we get the value
+    const proProductId = this.configService.get<string>('DODO_PRODUCT_ID_PRO') || process.env.DODO_PRODUCT_ID_PRO;
+    const scaleProductId = this.configService.get<string>('DODO_PRODUCT_ID_SCALE') || process.env.DODO_PRODUCT_ID_SCALE;
+    const enterpriseProductId = this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || process.env.DODO_PRODUCT_ID_ENTERPRISE;
 
-    return productIdMap[planId] || '';
-  }
+    // Debug logging to verify environment variables are being read
+    this.logger.log(`🔍 Environment variables for plan ${planId}:`);
+    this.logger.log(`   DODO_PRODUCT_ID_PRO: ${proProductId || 'NOT SET'}`);
+    this.logger.log(`   DODO_PRODUCT_ID_SCALE: ${scaleProductId || 'NOT SET'}`);
+    this.logger.log(`   DODO_PRODUCT_ID_ENTERPRISE: ${enterpriseProductId || 'NOT SET'}`);
 
-  /**
-   * Create on-demand subscription (mandate) for execution overages
-   * This authorizes the payment method for variable charges later
-   * 
-   * Note: Uses the user's current subscription product to create an on-demand subscription
-   */
-  async createOnDemandSubscription(
-    userId: string,
-    userEmail: string,
-    userName: string,
-    returnUrl: string,
-  ): Promise<{ checkoutUrl: string; sessionId: string }> {
-    // Get user's current subscription to use the same product
-    const subscription = await this.subscriptionRepository.findByUserId(userId);
-    
-    if (!subscription) {
-      throw new NotFoundException(
-        'No active subscription found. Please subscribe to a plan first before authorizing on-demand payments.',
+    // Build product ID map with proper fallbacks
+    let productId = '';
+
+    switch (planId) {
+      case SubscriptionPlan.FREE:
+        productId = '';
+        break;
+      case SubscriptionPlan.PRO:
+        productId = proProductId || '';
+        if (!productId) {
+          this.logger.error(`❌ DODO_PRODUCT_ID_PRO is not set`);
+          throw new Error(
+            'DODO_PRODUCT_ID_PRO is not set in environment variables. Please configure it in your .env file.'
+          );
+        }
+        break;
+      case SubscriptionPlan.SCALE:
+        // If SCALE product ID is not set, use PRO product ID as fallback
+        // NEVER use hardcoded 'prod_scale' - always use actual product IDs from env
+        productId = scaleProductId || proProductId || '';
+        if (!productId) {
+          this.logger.error(`❌ Neither DODO_PRODUCT_ID_SCALE nor DODO_PRODUCT_ID_PRO is set`);
+          throw new Error(
+            'Neither DODO_PRODUCT_ID_SCALE nor DODO_PRODUCT_ID_PRO is set. Please configure at least DODO_PRODUCT_ID_PRO in your .env file.'
+          );
+        }
+        if (!scaleProductId && proProductId) {
+          this.logger.warn(
+            `⚠️  DODO_PRODUCT_ID_SCALE not set. Using DODO_PRODUCT_ID_PRO (${proProductId}) as fallback for SCALE plan. ` +
+            `Please set DODO_PRODUCT_ID_SCALE in your .env file if you want a separate product for SCALE plan.`
+          );
+        } else if (scaleProductId) {
+          this.logger.log(`✅ Using DODO_PRODUCT_ID_SCALE: ${scaleProductId}`);
+        }
+        break;
+      case SubscriptionPlan.ENTERPRISE:
+        productId = enterpriseProductId || '';
+        if (!productId) {
+          this.logger.error(`❌ DODO_PRODUCT_ID_ENTERPRISE is not set`);
+          throw new Error(
+            'DODO_PRODUCT_ID_ENTERPRISE is not set in environment variables. Please configure it in your .env file.'
+          );
+        }
+        break;
+      default:
+        this.logger.error(`❌ Unknown plan: ${planId}`);
+        throw new Error(`Unknown plan: ${planId}`);
+    }
+
+    if (!productId && planId !== SubscriptionPlan.FREE) {
+      this.logger.error(`❌ No product ID found for plan: ${planId}`);
+      throw new Error(
+        `Product ID not configured for plan: ${planId}. ` +
+        `Please set DODO_PRODUCT_ID_${String(planId).toUpperCase()} in your environment variables.`
       );
     }
 
-    // Get the product ID for the user's current plan
-    // Cast planId to SubscriptionPlan enum for type safety
-    const productId = this.getProductIdForPlan(subscription.planId as SubscriptionPlan);
-    if (!productId) {
-      throw new Error(`Product ID not found for plan: ${subscription.planId}`);
+    // Validate product ID format - should start with 'pdt_' not 'prod_'
+    if (productId && productId.startsWith('prod_')) {
+      this.logger.error(`❌ Invalid product ID format: ${productId}. Product IDs should start with 'pdt_', not 'prod_'.`);
+      throw new Error(
+        `Invalid product ID format for plan ${planId}: ${productId}. ` +
+        `Product IDs should start with 'pdt_'. Please check your DODO_PRODUCT_ID_${String(planId).toUpperCase()} in .env file.`
+      );
     }
 
-    // Use existing customer ID if available
-    const customerId = subscription.dodoCustomerId;
-
-    this.logger.log(
-      `🔄 Creating on-demand subscription (mandate) for user ${userId} with product ${productId}`,
-    );
-
-    try {
-      // Create checkout session with on-demand subscription_data
-      // According to docs: subscription_data.on_demand.mandate_only: true
-      // This authorizes a payment method (mandate) for variable charges later
-      // We use the same product as the base subscription, but create it as on-demand
-      const session = await this.dodoClient.checkoutSessions.create({
-        product_cart: [
-          {
-            product_id: productId,
-            quantity: 1,
-          },
-        ],
-        customer: customerId
-          ? { customer_id: customerId }
-          : {
-              email: userEmail,
-              name: userName,
-            },
-        return_url: returnUrl,
-        subscription_data: {
-          on_demand: {
-            mandate_only: true, // Authorize mandate only, no initial charge
-            // Optional: set mandate_only: false and provide product_price to charge immediately
-            // product_price: 1000, // optional: charge $10.00 now if mandate_only is false
-            // product_currency: 'USD',
-            // product_description: 'Custom initial charge',
-            // adaptive_currency_fees_inclusive: false,
-          },
-        },
-        metadata: {
-          userId,
-          type: 'on_demand_mandate',
-          baseSubscriptionId: subscription.dodoSubscriptionId || '',
-          basePlanId: subscription.planId,
-        },
-      });
-
-      const sessionId = (session as any).session_id;
-      const checkoutUrl = (session as any).checkout_url;
-
-      if (!sessionId) {
-        throw new Error('No session_id in response');
-      }
-
-      if (!checkoutUrl) {
-        throw new Error('No checkout_url in response');
-      }
-
-      this.logger.log(`✅ On-demand subscription checkout created: ${sessionId}`);
-
-      return {
-        checkoutUrl: checkoutUrl as string,
-        sessionId: sessionId as string,
-      };
-    } catch (error) {
-      this.logger.error(`❌ Failed to create on-demand subscription:`, error);
-      if (error instanceof Error) {
-        throw new Error(`Failed to create on-demand subscription: ${error.message}`);
-      }
-      throw new Error('Failed to create on-demand subscription. Please try again.');
-    }
+    this.logger.log(`✅ Final product ID for ${planId}: ${productId}`);
+    return productId;
   }
 
-  /**
-   * Create on-demand charge for execution overages
-   * According to docs: POST /subscriptions/{subscription_id}/charge
-   * 
-   * IMPORTANT: The subscription must be an on-demand subscription (created with mandate_only: true)
-   * Regular subscriptions cannot be charged - they are billed automatically on schedule.
-   * 
-   * For execution overages, you need to:
-   * 1. First create an on-demand subscription using createOnDemandSubscription()
-   * 2. Then use this method to charge variable amounts
-   */
-  async createOnDemandCharge(
-    userId: string,
-    dto: OnDemandChargeDto,
-  ): Promise<{ success: boolean; paymentId: string; message: string }> {
-    const subscription = await this.subscriptionRepository.findByUserId(userId);
-    if (!subscription) {
-      throw new NotFoundException('Subscription not found');
-    }
-
-    if (!subscription.dodoSubscriptionId) {
-      throw new NotFoundException('Active subscription ID not found. Please contact support.');
-    }
-
-    this.logger.log(
-      `💳 Creating on-demand charge for user ${userId}: ${dto.productPrice} cents`,
-    );
-
-    try {
-      // Use subscriptions.charge API for on-demand charges
-      // According to docs: POST /subscriptions/{subscription_id}/charge
-      // Required: product_price (in cents) - amount to charge in smallest currency unit
-      // Optional: product_currency, product_description, adaptive_currency_fees_inclusive, metadata
-      // 
-      // Example: to charge $25.00, pass product_price: 2500
-      const response = await this.dodoClient.subscriptions.charge(subscription.dodoSubscriptionId, {
-        product_price: dto.productPrice, // Required: amount in cents (e.g., 2500 = $25.00)
-        ...(dto.productCurrency && { product_currency: dto.productCurrency }),
-        ...(dto.productDescription && { product_description: dto.productDescription }),
-        // Note: adaptive_currency_fees_inclusive and metadata can be added if needed
-      });
-
-      // Response should contain payment_id according to docs
-      const paymentId = (response as any).payment_id;
-
-      if (!paymentId) {
-        this.logger.error('No payment_id in charge response:', JSON.stringify(response, null, 2));
-        throw new Error('No payment_id in charge response. The subscription may not be on-demand type.');
-      }
-
-      this.logger.log(`✅ On-demand charge created: ${paymentId}`);
-
-      return {
-        success: true,
-        paymentId,
-        message: 'On-demand charge created successfully',
-      };
-    } catch (error) {
-      this.logger.error(`❌ Failed to create on-demand charge:`, error);
-      
-      // Provide helpful error message based on common issues
-      if (error instanceof Error) {
-        if (error.message.includes('on-demand') || error.message.includes('not on-demand')) {
-          throw new BadRequestException(
-            'This subscription is not an on-demand subscription. ' +
-            'Please create an on-demand subscription first using the on-demand subscription endpoint.',
-          );
-        }
-        throw new Error(`Failed to create on-demand charge: ${error.message}`);
-      }
-      throw new Error('Failed to create on-demand charge. Please try again.');
-    }
-  }
 }
