@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, Post, Request, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request as ExpressRequest } from 'express';
@@ -6,6 +6,9 @@ import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { BillingService } from './billing.service';
 import { CreateCheckoutDto } from './dto/create-checkout.dto';
 import { ChangePlanDto } from './dto/change-plan.dto';
+import { ManageSeatsDto } from './dto/manage-seats.dto';
+import { OnDemandChargeDto } from './dto/on-demand-charge.dto';
+import { CreateOnDemandSubscriptionDto } from './dto/create-on-demand-subscription.dto';
 import { SubscriptionResponseDto } from './dto/subscription-response.dto';
 
 type ExpressRequestType = ExpressRequest;
@@ -285,5 +288,100 @@ export class BillingController {
       // Return received: true so Dodo doesn't keep retrying
       return { received: true };
     }
+  }
+
+  @Get('seats/:organizationId')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get current billable seat count for organization' })
+  async getSeatCount(
+    @Request() req: ExpressRequestType,
+    @Param('organizationId') organizationId: string,
+  ): Promise<{ seatCount: number; includedSeats: number; extraSeats: number }> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const seatCount = await this.billingService.calculateBillableSeats(organizationId);
+    const subscription = await this.billingService.getSubscription(userId);
+    
+    if (!subscription) {
+      return { seatCount, includedSeats: 1, extraSeats: 0 };
+    }
+
+    const seatConfig = this.billingService.getSeatConfig(subscription.planId as any);
+    const extraSeats = Math.max(0, seatCount - seatConfig.includedSeats);
+
+    return {
+      seatCount,
+      includedSeats: seatConfig.includedSeats,
+      extraSeats,
+    };
+  }
+
+  @Post('seats/:organizationId')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Manage seats for subscription' })
+  async manageSeats(
+    @Request() req: ExpressRequestType,
+    @Param('organizationId') organizationId: string,
+    @Body() dto: ManageSeatsDto,
+  ): Promise<{ success: boolean; message: string; newSeatCount: number }> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    return await this.billingService.manageSeats(userId, organizationId, dto);
+  }
+
+  @Post('on-demand-subscription')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Create on-demand subscription (mandate) for execution overages',
+    description:
+      'Creates a checkout session to authorize a payment method for variable charges. Use this for execution overages.',
+  })
+  async createOnDemandSubscription(
+    @Request() req: ExpressRequestType,
+    @Body() dto: CreateOnDemandSubscriptionDto,
+  ): Promise<{ checkoutUrl: string; sessionId: string }> {
+    const userId = req.user?.id;
+    const userEmail = req.user?.email || '';
+    const userName = req.user?.email?.split('@')[0] || userEmail;
+
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    return await this.billingService.createOnDemandSubscription(
+      userId,
+      userEmail,
+      userName,
+      dto.returnUrl,
+    );
+  }
+
+  @Post('on-demand-charge')
+  @UseGuards(SupabaseAuthGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Create on-demand charge for execution overages',
+    description:
+      'Charges a variable amount against an on-demand subscription. Requires the subscription to be on-demand type.',
+  })
+  async createOnDemandCharge(
+    @Request() req: ExpressRequestType,
+    @Body() dto: OnDemandChargeDto,
+  ): Promise<{ success: boolean; paymentId: string; message: string }> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    return await this.billingService.createOnDemandCharge(userId, dto);
   }
 }

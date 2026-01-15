@@ -1,12 +1,16 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import DodoPayments from 'dodopayments';
 import { SubscriptionRepository } from './repositories/subscription.repository';
 import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
 import { DodoCustomerRepository } from './repositories/dodo-customer.repository';
+import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
+import { OrganizationOwnerRepository } from '../organizations/repositories/organization-owner.repository';
 import type { CreateCheckoutDto } from './dto/create-checkout.dto';
 import type { ChangePlanDto } from './dto/change-plan.dto';
+import type { ManageSeatsDto } from './dto/manage-seats.dto';
+import type { OnDemandChargeDto } from './dto/on-demand-charge.dto';
 import { SubscriptionPlan, SubscriptionStatus } from './entities/subscription.entity';
 
 @Injectable()
@@ -20,6 +24,8 @@ export class BillingService {
     private readonly subscriptionRepository: SubscriptionRepository,
     private readonly subscriptionEventRepository: SubscriptionEventRepository,
     private readonly dodoCustomerRepository: DodoCustomerRepository,
+    private readonly organizationMemberRepository: OrganizationMemberRepository,
+    private readonly organizationOwnerRepository: OrganizationOwnerRepository,
   ) {
     const apiKey = this.configService.get<string>('DODO_PAYMENTS_API_KEY');
     const environment = this.configService.get<string>('DODO_PAYMENTS_ENVIRONMENT', 'test_mode');
@@ -47,15 +53,7 @@ export class BillingService {
     userName: string,
     dto: CreateCheckoutDto,
   ): Promise<{ checkoutUrl: string; sessionId: string }> {
-    // Map plan to product ID (should be configured in env or database)
-    const productIdMap: Record<SubscriptionPlan, string> = {
-      [SubscriptionPlan.FREE]: '', // Not used, handled above
-      [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
-      [SubscriptionPlan.ENTERPRISE]:
-        this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
-    };
-
-    const productId = productIdMap[dto.planId];
+    const productId = this.getProductIdForPlan(dto.planId);
     if (!productId) {
       throw new Error(`Product ID not found for plan: ${dto.planId}`);
     }
@@ -63,6 +61,19 @@ export class BillingService {
     // Check if user already has a subscription (for upgrades)
     const existingSubscription = await this.subscriptionRepository.findByUserId(userId);
     const isUpgrade = existingSubscription && existingSubscription.planId !== dto.planId;
+
+    // Calculate seat add-ons if seat count is provided
+    const seatConfig = this.getSeatConfig(dto.planId);
+    const addons: Array<{ addon_id: string; quantity: number }> = [];
+    
+    if (dto.seatCount && dto.seatCount > seatConfig.includedSeats && seatConfig.addonId) {
+      const extraSeats = dto.seatCount - seatConfig.includedSeats;
+      addons.push({
+        addon_id: seatConfig.addonId,
+        quantity: extraSeats,
+      });
+      this.logger.log(`Adding ${extraSeats} extra seats to checkout`);
+    }
 
     // Build metadata object (all values must be strings for Dodo Payments)
     const metadata: Record<string, string> = {
@@ -83,6 +94,7 @@ export class BillingService {
         {
           product_id: productId,
           quantity: 1,
+          ...(addons.length > 0 && { addons }),
         },
       ],
       customer: {
@@ -601,17 +613,7 @@ export class BillingService {
       throw new NotFoundException('Active subscription ID not found. Please contact support.');
     }
 
-    // Map plan to product ID (should be configured in env or database)
-    const productIdMap: Record<SubscriptionPlan, string> = {
-      [SubscriptionPlan.FREE]: '', // Not used, handled above
-      [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
-      [SubscriptionPlan.SCALE]:
-        this.configService.get<string>('DODO_PRODUCT_ID_SCALE') || 'prod_scale',
-      [SubscriptionPlan.ENTERPRISE]:
-        this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
-    };
-
-    const productId = productIdMap[dto.planId];
+    const productId = this.getProductIdForPlan(dto.planId);
     if (!productId) {
       throw new Error(`Product ID not found for plan: ${dto.planId}`);
     }
@@ -628,12 +630,19 @@ export class BillingService {
     this.logger.log(`📊 Using proration mode: ${prorationMode}`);
 
     try {
+      // Get current seat add-ons from subscription (if any)
+      // Note: We'll need to fetch current subscription details from Dodo to get add-ons
+      // For now, we'll change the plan and seats can be managed separately
+      // In a production system, you'd want to preserve seat add-ons when changing plans
+      
       // Use changePlan API directly - no checkout session needed!
       // According to Dodo Payments docs: subscriptions.changePlan()
       await this.dodoClient.subscriptions.changePlan(subscription.dodoSubscriptionId, {
         product_id: productId,
         quantity: 1,
         proration_billing_mode: prorationMode,
+        // Note: Add-ons are preserved automatically by Dodo Payments when changing plans
+        // If you want to reset add-ons, pass addons: []
       });
 
       this.logger.log(`✅ Plan change successful via Dodo Payments API`);
@@ -1244,6 +1253,296 @@ export class BillingService {
         throw new Error(`Failed to update payment method: ${error.message}`);
       }
       throw new Error('Failed to update payment method. Please try again.');
+    }
+  }
+
+  /**
+   * Calculate billable seats for an organization
+   * Counts OWNER, ADMIN, EDITOR roles (VIEWER does not count)
+   */
+  async calculateBillableSeats(organizationId: string): Promise<number> {
+    // Count owners (from organization_owners table)
+    const owners = await this.organizationOwnerRepository.findByOrganizationId(organizationId);
+    const ownerCount = owners.length;
+
+    // Count members with billable roles (ADMIN, EDITOR - not VIEWER)
+    const members = await this.organizationMemberRepository.findByOrganizationId(organizationId);
+    const billableMembers = members.filter(
+      (m) =>
+        (m.status === 'active' || m.status === 'accepted') &&
+        (m.role === 'ADMIN' || m.role === 'EDITOR'),
+    );
+
+    return ownerCount + billableMembers.length;
+  }
+
+  /**
+   * Get seat configuration for a plan
+   */
+  getSeatConfig(planId: SubscriptionPlan): {
+    includedSeats: number;
+    extraSeatPrice: number; // in cents
+    addonId: string;
+  } {
+    const configs: Record<SubscriptionPlan, { includedSeats: number; extraSeatPrice: number; addonId: string }> = {
+      [SubscriptionPlan.FREE]: {
+        includedSeats: 1,
+        extraSeatPrice: 0,
+        addonId: '',
+      },
+      [SubscriptionPlan.PRO]: {
+        includedSeats: 3,
+        extraSeatPrice: 500, // $5.00 in cents
+        addonId: this.configService.get<string>('DODO_ADDON_ID_PRO_SEAT') || 'addon_pro_seat',
+      },
+      [SubscriptionPlan.SCALE]: {
+        includedSeats: 10,
+        extraSeatPrice: 400, // $4.00 in cents
+        addonId: this.configService.get<string>('DODO_ADDON_ID_SCALE_SEAT') || 'addon_scale_seat',
+      },
+      [SubscriptionPlan.ENTERPRISE]: {
+        includedSeats: 0, // Contract-based
+        extraSeatPrice: 300, // $3.00 in cents (typical)
+        addonId: this.configService.get<string>('DODO_ADDON_ID_ENTERPRISE_SEAT') || 'addon_enterprise_seat',
+      },
+    };
+
+    return configs[planId] || configs[SubscriptionPlan.FREE];
+  }
+
+  /**
+   * Manage seats for a subscription
+   * Adds or removes seats based on the desired count
+   */
+  async manageSeats(
+    userId: string,
+    organizationId: string,
+    dto: ManageSeatsDto,
+  ): Promise<{ success: boolean; message: string; newSeatCount: number }> {
+    const subscription = await this.subscriptionRepository.findByUserId(userId);
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
+    }
+
+    // Get current billable seats
+    const currentBillableSeats = await this.calculateBillableSeats(organizationId);
+    const seatConfig = this.getSeatConfig(subscription.planId as SubscriptionPlan);
+
+    // Validate seat count
+    if (dto.seatCount < seatConfig.includedSeats) {
+      throw new BadRequestException(
+        `Minimum seat count for ${subscription.planId} plan is ${seatConfig.includedSeats}`,
+      );
+    }
+
+    // Calculate extra seats needed
+    const extraSeatsNeeded = Math.max(0, dto.seatCount - seatConfig.includedSeats);
+
+    this.logger.log(
+      `🪑 Managing seats for user ${userId}: Current=${currentBillableSeats}, Desired=${dto.seatCount}, Extra=${extraSeatsNeeded}`,
+    );
+
+    try {
+      // Use changePlan API to update seat add-ons
+      const addons = extraSeatsNeeded > 0
+        ? [{ addon_id: seatConfig.addonId, quantity: extraSeatsNeeded }]
+        : [];
+
+      await this.dodoClient.subscriptions.changePlan(subscription.dodoSubscriptionId, {
+        product_id: this.getProductIdForPlan(subscription.planId as SubscriptionPlan),
+        quantity: 1,
+        proration_billing_mode: 'prorated_immediately',
+        addons,
+      });
+
+      this.logger.log(`✅ Seats updated successfully`);
+
+      return {
+        success: true,
+        message: `Seats updated to ${dto.seatCount} (${seatConfig.includedSeats} included + ${extraSeatsNeeded} extra)`,
+        newSeatCount: dto.seatCount,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to manage seats:`, error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to manage seats: ${error.message}`);
+      }
+      throw new Error('Failed to manage seats. Please try again.');
+    }
+  }
+
+  /**
+   * Get product ID for a plan
+   */
+  private getProductIdForPlan(planId: SubscriptionPlan): string {
+    const productIdMap: Record<SubscriptionPlan, string> = {
+      [SubscriptionPlan.FREE]: '',
+      [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
+      [SubscriptionPlan.SCALE]:
+        this.configService.get<string>('DODO_PRODUCT_ID_SCALE') || 'prod_scale',
+      [SubscriptionPlan.ENTERPRISE]:
+        this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
+    };
+
+    return productIdMap[planId] || '';
+  }
+
+  /**
+   * Create on-demand subscription (mandate) for execution overages
+   * This authorizes the payment method for variable charges later
+   */
+  async createOnDemandSubscription(
+    userId: string,
+    userEmail: string,
+    userName: string,
+    returnUrl: string,
+  ): Promise<{ checkoutUrl: string; sessionId: string }> {
+    // Get or create customer
+    const subscription = await this.subscriptionRepository.findByUserId(userId);
+    let customerId = subscription?.dodoCustomerId;
+
+    // If no customer ID, we'll create one during checkout
+    // For on-demand, we need a product - use a special on-demand product
+    const onDemandProductId =
+      this.configService.get<string>('DODO_PRODUCT_ID_ON_DEMAND') || 'prod_on_demand';
+
+    this.logger.log(`🔄 Creating on-demand subscription (mandate) for user ${userId}`);
+
+    try {
+      // Create checkout session with on-demand subscription_data
+      // According to docs: subscription_data.on_demand.mandate_only: true
+      // This authorizes a payment method (mandate) for variable charges later
+      const session = await this.dodoClient.checkoutSessions.create({
+        product_cart: [
+          {
+            product_id: onDemandProductId,
+            quantity: 1,
+          },
+        ],
+        customer: customerId
+          ? { customer_id: customerId }
+          : {
+              email: userEmail,
+              name: userName,
+            },
+        return_url: returnUrl,
+        subscription_data: {
+          on_demand: {
+            mandate_only: true, // Authorize mandate only, no initial charge
+            // Optional: set mandate_only: false and provide product_price to charge immediately
+            // product_price: 1000, // optional: charge $10.00 now if mandate_only is false
+            // product_currency: 'USD',
+            // product_description: 'Custom initial charge',
+            // adaptive_currency_fees_inclusive: false,
+          },
+        },
+        metadata: {
+          userId,
+          type: 'on_demand_mandate',
+        },
+      });
+
+      const sessionId = (session as any).session_id;
+      const checkoutUrl = (session as any).checkout_url;
+
+      if (!sessionId) {
+        throw new Error('No session_id in response');
+      }
+
+      if (!checkoutUrl) {
+        throw new Error('No checkout_url in response');
+      }
+
+      this.logger.log(`✅ On-demand subscription checkout created: ${sessionId}`);
+
+      return {
+        checkoutUrl: checkoutUrl as string,
+        sessionId: sessionId as string,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to create on-demand subscription:`, error);
+      if (error instanceof Error) {
+        throw new Error(`Failed to create on-demand subscription: ${error.message}`);
+      }
+      throw new Error('Failed to create on-demand subscription. Please try again.');
+    }
+  }
+
+  /**
+   * Create on-demand charge for execution overages
+   * According to docs: POST /subscriptions/{subscription_id}/charge
+   * 
+   * IMPORTANT: The subscription must be an on-demand subscription (created with mandate_only: true)
+   * Regular subscriptions cannot be charged - they are billed automatically on schedule.
+   * 
+   * For execution overages, you need to:
+   * 1. First create an on-demand subscription using createOnDemandSubscription()
+   * 2. Then use this method to charge variable amounts
+   */
+  async createOnDemandCharge(
+    userId: string,
+    dto: OnDemandChargeDto,
+  ): Promise<{ success: boolean; paymentId: string; message: string }> {
+    const subscription = await this.subscriptionRepository.findByUserId(userId);
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
+    }
+
+    this.logger.log(
+      `💳 Creating on-demand charge for user ${userId}: ${dto.productPrice} cents`,
+    );
+
+    try {
+      // Use subscriptions.charge API for on-demand charges
+      // According to docs: POST /subscriptions/{subscription_id}/charge
+      // Required: product_price (in cents) - amount to charge in smallest currency unit
+      // Optional: product_currency, product_description, adaptive_currency_fees_inclusive, metadata
+      // 
+      // Example: to charge $25.00, pass product_price: 2500
+      const response = await this.dodoClient.subscriptions.charge(subscription.dodoSubscriptionId, {
+        product_price: dto.productPrice, // Required: amount in cents (e.g., 2500 = $25.00)
+        ...(dto.productCurrency && { product_currency: dto.productCurrency }),
+        ...(dto.productDescription && { product_description: dto.productDescription }),
+        // Note: adaptive_currency_fees_inclusive and metadata can be added if needed
+      });
+
+      // Response should contain payment_id according to docs
+      const paymentId = (response as any).payment_id;
+
+      if (!paymentId) {
+        this.logger.error('No payment_id in charge response:', JSON.stringify(response, null, 2));
+        throw new Error('No payment_id in charge response. The subscription may not be on-demand type.');
+      }
+
+      this.logger.log(`✅ On-demand charge created: ${paymentId}`);
+
+      return {
+        success: true,
+        paymentId,
+        message: 'On-demand charge created successfully',
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to create on-demand charge:`, error);
+      
+      // Provide helpful error message based on common issues
+      if (error instanceof Error) {
+        if (error.message.includes('on-demand') || error.message.includes('not on-demand')) {
+          throw new BadRequestException(
+            'This subscription is not an on-demand subscription. ' +
+            'Please create an on-demand subscription first using the on-demand subscription endpoint.',
+          );
+        }
+        throw new Error(`Failed to create on-demand charge: ${error.message}`);
+      }
+      throw new Error('Failed to create on-demand charge. Please try again.');
     }
   }
 }

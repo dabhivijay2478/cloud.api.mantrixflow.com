@@ -6,6 +6,8 @@ import { BillingService } from './billing.service';
 import { SubscriptionRepository } from './repositories/subscription.repository';
 import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
 import { DodoCustomerRepository } from './repositories/dodo-customer.repository';
+import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
+import { OrganizationOwnerRepository } from '../organizations/repositories/organization-owner.repository';
 
 @Module({
   controllers: [BillingController],
@@ -22,6 +24,8 @@ import { DodoCustomerRepository } from './repositories/dodo-customer.repository'
     SubscriptionRepository,
     SubscriptionEventRepository,
     DodoCustomerRepository,
+    OrganizationMemberRepository,
+    OrganizationOwnerRepository,
   ],
   exports: [BillingService, SubscriptionRepository],
 })

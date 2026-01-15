@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export enum SubscriptionPlan {
   FREE = 'free',
@@ -15,4 +15,9 @@ export class CreateCheckoutDto {
   @IsString()
   @IsNotEmpty()
   returnUrl: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  seatCount?: number; // Optional: total seats desired (includes base seats)
 }
