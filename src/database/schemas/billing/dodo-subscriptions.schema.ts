@@ -15,7 +15,7 @@ export const subscriptionStatusEnum = pgEnum('subscription_status', [
 /**
  * Enum for subscription plan
  */
-export const subscriptionPlanEnum = pgEnum('subscription_plan', ['basic', 'pro', 'enterprise']);
+export const subscriptionPlanEnum = pgEnum('subscription_plan', ['free', 'pro', 'scale', 'enterprise']);
 
 /**
  * Dodo Subscriptions Table

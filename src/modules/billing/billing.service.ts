@@ -49,8 +49,7 @@ export class BillingService {
   ): Promise<{ checkoutUrl: string; sessionId: string }> {
     // Map plan to product ID (should be configured in env or database)
     const productIdMap: Record<SubscriptionPlan, string> = {
-      [SubscriptionPlan.BASIC]:
-        this.configService.get<string>('DODO_PRODUCT_ID_BASIC') || 'prod_basic',
+      [SubscriptionPlan.FREE]: '', // Not used, handled above
       [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
       [SubscriptionPlan.ENTERPRISE]:
         this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
@@ -409,7 +408,7 @@ export class BillingService {
               userId: data.metadata.userId,
               dodoSubscriptionId: subscriptionId,
               dodoCustomerId: customerId, // Store customer ID
-              planId: (data.metadata.planId as SubscriptionPlan) || SubscriptionPlan.BASIC,
+              planId: (data.metadata.planId as SubscriptionPlan) || SubscriptionPlan.FREE,
               status: SubscriptionStatus.ACTIVE,
               currentPeriodStart: data.current_period_start
                 ? new Date(data.current_period_start)
@@ -528,14 +527,15 @@ export class BillingService {
     currentPlan: SubscriptionPlan | string,
     newPlan: SubscriptionPlan | string,
   ): 'prorated_immediately' | 'difference_immediately' | 'difference_at_period_end' {
-    // Plan tier order: BASIC < PRO < ENTERPRISE
+    // Plan tier order: FREE < PRO < SCALE < ENTERPRISE
     // Map both enum values and string values to tier numbers
     const getPlanTier = (plan: SubscriptionPlan | string): number => {
       const planStr = String(plan).toLowerCase();
-      if (planStr === 'basic' || planStr === SubscriptionPlan.BASIC) return 1;
+      if (planStr === 'free' || planStr === SubscriptionPlan.FREE) return 1;
       if (planStr === 'pro' || planStr === SubscriptionPlan.PRO) return 2;
-      if (planStr === 'enterprise' || planStr === SubscriptionPlan.ENTERPRISE) return 3;
-      return 1; // Default to basic tier
+      if (planStr === 'scale' || planStr === SubscriptionPlan.SCALE) return 3;
+      if (planStr === 'enterprise' || planStr === SubscriptionPlan.ENTERPRISE) return 4;
+      return 1; // Default to free tier
     };
 
     const currentTier = getPlanTier(currentPlan);
@@ -568,24 +568,6 @@ export class BillingService {
       throw new NotFoundException('Subscription not found');
     }
 
-    if (!subscription.dodoSubscriptionId) {
-      throw new NotFoundException('Active subscription ID not found. Please contact support.');
-    }
-
-    // Map plan to product ID (should be configured in env or database)
-    const productIdMap: Record<SubscriptionPlan, string> = {
-      [SubscriptionPlan.BASIC]:
-        this.configService.get<string>('DODO_PRODUCT_ID_BASIC') || 'prod_basic',
-      [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
-      [SubscriptionPlan.ENTERPRISE]:
-        this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
-    };
-
-    const productId = productIdMap[dto.planId];
-    if (!productId) {
-      throw new Error(`Product ID not found for plan: ${dto.planId}`);
-    }
-
     // Check if plan is actually changing
     if (subscription.planId === dto.planId) {
       this.logger.log(`Plan is already ${dto.planId}, no change needed`);
@@ -593,6 +575,45 @@ export class BillingService {
         success: true,
         message: `You are already on the ${dto.planId} plan.`,
       };
+    }
+
+    // Handle FREE plan - no Dodo subscription needed, just update database
+    if (dto.planId === SubscriptionPlan.FREE) {
+      this.logger.log(`🔄 Changing plan to FREE for user ${userId}`);
+      
+      // Update local DB
+      await this.subscriptionRepository.update(subscription.id, {
+        planId: dto.planId,
+        updatedAt: new Date(),
+        // Keep dodoSubscriptionId and dodoCustomerId for potential future upgrades
+      });
+
+      this.logger.log(`✅ Updated local subscription record to FREE: ${subscription.id}`);
+
+      return {
+        success: true,
+        message: `Plan successfully changed to FREE. Changes will be reflected immediately.`,
+      };
+    }
+
+    // For paid plans, need Dodo subscription
+    if (!subscription.dodoSubscriptionId) {
+      throw new NotFoundException('Active subscription ID not found. Please contact support.');
+    }
+
+    // Map plan to product ID (should be configured in env or database)
+    const productIdMap: Record<SubscriptionPlan, string> = {
+      [SubscriptionPlan.FREE]: '', // Not used, handled above
+      [SubscriptionPlan.PRO]: this.configService.get<string>('DODO_PRODUCT_ID_PRO') || 'prod_pro',
+      [SubscriptionPlan.SCALE]:
+        this.configService.get<string>('DODO_PRODUCT_ID_SCALE') || 'prod_scale',
+      [SubscriptionPlan.ENTERPRISE]:
+        this.configService.get<string>('DODO_PRODUCT_ID_ENTERPRISE') || 'prod_enterprise',
+    };
+
+    const productId = productIdMap[dto.planId];
+    if (!productId) {
+      throw new Error(`Product ID not found for plan: ${dto.planId}`);
     }
 
     // Determine proration mode based on upgrade/downgrade
@@ -765,7 +786,7 @@ export class BillingService {
           userId: data.metadata.userId,
           dodoSubscriptionId: data.subscription_id,
           dodoCustomerId: customerId, // Store customer ID
-          planId: (data.metadata.planId as SubscriptionPlan) || SubscriptionPlan.BASIC,
+          planId: (data.metadata.planId as SubscriptionPlan) || SubscriptionPlan.FREE,
           status: SubscriptionStatus.ACTIVE,
           currentPeriodStart: data.current_period_start
             ? new Date(data.current_period_start)
@@ -938,7 +959,7 @@ export class BillingService {
           userId: data.metadata.userId,
           dodoSubscriptionId: data.subscription_id,
           dodoCustomerId: customerId,
-          planId: (data.metadata.planId as SubscriptionPlan) || SubscriptionPlan.BASIC,
+          planId: (data.metadata.planId as SubscriptionPlan) || SubscriptionPlan.FREE,
           status: SubscriptionStatus.ACTIVE,
           currentPeriodStart: data.current_period_start
             ? new Date(data.current_period_start)

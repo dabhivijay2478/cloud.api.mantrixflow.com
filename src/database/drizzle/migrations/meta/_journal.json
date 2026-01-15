@@ -15,6 +15,13 @@
       "when": 1768467558695,
       "tag": "0001_fancy_kitty_pryde",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1768476582719,
+      "tag": "0002_tired_ghost_rider",
+      "breakpoints": true
     }
   ]
 }

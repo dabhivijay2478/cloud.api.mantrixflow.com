@@ -1,6 +1,7 @@
 export enum SubscriptionPlan {
-  BASIC = 'basic',
+  FREE = 'free',
   PRO = 'pro',
+  SCALE = 'scale',
   ENTERPRISE = 'enterprise',
 }
 
