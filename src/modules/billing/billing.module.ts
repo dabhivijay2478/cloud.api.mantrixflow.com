@@ -5,6 +5,7 @@ import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { SubscriptionRepository } from './repositories/subscription.repository';
 import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
+import { DodoCustomerRepository } from './repositories/dodo-customer.repository';
 
 @Module({
   controllers: [BillingController],
@@ -20,6 +21,7 @@ import { SubscriptionEventRepository } from './repositories/subscription-event.r
     BillingService,
     SubscriptionRepository,
     SubscriptionEventRepository,
+    DodoCustomerRepository,
   ],
   exports: [BillingService, SubscriptionRepository],
 })

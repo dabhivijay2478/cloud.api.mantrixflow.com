@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import DodoPayments from 'dodopayments';
 import { SubscriptionRepository } from './repositories/subscription.repository';
 import { SubscriptionEventRepository } from './repositories/subscription-event.repository';
+import { DodoCustomerRepository } from './repositories/dodo-customer.repository';
 import type { CreateCheckoutDto } from './dto/create-checkout.dto';
 import type { ChangePlanDto } from './dto/change-plan.dto';
 import { SubscriptionPlan, SubscriptionStatus } from './entities/subscription.entity';
@@ -18,6 +19,7 @@ export class BillingService {
     private readonly configService: ConfigService,
     private readonly subscriptionRepository: SubscriptionRepository,
     private readonly subscriptionEventRepository: SubscriptionEventRepository,
+    private readonly dodoCustomerRepository: DodoCustomerRepository,
   ) {
     const apiKey = this.configService.get<string>('DODO_PAYMENTS_API_KEY');
     const environment = this.configService.get<string>('DODO_PAYMENTS_ENVIRONMENT', 'test_mode');
@@ -59,6 +61,22 @@ export class BillingService {
       throw new Error(`Product ID not found for plan: ${dto.planId}`);
     }
 
+    // Check if user already has a subscription (for upgrades)
+    const existingSubscription = await this.subscriptionRepository.findByUserId(userId);
+    const isUpgrade = existingSubscription && existingSubscription.planId !== dto.planId;
+
+    // Build metadata object (all values must be strings for Dodo Payments)
+    const metadata: Record<string, string> = {
+      userId,
+      planId: dto.planId,
+      isUpgrade: isUpgrade ? 'true' : 'false',
+    };
+    
+    // Add existing subscription ID if it exists
+    if (existingSubscription?.dodoSubscriptionId) {
+      metadata.existingSubscriptionId = existingSubscription.dodoSubscriptionId;
+    }
+
     // Create checkout session with Dodo Payments for subscription
     // According to Dodo Payments docs, checkout sessions return checkout_url
     const session = await this.dodoClient.checkoutSessions.create({
@@ -73,10 +91,7 @@ export class BillingService {
         name: userName,
       },
       return_url: dto.returnUrl,
-      metadata: {
-        userId,
-        planId: dto.planId,
-      },
+      metadata,
     });
 
     // According to SDK types (CheckoutSessionResponse):
@@ -200,6 +215,61 @@ export class BillingService {
   }
 
   /**
+   * Create or update customer record in dodo_customers table
+   */
+  private async createOrUpdateCustomer(
+    userId: string,
+    dodoCustomerId: string,
+    metadata?: unknown,
+  ): Promise<void> {
+    try {
+      // Check if customer already exists
+      let customer = await this.dodoCustomerRepository.findByUserId(userId);
+
+      if (customer) {
+        // Update existing customer
+        await this.dodoCustomerRepository.update(customer.id, {
+          dodoCustomerId,
+          metadata: metadata as any,
+        });
+        this.logger.log(`✅ Updated customer record for user ${userId}`);
+      } else {
+        // Create new customer
+        customer = await this.dodoCustomerRepository.create({
+          userId,
+          dodoCustomerId,
+          metadata: metadata as any,
+        });
+        this.logger.log(`✅ Created customer record for user ${userId}`);
+      }
+    } catch (error) {
+      this.logger.error(`❌ Failed to create/update customer:`, error);
+      // Don't throw - customer creation failure shouldn't break webhook processing
+    }
+  }
+
+  /**
+   * Link subscription to customer record
+   */
+  private async linkSubscriptionToCustomer(
+    subscriptionId: string,
+    dodoCustomerId: string,
+  ): Promise<void> {
+    try {
+      const customer = await this.dodoCustomerRepository.findByDodoCustomerId(dodoCustomerId);
+      if (customer) {
+        await this.dodoCustomerRepository.update(customer.id, {
+          subscriptionId,
+        });
+        this.logger.log(`✅ Linked subscription ${subscriptionId} to customer ${dodoCustomerId}`);
+      }
+    } catch (error) {
+      this.logger.error(`❌ Failed to link subscription to customer:`, error);
+      // Don't throw - linking failure shouldn't break webhook processing
+    }
+  }
+
+  /**
    * Handle webhook event from Dodo Payments
    */
   async handleWebhook(eventType: string, eventId: string, payload: unknown): Promise<void> {
@@ -228,6 +298,16 @@ export class BillingService {
       if (payload && typeof payload === 'object' && 'data' in payload) {
         eventData = (payload as { data: unknown }).data;
         this.logger.log('📦 Extracted data from payload.data');
+      }
+
+      // Extract customer ID and userId early for customer record creation
+      const data = eventData as any;
+      const customerId = data?.customer_id || (data?.customer as any)?.customer_id;
+      const userId = data?.metadata?.userId;
+
+      // Create/update customer record if we have customer ID and userId
+      if (customerId && userId) {
+        await this.createOrUpdateCustomer(userId, customerId, data?.customer || data);
       }
 
       // Process based on event type
@@ -266,7 +346,7 @@ export class BillingService {
       }
 
       // Store event - try to find subscription by subscription_id in data
-      const data = eventData as any;
+      // Note: data was already extracted above, but we'll use it again here for clarity
       const subscriptionId = data?.subscription_id;
 
       this.logger.log(`🔍 Looking for subscription with ID: ${subscriptionId || 'NOT FOUND'}`);
@@ -276,9 +356,7 @@ export class BillingService {
         let subscription =
           await this.subscriptionRepository.findByDodoSubscriptionId(subscriptionId);
 
-        // Extract customer ID from data
-        const customerId = data?.customer_id || (data?.customer as any)?.customer_id;
-
+        // Customer ID was already extracted above, but ensure we have it
         // Check if this is a plan change - if subscription doesn't exist by subscription_id
         // but user already has a subscription, it's a plan change
         if (!subscription && data?.metadata?.userId) {
@@ -314,6 +392,11 @@ export class BillingService {
             console.log(
               `✅ Updated subscription with new plan and subscription ID: ${subscription.id}`,
             );
+            
+            // Link subscription to customer
+            if (customerId) {
+              await this.linkSubscriptionToCustomer(subscription.id, customerId);
+            }
           }
         }
 
@@ -337,6 +420,11 @@ export class BillingService {
             });
             this.logger.log(`✅ Created subscription: ${subscription.id}`);
             console.log(`✅ Created subscription: ${subscription.id}`);
+            
+            // Link subscription to customer
+            if (customerId) {
+              await this.linkSubscriptionToCustomer(subscription.id, customerId);
+            }
           } catch (error) {
             this.logger.error(`❌ Failed to create subscription:`, error);
             console.error(`❌ Failed to create subscription:`, error);
@@ -363,6 +451,11 @@ export class BillingService {
                     : null,
                 });
                 this.logger.log(`✅ Updated existing subscription: ${subscription.id}`);
+                
+                // Link subscription to customer
+                if (customerId) {
+                  await this.linkSubscriptionToCustomer(subscription.id, customerId);
+                }
               }
             } else {
               // Try to find it again in case it was created by another process
@@ -377,6 +470,9 @@ export class BillingService {
             dodoCustomerId: customerId,
           });
           this.logger.log(`✅ Updated subscription with customer ID: ${subscription.id}`);
+          
+          // Link subscription to customer
+          await this.linkSubscriptionToCustomer(subscription.id, customerId);
         }
 
         if (subscription) {
@@ -588,6 +684,15 @@ export class BillingService {
     // Extract customer ID from data
     const customerId = (data.customer as any)?.customer_id;
 
+    // Create/update customer record if we have customer ID and userId
+    if (customerId && data.metadata?.userId) {
+      await this.createOrUpdateCustomer(
+        data.metadata.userId,
+        customerId,
+        data.customer || data,
+      );
+    }
+
     // Check if subscription already exists
     let subscription = await this.subscriptionRepository.findByDodoSubscriptionId(
       data.subscription_id,
@@ -621,6 +726,11 @@ export class BillingService {
         console.log(
           `✅ Updated subscription with new plan and subscription ID: ${subscription.id}`,
         );
+        
+        // Link subscription to customer
+        if (customerId) {
+          await this.linkSubscriptionToCustomer(subscription.id, customerId);
+        }
       }
     }
 
@@ -641,6 +751,11 @@ export class BillingService {
       });
       this.logger.log(`✅ Updated subscription: ${subscription.id}`);
       console.log(`✅ Updated subscription: ${subscription.id}`);
+      
+      // Link subscription to customer
+      if (customerId) {
+        await this.linkSubscriptionToCustomer(subscription.id, customerId);
+      }
     } else if (data.metadata?.userId) {
       // Create new subscription
       this.logger.log(`📝 Creating new subscription for user: ${data.metadata.userId}`);
@@ -661,6 +776,11 @@ export class BillingService {
         });
         this.logger.log(`✅ Created subscription: ${subscription.id}`);
         console.log(`✅ Created subscription: ${subscription.id}`);
+        
+        // Link subscription to customer
+        if (customerId) {
+          await this.linkSubscriptionToCustomer(subscription.id, customerId);
+        }
       } catch (error) {
         this.logger.error(`❌ Failed to create subscription:`, error);
         console.error(`❌ Failed to create subscription:`, error);
@@ -685,6 +805,11 @@ export class BillingService {
               currentPeriodEnd: data.current_period_end ? new Date(data.current_period_end) : null,
             });
             this.logger.log(`✅ Updated existing subscription: ${subscription.id}`);
+            
+            // Link subscription to customer
+            if (customerId) {
+              await this.linkSubscriptionToCustomer(subscription.id, customerId);
+            }
           }
         } else {
           throw error;
@@ -761,6 +886,15 @@ export class BillingService {
     // Extract customer ID from data
     const customerId = data.customer_id || (data.customer as any)?.customer_id;
 
+    // Create/update customer record if we have customer ID and userId
+    if (customerId && data.metadata?.userId) {
+      await this.createOrUpdateCustomer(
+        data.metadata.userId,
+        customerId,
+        data.customer || data,
+      );
+    }
+
     // Find subscription by Dodo subscription ID first
     let subscription = await this.subscriptionRepository.findByDodoSubscriptionId(
       data.subscription_id,
@@ -788,6 +922,11 @@ export class BillingService {
           trialEnd: data.trial_end ? new Date(data.trial_end) : null,
         });
         this.logger.log(`✅ Updated subscription with new plan: ${subscription.id}`);
+        
+        // Link subscription to customer
+        if (customerId) {
+          await this.linkSubscriptionToCustomer(subscription.id, customerId);
+        }
       }
     }
 
@@ -809,6 +948,11 @@ export class BillingService {
           trialEnd: data.trial_end ? new Date(data.trial_end) : null,
         });
         this.logger.log(`✅ Created subscription: ${subscription.id}`);
+        
+        // Link subscription to customer
+        if (customerId) {
+          await this.linkSubscriptionToCustomer(subscription.id, customerId);
+        }
       } catch (error) {
         this.logger.error(`❌ Failed to create subscription:`, error);
         // If duplicate user_id error, try to find existing subscription
@@ -832,6 +976,11 @@ export class BillingService {
               currentPeriodEnd: data.current_period_end ? new Date(data.current_period_end) : null,
             });
             this.logger.log(`✅ Updated existing subscription: ${subscription.id}`);
+            
+            // Link subscription to customer
+            if (customerId) {
+              await this.linkSubscriptionToCustomer(subscription.id, customerId);
+            }
           }
         } else {
           throw error;
@@ -852,6 +1001,11 @@ export class BillingService {
             : subscription.currentPeriodEnd,
         });
         this.logger.log(`✅ Updated subscription: ${subscription.id}`);
+        
+        // Link subscription to customer
+        if (customerId) {
+          await this.linkSubscriptionToCustomer(subscription.id, customerId);
+        }
       }
     } else {
       this.logger.warn(`⚠️  Cannot create subscription: missing userId in metadata`);
