@@ -1,11 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
-import { subscriptionEvents } from '../../../database/schemas/billing/subscription-events.schema';
+import { subscriptionEvents } from '../../../database/schemas/billing/dodo-subscription-events.schema';
 import type {
   NewSubscriptionEvent,
   SubscriptionEvent,
-} from '../../../database/schemas/billing/subscription-events.schema';
+} from '../../../database/schemas/billing/dodo-subscription-events.schema';
 
 @Injectable()
 export class SubscriptionEventRepository {

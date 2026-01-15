@@ -1,5 +1,5 @@
 import { pgEnum, pgTable, jsonb, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { subscriptions } from './subscriptions.schema';
+import { subscriptions } from './dodo-subscriptions.schema';
 
 /**
  * Enum for subscription event type
@@ -22,10 +22,10 @@ export const subscriptionEventTypeEnum = pgEnum('subscription_event_type', [
 ]);
 
 /**
- * Subscription Events Table
- * Tracks all subscription-related events from Dodo Payments webhooks
+ * Dodo Subscription Events Table
+ * Tracks all subscription-related events from Dodo Payments webhooks.
  */
-export const subscriptionEvents = pgTable('subscription_events', {
+export const subscriptionEvents = pgTable('dodo_subscription_events', {
   id: uuid('id').primaryKey().defaultRandom(),
   // Subscription reference
   subscriptionId: uuid('subscription_id')

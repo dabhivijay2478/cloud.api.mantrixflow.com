@@ -1,4 +1,4 @@
-import { jsonb, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { jsonb, pgEnum, pgTable, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from '../users/users.schema';
 
 /**
@@ -18,21 +18,17 @@ export const subscriptionStatusEnum = pgEnum('subscription_status', [
 export const subscriptionPlanEnum = pgEnum('subscription_plan', ['basic', 'pro', 'enterprise']);
 
 /**
- * Subscriptions Table
- * Tracks user subscriptions for billing
- * Each user (owner) has one active subscription that covers their organization
+ * Dodo Subscriptions Table
+ * Tracks user subscriptions for billing via Dodo Payments.
+ * Each user (owner) has one active subscription that covers their organization.
  */
-export const subscriptions = pgTable('subscriptions', {
+export const subscriptions = pgTable('dodo_subscriptions', {
   id: uuid('id').primaryKey().defaultRandom(),
   // User reference - the owner who pays for the subscription
   userId: uuid('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' })
     .unique(), // One subscription per user
-  // Dodo Payments subscription ID
-  dodoSubscriptionId: varchar('dodo_subscription_id', { length: 255 }).unique(),
-  // Dodo Payments customer ID (for tracking and future use)
-  dodoCustomerId: varchar('dodo_customer_id', { length: 255 }),
   // Plan type
   planId: subscriptionPlanEnum('plan_id').notNull(),
   // Subscription status
