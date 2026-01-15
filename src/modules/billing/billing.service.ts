@@ -1394,6 +1394,8 @@ export class BillingService {
   /**
    * Create on-demand subscription (mandate) for execution overages
    * This authorizes the payment method for variable charges later
+   * 
+   * Note: Uses the user's current subscription product to create an on-demand subscription
    */
   async createOnDemandSubscription(
     userId: string,
@@ -1401,25 +1403,38 @@ export class BillingService {
     userName: string,
     returnUrl: string,
   ): Promise<{ checkoutUrl: string; sessionId: string }> {
-    // Get or create customer
+    // Get user's current subscription to use the same product
     const subscription = await this.subscriptionRepository.findByUserId(userId);
-    let customerId = subscription?.dodoCustomerId;
+    
+    if (!subscription) {
+      throw new NotFoundException(
+        'No active subscription found. Please subscribe to a plan first before authorizing on-demand payments.',
+      );
+    }
 
-    // If no customer ID, we'll create one during checkout
-    // For on-demand, we need a product - use a special on-demand product
-    const onDemandProductId =
-      this.configService.get<string>('DODO_PRODUCT_ID_ON_DEMAND') || 'prod_on_demand';
+    // Get the product ID for the user's current plan
+    // Cast planId to SubscriptionPlan enum for type safety
+    const productId = this.getProductIdForPlan(subscription.planId as SubscriptionPlan);
+    if (!productId) {
+      throw new Error(`Product ID not found for plan: ${subscription.planId}`);
+    }
 
-    this.logger.log(`🔄 Creating on-demand subscription (mandate) for user ${userId}`);
+    // Use existing customer ID if available
+    const customerId = subscription.dodoCustomerId;
+
+    this.logger.log(
+      `🔄 Creating on-demand subscription (mandate) for user ${userId} with product ${productId}`,
+    );
 
     try {
       // Create checkout session with on-demand subscription_data
       // According to docs: subscription_data.on_demand.mandate_only: true
       // This authorizes a payment method (mandate) for variable charges later
+      // We use the same product as the base subscription, but create it as on-demand
       const session = await this.dodoClient.checkoutSessions.create({
         product_cart: [
           {
-            product_id: onDemandProductId,
+            product_id: productId,
             quantity: 1,
           },
         ],
@@ -1443,6 +1458,8 @@ export class BillingService {
         metadata: {
           userId,
           type: 'on_demand_mandate',
+          baseSubscriptionId: subscription.dodoSubscriptionId || '',
+          basePlanId: subscription.planId,
         },
       });
 
