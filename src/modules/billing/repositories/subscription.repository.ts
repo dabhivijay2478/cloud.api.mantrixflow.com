@@ -17,41 +17,13 @@ export class SubscriptionRepository {
   }
 
   async findByUserId(userId: string): Promise<Subscription | null> {
-    // Use select() - Drizzle should automatically map dodo_customer_id to dodoCustomerId
     const [subscription] = await this.db
       .select()
       .from(subscriptions)
       .where(eq(subscriptions.userId, userId))
       .limit(1);
 
-    if (!subscription) {
-      return null;
-    }
-
-    // Debug: Log raw subscription data to see what Drizzle returns
-    console.log('=== SUBSCRIPTION DEBUG ===');
-    console.log('Raw subscription object:', JSON.stringify(subscription, null, 2));
-    console.log('Subscription keys:', Object.keys(subscription));
-    console.log('dodoCustomerId value:', (subscription as any).dodoCustomerId);
-    console.log('dodoCustomerId type:', typeof (subscription as any).dodoCustomerId);
-    console.log('Has dodoCustomerId property:', 'dodoCustomerId' in subscription);
-    // Try accessing via index signature
-    const subAny = subscription as any;
-    console.log('dodo_customer_id (snake_case):', subAny.dodo_customer_id);
-    console.log('All property names:', Object.getOwnPropertyNames(subscription));
-    console.log('Full subscription:', subscription);
-    console.log('========================');
-
-    // If dodoCustomerId is missing but dodo_customer_id exists, map it manually
-    if (!subAny.dodoCustomerId && subAny.dodo_customer_id) {
-      console.log('⚠️  Mapping dodo_customer_id to dodoCustomerId manually');
-      return {
-        ...subscription,
-        dodoCustomerId: subAny.dodo_customer_id,
-      } as Subscription;
-    }
-
-    return subscription;
+    return subscription || null;
   }
 
   async findByDodoSubscriptionId(dodoSubscriptionId: string): Promise<Subscription | null> {

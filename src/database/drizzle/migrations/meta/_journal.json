@@ -8,6 +8,13 @@
       "when": 1768466493071,
       "tag": "0000_giant_yellow_claw",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1768467558695,
+      "tag": "0001_fancy_kitty_pryde",
+      "breakpoints": true
     }
   ]
 }

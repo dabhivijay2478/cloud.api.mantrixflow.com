@@ -1,4 +1,4 @@
-import { jsonb, pgEnum, pgTable, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { jsonb, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { users } from '../users/users.schema';
 
 /**
@@ -42,6 +42,9 @@ export const subscriptions = pgTable('dodo_subscriptions', {
   // Cancellation
   canceledAt: timestamp('canceled_at'),
   cancelAtPeriodEnd: timestamp('cancel_at_period_end'),
+  // Dodo Payments IDs
+  dodoSubscriptionId: varchar('dodo_subscription_id', { length: 255 }).unique(),
+  dodoCustomerId: varchar('dodo_customer_id', { length: 255 }),
   // Metadata from Dodo
   metadata: jsonb('metadata'),
   // Timestamps
