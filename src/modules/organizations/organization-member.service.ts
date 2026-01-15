@@ -48,7 +48,7 @@ export class OrganizationMemberService {
   /**
    * Invite a user to an organization
    * Creates an invite record and sends an email via Supabase
-   * 
+   *
    * AUTHORIZATION: Only OWNER and ADMIN can invite members
    */
   async inviteMember(
@@ -57,14 +57,9 @@ export class OrganizationMemberService {
     dto: InviteMemberDto,
   ): Promise<OrganizationMember> {
     // AUTHORIZATION CHECK: Only OWNER and ADMIN can invite
-    const canInvite = await this.roleService.canInviteMembers(
-      invitedByUserId,
-      organizationId,
-    );
+    const canInvite = await this.roleService.canInviteMembers(invitedByUserId, organizationId);
     if (!canInvite) {
-      throw new ForbiddenException(
-        'Only OWNER and ADMIN can invite members to the organization',
-      );
+      throw new ForbiddenException('Only OWNER and ADMIN can invite members to the organization');
     }
 
     // Verify organization exists
@@ -187,7 +182,7 @@ export class OrganizationMemberService {
 
   /**
    * Update member
-   * 
+   *
    * AUTHORIZATION:
    * - Only OWNER can change roles
    * - Only OWNER and ADMIN can update member permissions
@@ -201,23 +196,16 @@ export class OrganizationMemberService {
 
     if (updatedByUserId) {
       // AUTHORIZATION: Check if user can update this member
-      const userRole = await this.roleService.getUserRole(
-        updatedByUserId,
-        member.organizationId,
-      );
+      const userRole = await this.roleService.getUserRole(updatedByUserId, member.organizationId);
 
       if (!userRole) {
-        throw new ForbiddenException(
-          'You are not a member of this organization',
-        );
+        throw new ForbiddenException('You are not a member of this organization');
       }
 
       // AUTHORIZATION: Only OWNER can change roles
       if (dto.role && dto.role !== member.role) {
         if (userRole !== 'OWNER') {
-          throw new ForbiddenException(
-            'Only OWNER can change member roles',
-          );
+          throw new ForbiddenException('Only OWNER can change member roles');
         }
 
         // AUTHORIZATION: Cannot change role to OWNER (only one owner per org)
@@ -231,9 +219,7 @@ export class OrganizationMemberService {
       // AUTHORIZATION: Only OWNER and ADMIN can update member permissions
       if (dto.agentPanelAccess !== undefined || dto.allowedModels !== undefined) {
         if (userRole !== 'OWNER' && userRole !== 'ADMIN') {
-          throw new ForbiddenException(
-            'Only OWNER and ADMIN can update member permissions',
-          );
+          throw new ForbiddenException('Only OWNER and ADMIN can update member permissions');
         }
       }
     }
@@ -268,7 +254,7 @@ export class OrganizationMemberService {
 
   /**
    * Remove member from organization
-   * 
+   *
    * AUTHORIZATION: Only OWNER and ADMIN can remove members
    */
   async removeMember(id: string, removedByUserId?: string): Promise<void> {

@@ -36,14 +36,35 @@ export class OrganizationService {
 
   /**
    * Generate slug from name
+   * Makes it unique by appending a timestamp if slug already exists
    */
-  private generateSlug(name: string): string {
-    return name
+  private async generateSlug(name: string): Promise<string> {
+    const baseSlug = name
       .toLowerCase()
       .trim()
       .replace(/[^\w\s-]/g, '')
       .replace(/[\s_-]+/g, '-')
       .replace(/^-+|-+$/g, '');
+
+    // Check if base slug exists, if so, make it unique
+    const existing = await this.organizationRepository.findBySlug(baseSlug);
+    if (!existing) {
+      return baseSlug;
+    }
+
+    // Append timestamp to make it unique
+    const timestamp = Date.now();
+    const uniqueSlug = `${baseSlug}-${timestamp}`;
+
+    // Double-check the unique slug doesn't exist (very unlikely but possible)
+    const existingUnique = await this.organizationRepository.findBySlug(uniqueSlug);
+    if (!existingUnique) {
+      return uniqueSlug;
+    }
+
+    // Fallback: use random string if timestamp collision (extremely rare)
+    const randomStr = Math.random().toString(36).substring(2, 10);
+    return `${baseSlug}-${timestamp}-${randomStr}`;
   }
 
   /**
@@ -88,33 +109,56 @@ export class OrganizationService {
    * - Only users who are NOT invited-only can create organizations
    * - Invited users (members invited to existing organizations) cannot create new organizations
    * - The creating user becomes the OWNER of the organization
+   *
+   * @param skipRoleValidation - Skip validation for first-time users during onboarding
    */
-  async createOrganization(userId: string, dto: CreateOrganizationDto): Promise<Organization> {
+  async createOrganization(
+    userId: string,
+    dto: CreateOrganizationDto,
+    options?: { skipRoleValidation?: boolean },
+  ): Promise<Organization> {
     // AUTHORIZATION CHECK: Block invited-only users from creating organizations
-    const isInvitedOnly = await this.isInvitedOnlyUser(userId);
-    if (isInvitedOnly) {
-      throw new ForbiddenException(
-        'Invited users are not allowed to create organizations. ' +
-          'Only organization owners can create new organizations.',
-      );
+    // Skip this check for first-time users during onboarding
+    if (!options?.skipRoleValidation) {
+      const isInvitedOnly = await this.isInvitedOnlyUser(userId);
+      if (isInvitedOnly) {
+        throw new ForbiddenException(
+          'Invited users are not allowed to create organizations. ' +
+            'Only organization owners can create new organizations.',
+        );
+      }
     }
 
-    const slug = dto.slug || this.generateSlug(dto.name);
-
-    // Check if slug already exists
-    const existingOrg = await this.organizationRepository.findBySlug(slug);
-    if (existingOrg) {
-      throw new BadRequestException(`Organization with slug "${slug}" already exists`);
-    }
+    // Generate unique slug (handles duplicates automatically)
+    const slug = dto.slug || (await this.generateSlug(dto.name));
 
     // Create organization with owner_user_id set to the creator
-    const organization = await this.organizationRepository.create({
-      name: dto.name,
-      slug,
-      description: dto.description,
-      ownerUserId: userId, // Set the creator as the owner
-      isActive: true,
-    });
+    // Wrap in try-catch to handle potential race condition duplicates
+    let organization: Organization;
+    try {
+      organization = await this.organizationRepository.create({
+        name: dto.name,
+        slug,
+        description: dto.description,
+        ownerUserId: userId, // Set the creator as the owner
+        isActive: true,
+      });
+    } catch (error: any) {
+      // Handle duplicate slug error (race condition)
+      if (error?.code === '23505' && error?.constraint_name === 'organizations_slug_unique') {
+        // Generate a new unique slug and try again
+        const uniqueSlug = await this.generateSlug(dto.name);
+        organization = await this.organizationRepository.create({
+          name: dto.name,
+          slug: uniqueSlug,
+          description: dto.description,
+          ownerUserId: userId,
+          isActive: true,
+        });
+      } else {
+        throw error;
+      }
+    }
 
     // Add the user as owner of the organization in the organization_owners table
     try {
@@ -251,7 +295,7 @@ export class OrganizationService {
 
   /**
    * Update organization
-   * 
+   *
    * AUTHORIZATION: Only OWNER can update organization details
    */
   async updateOrganization(
@@ -265,9 +309,7 @@ export class OrganizationService {
     if (userId) {
       const canUpdate = await this.roleService.canUpdateOrganization(userId, id);
       if (!canUpdate) {
-        throw new ForbiddenException(
-          'Only OWNER can update organization details',
-        );
+        throw new ForbiddenException('Only OWNER can update organization details');
       }
     }
 
@@ -363,7 +405,7 @@ export class OrganizationService {
 
   /**
    * Set current organization for a user
-   * 
+   *
    * AUTHORIZATION: User must be a member of the organization
    */
   async setCurrentOrganization(userId: string, id: string): Promise<Organization> {

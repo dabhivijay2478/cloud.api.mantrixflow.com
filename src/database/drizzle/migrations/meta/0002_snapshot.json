@@ -1,6 +1,6 @@
 {
-  "id": "cd412c43-fdd5-4639-9f78-697a6873de98",
-  "prevId": "af65393d-a15e-4be2-ae89-49e016fc3e53",
+  "id": "9433d98a-fd2d-4bd9-aff2-0d472d3c5249",
+  "prevId": "cd412c43-fdd5-4639-9f78-697a6873de98",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2149,8 +2149,9 @@
       "name": "subscription_plan",
       "schema": "public",
       "values": [
-        "basic",
+        "free",
         "pro",
+        "scale",
         "enterprise"
       ]
     },

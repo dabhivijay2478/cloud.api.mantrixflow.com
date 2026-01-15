@@ -35,9 +35,7 @@ export class DashboardService {
 
     // Get member count
     const members = await this.memberRepository.findByOrganizationId(organizationId);
-    const activeMembers = members.filter(
-      (m) => m.status === 'active' || m.status === 'accepted',
-    );
+    const activeMembers = members.filter((m) => m.status === 'active' || m.status === 'accepted');
     const memberCount = activeMembers.length;
 
     // Get pipeline statistics

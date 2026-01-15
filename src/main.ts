@@ -8,6 +8,13 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
 
+  // Trust proxy for ngrok and reverse proxies (important for webhooks)
+  // Access Express instance to set trust proxy
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+  const expressApp = app.getHttpAdapter().getInstance() as any;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+  expressApp.set('trust proxy', true);
+
   // Set global API prefix
   app.setGlobalPrefix('api');
 
@@ -155,6 +162,7 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`🚀 Application is running on: http://localhost:${port}`);
   console.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  console.log(`🔔 Webhook endpoint: http://localhost:${port}/api/billing/webhook`);
 }
 
-bootstrap();
+void bootstrap();
