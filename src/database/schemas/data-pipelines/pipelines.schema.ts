@@ -1,4 +1,5 @@
 import {
+  boolean,
   integer,
   jsonb,
   pgEnum,
@@ -8,8 +9,10 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
-import { pipelineDestinationSchemas } from '../destination-schemas/pipeline-destination-schemas.schema';
-import { pipelineSourceSchemas } from '../source-schemas/pipeline-source-schemas.schema';
+import { organizations } from '../organizations/organizations.schema';
+import { users } from '../users/users.schema';
+import { pipelineDestinationSchemas } from './destination-schemas/pipeline-destination-schemas.schema';
+import { pipelineSourceSchemas } from './source-schemas/pipeline-source-schemas.schema';
 
 /**
  * Enum for write mode
@@ -22,13 +25,7 @@ export const writeModeEnum = pgEnum('write_mode', ['append', 'upsert', 'replace'
 export const pipelineStatusEnum = pgEnum('pipeline_status', ['active', 'paused', 'error']);
 
 /**
- * Enum for migration state
- */
-export const migrationStateEnum = pgEnum('migration_state', ['pending', 'running', 'listing']);
-
-/**
  * Enum for run status
- * Defined here to avoid circular dependency with pipeline-runs schema
  */
 export const runStatusEnum = pgEnum('run_status', [
   'pending',
@@ -39,38 +36,39 @@ export const runStatusEnum = pgEnum('run_status', [
 ]);
 
 /**
- * PostgreSQL Pipelines Table
+ * Pipelines Table
  * Stores pipeline configurations for data synchronization
- *
- * Now references separate source and destination schema tables for better organization.
- *
+ * 
+ * Renamed from postgres_pipelines to pipelines for multi-source support.
+ * 
  * Structure:
- * - Basic Info: id, orgId, userId, name, description
- * - Source Schema Reference: sourceSchemaId (references pipeline_source_schemas)
- * - Destination Schema Reference: destinationSchemaId (references pipeline_destination_schemas)
- * - Transformations: transformations applied during pipeline execution
+ * - Basic Info: id, organizationId, createdBy, name, description
+ * - Source Configuration: sourceSchemaId (references pipeline_source_schemas)
+ * - Destination Configuration: destinationSchemaId (references pipeline_destination_schemas)
+ * - Transformations: columnMappings, transformations
+ * - Write Configuration: writeMode, upsertKey
  * - Sync Configuration: syncMode, incrementalColumn, lastSyncValue, syncFrequency, nextSyncAt
  * - Execution Status: status, lastRunAt, lastRunStatus, lastError
  * - Statistics: totalRowsProcessed, totalRunsSuccessful, totalRunsFailed
  * - Metadata: createdAt, updatedAt, deletedAt
  */
-export const postgresPipelines = pgTable('postgres_pipelines', {
+export const pipelines = pgTable('pipelines', {
   // ============================================================================
   // BASIC INFORMATION
   // ============================================================================
   id: uuid('id').primaryKey().defaultRandom(),
-  orgId: uuid('org_id').notNull(),
-  userId: uuid('user_id').notNull(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id, { onDelete: 'restrict' }),
   name: varchar('name', { length: 255 }).notNull(),
   description: text('description'),
 
   // ============================================================================
-  // SOURCE & DESTINATION SCHEMA REFERENCES
-  // References to separate schema tables for better organization
+  // SOURCE & DESTINATION CONFIGURATION
   // ============================================================================
-  /** Source type (legacy column - kept for backward compatibility with database) */
-  sourceType: varchar('source_type', { length: 100 }),
-
   /** Source schema ID (references pipeline_source_schemas) */
   sourceSchemaId: uuid('source_schema_id')
     .notNull()
@@ -82,18 +80,7 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
     .references(() => pipelineDestinationSchemas.id, { onDelete: 'restrict' }),
 
   // ============================================================================
-  // LEGACY COLUMNS (kept for backward compatibility during migration)
-  // These columns exist in the database but are being phased out
-  // ============================================================================
-  /** Destination connection ID (legacy - kept for backward compatibility, required during migration) */
-  destinationConnectionId: uuid('destination_connection_id').notNull(),
-
-  /** Destination table name (legacy - kept for backward compatibility, required during migration) */
-  destinationTable: varchar('destination_table', { length: 255 }),
-
-  // ============================================================================
   // TRANSFORMATIONS
-  // Data transformations to apply during pipeline execution
   // ============================================================================
   /** Data transformations to apply during pipeline execution */
   transformations: jsonb('transformations').$type<Transformation[]>(),
@@ -104,7 +91,7 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   syncMode: varchar('sync_mode', { length: 50 }).default('full'), // 'full' or 'incremental'
   incrementalColumn: varchar('incremental_column', { length: 255 }),
   lastSyncValue: text('last_sync_value'),
-  syncFrequency: varchar('sync_frequency', { length: 50 }).default('manual'), // 'manual', '15min', '1hour', '24hours'
+  syncFrequency: varchar('sync_frequency', { length: 50 }).default('manual'), // 'manual', 'hourly', 'daily', 'weekly'
   nextSyncAt: timestamp('next_sync_at'),
 
   // ============================================================================
@@ -114,7 +101,6 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
   lastRunAt: timestamp('last_run_at'),
   lastRunStatus: runStatusEnum('last_run_status'),
   lastError: text('last_error'),
-  migrationState: migrationStateEnum('migration_state').default('pending'), // 'pending', 'running', 'listing'
 
   // ============================================================================
   // STATISTICS
@@ -132,10 +118,6 @@ export const postgresPipelines = pgTable('postgres_pipelines', {
 });
 
 /**
- * TypeScript Interfaces for JSONB columns
- */
-
-/**
  * Data transformation configuration
  */
 export interface Transformation {
@@ -148,5 +130,5 @@ export interface Transformation {
 /**
  * Type exports for TypeScript
  */
-export type PostgresPipeline = typeof postgresPipelines.$inferSelect;
-export type NewPostgresPipeline = typeof postgresPipelines.$inferInsert;
+export type Pipeline = typeof pipelines.$inferSelect;
+export type NewPipeline = typeof pipelines.$inferInsert;

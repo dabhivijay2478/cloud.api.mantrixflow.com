@@ -10,8 +10,10 @@ export const organizations = pgTable('organizations', {
   name: varchar('name', { length: 255 }).notNull(),
   slug: varchar('slug', { length: 255 }).notNull().unique(),
   description: text('description'),
-  // Owner reference - the user who created this organization
-  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
+  // Owner reference - the user who created this organization (required)
+  ownerUserId: uuid('owner_user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'restrict' }),
   // Metadata
   metadata: jsonb('metadata'), // Additional organization data
   // Settings

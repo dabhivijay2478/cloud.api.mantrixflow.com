@@ -4,9 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, ilike, or } from 'drizzle-orm';
+import { and, eq, ilike, isNull, or } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
-import { postgresConnections } from '../../../database/schemas/data-sources';
+import { dataSources, dataSourceConnections } from '../../../database/schemas/data-sources';
 import type { SearchHandler } from '../interfaces/search-handler.interface';
 import type { SearchResultDto } from '../dto/search-response.dto';
 
@@ -25,32 +25,41 @@ export class DataSourceSearchHandler implements SearchHandler {
 
     const results = await this.db
       .select({
-        id: postgresConnections.id,
-        name: postgresConnections.name,
-        host: postgresConnections.host,
-        database: postgresConnections.database,
+        id: dataSources.id,
+        name: dataSources.name,
+        sourceType: dataSources.sourceType,
+        config: dataSourceConnections.config,
       })
-      .from(postgresConnections)
+      .from(dataSources)
+      .leftJoin(dataSourceConnections, eq(dataSources.id, dataSourceConnections.dataSourceId))
       .where(
         and(
-          eq(postgresConnections.orgId, organizationId),
+          eq(dataSources.organizationId, organizationId),
+          isNull(dataSources.deletedAt),
           or(
-            ilike(postgresConnections.name, searchPattern),
-            ilike(postgresConnections.host, searchPattern),
-            ilike(postgresConnections.database, searchPattern),
+            ilike(dataSources.name, searchPattern),
+            ilike(dataSources.sourceType, searchPattern),
           ),
         ),
       )
       .limit(limit);
 
-    return results.map((connection) => ({
-      type: this.entityType,
-      id: connection.id,
-      title: connection.name || 'Unnamed Connection',
-      subtitle: `${connection.host}/${connection.database}`,
-      redirect: '/workspace/data-sources',
-      filterKey: 'name',
-      filterValue: query, // Use the search query as filter value
-    }));
+    return results.map((dataSource) => {
+      // Extract connection details from config JSONB for display
+      const config = dataSource.config as any;
+      const subtitle = config?.host && config?.database 
+        ? `${config.host}/${config.database}`
+        : dataSource.sourceType;
+
+      return {
+        type: this.entityType,
+        id: dataSource.id,
+        title: dataSource.name || 'Unnamed Data Source',
+        subtitle,
+        redirect: '/workspace/data-sources',
+        filterKey: 'name',
+        filterValue: query,
+      };
+    });
   }
 }

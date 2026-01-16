@@ -1,5 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { postgresConnections } from '../../data-sources/connections/postgres-connections.schema';
+import { dataSources } from '../../data-sources/data-sources.schema';
 
 /**
  * Pipeline Source Schemas Table
@@ -10,8 +10,7 @@ import { postgresConnections } from '../../data-sources/connections/postgres-con
  */
 export const pipelineSourceSchemas = pgTable('pipeline_source_schemas', {
   id: uuid('id').primaryKey().defaultRandom(),
-  orgId: uuid('org_id').notNull(),
-  userId: uuid('user_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
 
   // ============================================================================
   // SOURCE IDENTIFICATION
@@ -19,8 +18,8 @@ export const pipelineSourceSchemas = pgTable('pipeline_source_schemas', {
   /** Source type: 'postgres', 'stripe', 'salesforce', 'google_sheets', etc. */
   sourceType: varchar('source_type', { length: 100 }).notNull(),
 
-  /** Source connection ID (for PostgreSQL sources) */
-  sourceConnectionId: uuid('source_connection_id').references(() => postgresConnections.id, {
+  /** Data source ID (replaces source_connection_id) - links to data_sources table */
+  dataSourceId: uuid('data_source_id').references(() => dataSources.id, {
     onDelete: 'cascade',
   }),
 

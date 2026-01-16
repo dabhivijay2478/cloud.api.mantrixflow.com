@@ -10,7 +10,7 @@ import { OrganizationRepository } from '../organizations/repositories/organizati
 import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
 import type { DashboardOverviewDto } from './dto/dashboard-response.dto';
 import { eq, and, desc, inArray } from 'drizzle-orm';
-import { postgresPipelineRuns } from '../../database/schemas';
+import { pipelineRuns } from '../../database/schemas';
 import type { DrizzleDatabase } from '../../database/drizzle/database';
 
 @Injectable()
@@ -59,16 +59,16 @@ export class DashboardService {
       // Get recent runs to determine status breakdown
       const recentRuns = await this.db
         .select({
-          status: postgresPipelineRuns.jobState,
+          status: pipelineRuns.jobState,
         })
-        .from(postgresPipelineRuns)
+        .from(pipelineRuns)
         .where(
           and(
-            inArray(postgresPipelineRuns.pipelineId, pipelineIds),
-            eq(postgresPipelineRuns.orgId, organizationId),
+            inArray(pipelineRuns.pipelineId, pipelineIds),
+            eq(pipelineRuns.organizationId, organizationId),
           ),
         )
-        .orderBy(desc(postgresPipelineRuns.createdAt))
+        .orderBy(desc(pipelineRuns.createdAt))
         .limit(100);
 
       // Count by status
@@ -145,14 +145,14 @@ export class DashboardService {
     // Get recent runs
     const runs = await this.db
       .select()
-      .from(postgresPipelineRuns)
+      .from(pipelineRuns)
       .where(
         and(
-          inArray(postgresPipelineRuns.pipelineId, pipelineIds),
-          eq(postgresPipelineRuns.orgId, organizationId),
+          inArray(pipelineRuns.pipelineId, pipelineIds),
+          eq(pipelineRuns.organizationId, organizationId),
         ),
       )
-      .orderBy(desc(postgresPipelineRuns.createdAt))
+      .orderBy(desc(pipelineRuns.createdAt))
       .limit(limit);
 
     return runs.map((run) => {
