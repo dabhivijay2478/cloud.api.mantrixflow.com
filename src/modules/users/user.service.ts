@@ -293,9 +293,8 @@ export class UserService {
     if (this.supabaseAdmin && updatedUser.supabaseUserId) {
       try {
         // Get existing user metadata to merge with new values
-        const { data: existingUser, error: getUserError } = await this.supabaseAdmin.auth.admin.getUserById(
-          updatedUser.supabaseUserId,
-        );
+        const { data: existingUser, error: getUserError } =
+          await this.supabaseAdmin.auth.admin.getUserById(updatedUser.supabaseUserId);
 
         if (getUserError) {
           console.error('Failed to get existing user metadata:', getUserError);

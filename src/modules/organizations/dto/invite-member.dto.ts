@@ -15,7 +15,8 @@ export class InviteMemberDto {
   email: string;
 
   @ApiProperty({
-    description: 'Role to assign to the invited member. AUTHORITATIVE ROLES: OWNER (cannot be invited), ADMIN, EDITOR, VIEWER',
+    description:
+      'Role to assign to the invited member. AUTHORITATIVE ROLES: OWNER (cannot be invited), ADMIN, EDITOR, VIEWER',
     enum: ['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'],
     example: 'EDITOR',
   })
@@ -45,7 +46,8 @@ export class InviteMemberDto {
 
 export class UpdateMemberDto {
   @ApiPropertyOptional({
-    description: 'Role to assign to the member. AUTHORITATIVE ROLES: OWNER (only one per org), ADMIN, EDITOR, VIEWER',
+    description:
+      'Role to assign to the member. AUTHORITATIVE ROLES: OWNER (only one per org), ADMIN, EDITOR, VIEWER',
     enum: ['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'],
   })
   @IsEnum(['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'])

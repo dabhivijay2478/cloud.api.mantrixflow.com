@@ -5,13 +5,7 @@
 
 import { Controller, Get, Query, Request, UseGuards } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiQuery,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { DashboardService } from './dashboard.service';
@@ -32,7 +26,8 @@ export class DashboardController {
   @Get('overview')
   @ApiOperation({
     summary: 'Get dashboard overview',
-    description: 'Get aggregated dashboard data for an organization including pipelines, migrations, and activity',
+    description:
+      'Get aggregated dashboard data for an organization including pipelines, migrations, and activity',
   })
   @ApiQuery({
     name: 'organizationId',

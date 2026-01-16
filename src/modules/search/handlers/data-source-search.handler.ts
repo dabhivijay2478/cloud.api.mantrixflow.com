@@ -16,11 +16,7 @@ export class DataSourceSearchHandler implements SearchHandler {
 
   constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
-  async search(
-    organizationId: string,
-    query: string,
-    limit: number,
-  ): Promise<SearchResultDto[]> {
+  async search(organizationId: string, query: string, limit: number): Promise<SearchResultDto[]> {
     const searchPattern = `%${query}%`;
 
     const results = await this.db
@@ -36,10 +32,7 @@ export class DataSourceSearchHandler implements SearchHandler {
         and(
           eq(dataSources.organizationId, organizationId),
           isNull(dataSources.deletedAt),
-          or(
-            ilike(dataSources.name, searchPattern),
-            ilike(dataSources.sourceType, searchPattern),
-          ),
+          or(ilike(dataSources.name, searchPattern), ilike(dataSources.sourceType, searchPattern)),
         ),
       )
       .limit(limit);
@@ -47,9 +40,10 @@ export class DataSourceSearchHandler implements SearchHandler {
     return results.map((dataSource) => {
       // Extract connection details from config JSONB for display
       const config = dataSource.config as any;
-      const subtitle = config?.host && config?.database 
-        ? `${config.host}/${config.database}`
-        : dataSource.sourceType;
+      const subtitle =
+        config?.host && config?.database
+          ? `${config.host}/${config.database}`
+          : dataSource.sourceType;
 
       return {
         type: this.entityType,

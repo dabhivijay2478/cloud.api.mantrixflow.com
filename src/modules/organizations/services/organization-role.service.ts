@@ -20,10 +20,7 @@ export class OrganizationRoleService {
    * Get user's role in an organization
    * Returns null if user is not a member
    */
-  async getUserRole(
-    userId: string,
-    organizationId: string,
-  ): Promise<OrganizationRole | null> {
+  async getUserRole(userId: string, organizationId: string): Promise<OrganizationRole | null> {
     // Check if user is owner (from organization_owners table)
     const isOwner = await this.ownerRepository.isOwner(userId, organizationId);
     if (isOwner) {
@@ -31,10 +28,7 @@ export class OrganizationRoleService {
     }
 
     // Check membership and get role
-    const member = await this.memberRepository.findByOrganizationAndUserId(
-      organizationId,
-      userId,
-    );
+    const member = await this.memberRepository.findByOrganizationAndUserId(organizationId, userId);
 
     if (!member) {
       return null;
@@ -76,10 +70,7 @@ export class OrganizationRoleService {
    * Check if user can invite members
    * Only OWNER and ADMIN can invite
    */
-  async canInviteMembers(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canInviteMembers(userId: string, organizationId: string): Promise<boolean> {
     return this.hasRoleOrHigher(userId, organizationId, 'ADMIN');
   }
 
@@ -87,10 +78,7 @@ export class OrganizationRoleService {
    * Check if user can remove members
    * Only OWNER and ADMIN can remove members
    */
-  async canRemoveMembers(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canRemoveMembers(userId: string, organizationId: string): Promise<boolean> {
     return this.hasRoleOrHigher(userId, organizationId, 'ADMIN');
   }
 
@@ -98,10 +86,7 @@ export class OrganizationRoleService {
    * Check if user can change member roles
    * Only OWNER can change roles
    */
-  async canChangeRoles(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canChangeRoles(userId: string, organizationId: string): Promise<boolean> {
     const userRole = await this.getUserRole(userId, organizationId);
     return userRole === 'OWNER';
   }
@@ -110,10 +95,7 @@ export class OrganizationRoleService {
    * Check if user can update organization details
    * Only OWNER can update organization details
    */
-  async canUpdateOrganization(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canUpdateOrganization(userId: string, organizationId: string): Promise<boolean> {
     const userRole = await this.getUserRole(userId, organizationId);
     return userRole === 'OWNER';
   }
@@ -122,10 +104,7 @@ export class OrganizationRoleService {
    * Check if user can manage data sources
    * OWNER, ADMIN, and EDITOR can manage data sources
    */
-  async canManageDataSources(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canManageDataSources(userId: string, organizationId: string): Promise<boolean> {
     return this.hasRoleOrHigher(userId, organizationId, 'EDITOR');
   }
 
@@ -133,10 +112,7 @@ export class OrganizationRoleService {
    * Check if user can manage data pipelines
    * OWNER, ADMIN, and EDITOR can manage data pipelines
    */
-  async canManageDataPipelines(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canManageDataPipelines(userId: string, organizationId: string): Promise<boolean> {
     return this.hasRoleOrHigher(userId, organizationId, 'EDITOR');
   }
 
@@ -144,10 +120,7 @@ export class OrganizationRoleService {
    * Check if user can view organization data
    * All roles (OWNER, ADMIN, EDITOR, VIEWER) can view
    */
-  async canViewOrganization(
-    userId: string,
-    organizationId: string,
-  ): Promise<boolean> {
+  async canViewOrganization(userId: string, organizationId: string): Promise<boolean> {
     return this.hasRoleOrHigher(userId, organizationId, 'VIEWER');
   }
 }

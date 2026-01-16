@@ -16,11 +16,7 @@ export class PipelineSearchHandler implements SearchHandler {
 
   constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
-  async search(
-    organizationId: string,
-    query: string,
-    limit: number,
-  ): Promise<SearchResultDto[]> {
+  async search(organizationId: string, query: string, limit: number): Promise<SearchResultDto[]> {
     const searchPattern = `%${query}%`;
 
     const results = await this.db
@@ -35,9 +31,7 @@ export class PipelineSearchHandler implements SearchHandler {
           eq(pipelines.organizationId, organizationId),
           or(
             ilike(pipelines.name, searchPattern),
-            pipelines.description
-              ? ilike(pipelines.description, searchPattern)
-              : undefined,
+            pipelines.description ? ilike(pipelines.description, searchPattern) : undefined,
           ),
         ),
       )

@@ -42,7 +42,7 @@ export const triggerTypeEnum = pgEnum('trigger_type', ['manual', 'scheduled', 'a
 /**
  * Pipeline Runs Table
  * Tracks individual pipeline execution runs
- * 
+ *
  * Renamed from postgres_pipeline_runs to pipeline_runs for multi-source support.
  */
 export const pipelineRuns = pgTable('pipeline_runs', {

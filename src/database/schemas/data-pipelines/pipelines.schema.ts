@@ -38,9 +38,9 @@ export const runStatusEnum = pgEnum('run_status', [
 /**
  * Pipelines Table
  * Stores pipeline configurations for data synchronization
- * 
+ *
  * Renamed from postgres_pipelines to pipelines for multi-source support.
- * 
+ *
  * Structure:
  * - Basic Info: id, organizationId, createdBy, name, description
  * - Source Configuration: sourceSchemaId (references pipeline_source_schemas)

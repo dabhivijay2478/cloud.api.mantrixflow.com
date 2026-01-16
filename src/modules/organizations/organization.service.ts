@@ -251,7 +251,7 @@ export class OrganizationService {
 
   /**
    * Update organization
-   * 
+   *
    * AUTHORIZATION: Only OWNER can update organization details
    */
   async updateOrganization(
@@ -265,9 +265,7 @@ export class OrganizationService {
     if (userId) {
       const canUpdate = await this.roleService.canUpdateOrganization(userId, id);
       if (!canUpdate) {
-        throw new ForbiddenException(
-          'Only OWNER can update organization details',
-        );
+        throw new ForbiddenException('Only OWNER can update organization details');
       }
     }
 
@@ -363,7 +361,7 @@ export class OrganizationService {
 
   /**
    * Set current organization for a user
-   * 
+   *
    * AUTHORIZATION: User must be a member of the organization
    */
   async setCurrentOrganization(userId: string, id: string): Promise<Organization> {
