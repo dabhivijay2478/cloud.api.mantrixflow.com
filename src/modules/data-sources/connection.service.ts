@@ -12,16 +12,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EncryptionService } from '../../common/encryption/encryption.service';
-import type {
-  DataSourceConnection,
-  NewDataSourceConnection,
-} from '../../database/schemas/data-sources';
+import type { DataSourceConnection } from '../../database/schemas/data-sources';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import {
-  CONNECTION_ACTIONS,
-  DATASOURCE_ACTIONS,
-  ENTITY_TYPES,
-} from '../activity-logs/constants/activity-log-types';
+import { CONNECTION_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import { OrganizationRoleService } from '../organizations/services/organization-role.service';
 import { DataSourceRepository } from './repositories/data-source.repository';
 import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
@@ -244,7 +237,7 @@ export class ConnectionService {
         break;
       case 's3':
         if (masked.access_key_id) {
-          masked.access_key_id = masked.access_key_id.substring(0, 4) + '****';
+          masked.access_key_id = `${masked.access_key_id.substring(0, 4)}****`;
         }
         if (masked.secret_access_key) {
           masked.secret_access_key = '****';
@@ -681,7 +674,7 @@ export class ConnectionService {
   /**
    * Test PostgreSQL connection
    */
-  private async testPostgresConnection(config: PostgresConfig): Promise<{
+  private async testPostgresConnection(_config: PostgresConfig): Promise<{
     success: boolean;
     message: string;
     details?: any;
@@ -697,7 +690,7 @@ export class ConnectionService {
   /**
    * Test MySQL connection
    */
-  private async testMySQLConnection(config: MySQLConfig): Promise<{
+  private async testMySQLConnection(_config: MySQLConfig): Promise<{
     success: boolean;
     message: string;
     details?: any;
@@ -712,7 +705,7 @@ export class ConnectionService {
   /**
    * Test MongoDB connection
    */
-  private async testMongoDBConnection(config: MongoDBConfig): Promise<{
+  private async testMongoDBConnection(_config: MongoDBConfig): Promise<{
     success: boolean;
     message: string;
     details?: any;
@@ -727,7 +720,7 @@ export class ConnectionService {
   /**
    * Test S3 connection
    */
-  private async testS3Connection(config: S3Config): Promise<{
+  private async testS3Connection(_config: S3Config): Promise<{
     success: boolean;
     message: string;
     details?: any;
@@ -742,7 +735,7 @@ export class ConnectionService {
   /**
    * Test API connection
    */
-  private async testAPIConnection(config: APIConfig): Promise<{
+  private async testAPIConnection(_config: APIConfig): Promise<{
     success: boolean;
     message: string;
     details?: any;

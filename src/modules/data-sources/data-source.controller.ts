@@ -39,11 +39,7 @@ import {
   type CreateDataSourceDto,
   type UpdateDataSourceDto,
 } from './data-source.service';
-import {
-  ConnectionService,
-  type CreateConnectionDto,
-  type UpdateConnectionDto,
-} from './connection.service';
+import { ConnectionService, type CreateConnectionDto } from './connection.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -105,7 +101,7 @@ export class DataSourceController {
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiResponse({ status: 200, description: 'Supported types retrieved successfully' })
-  async getSupportedTypes(@Param('organizationId', ParseUUIDPipe) organizationId: string) {
+  async getSupportedTypes(@Param('organizationId', ParseUUIDPipe) _organizationId: string) {
     const types = this.dataSourceService.getSupportedTypes();
     return createSuccessResponse({ types });
   }

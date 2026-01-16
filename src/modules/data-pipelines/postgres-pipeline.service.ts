@@ -87,7 +87,6 @@ import type {
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
 import {
-  ENTITY_TYPES,
   PIPELINE_ACTIONS,
   PIPELINE_RUN_ACTIONS,
 } from '../activity-logs/constants/activity-log-types';
@@ -2667,7 +2666,7 @@ export class PostgresPipelineService {
         destinationSchema.dataSourceId,
         pipeline.createdBy,
       );
-      const pool = this.connectionPool.getPool(destinationSchema.dataSourceId);
+      let pool = this.connectionPool.getPool(destinationSchema.dataSourceId);
       if (!pool) {
         pool = await this.connectionPool.createPool(
           destinationSchema.dataSourceId,

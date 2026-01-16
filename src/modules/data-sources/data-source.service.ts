@@ -11,7 +11,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import type { DataSource, NewDataSource } from '../../database/schemas/data-sources';
+import type { DataSource } from '../../database/schemas/data-sources';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
 import { DATASOURCE_ACTIONS, ENTITY_TYPES } from '../activity-logs/constants/activity-log-types';
 import { OrganizationRoleService } from '../organizations/services/organization-role.service';
