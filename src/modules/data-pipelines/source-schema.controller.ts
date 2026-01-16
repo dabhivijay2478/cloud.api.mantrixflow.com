@@ -134,7 +134,7 @@ export class SourceSchemaController {
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Source schema details' })
-  async getSourceSchema(@Param('organizationId') organizationId: string, @Param('id') id: string) {
+  async getSourceSchema(@Param('organizationId') _organizationId: string, @Param('id') id: string) {
     try {
       const schema = await this.sourceSchemaService.findById(id);
 
@@ -171,7 +171,7 @@ export class SourceSchemaController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Source schema updated successfully' })
   async updateSourceSchema(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Body() updates: UpdateSourceSchemaDto,
     @Request() req: ExpressRequestType,
@@ -213,7 +213,7 @@ export class SourceSchemaController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Source schema discovered' })
   async discoverSourceSchema(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
   ) {
@@ -254,7 +254,7 @@ export class SourceSchemaController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Source schema deleted successfully' })
   async deleteSourceSchema(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
   ) {

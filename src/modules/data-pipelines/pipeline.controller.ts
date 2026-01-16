@@ -37,17 +37,7 @@ import {
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { PipelineService } from './services/pipeline.service';
-import { SourceSchemaService } from './services/source-schema.service';
-import { DestinationSchemaService } from './services/destination-schema.service';
 import type { CreatePipelineDto, UpdatePipelineDto } from './services/pipeline.service';
-import type {
-  CreateSourceSchemaDto,
-  UpdateSourceSchemaDto,
-} from './services/source-schema.service';
-import type {
-  CreateDestinationSchemaDto,
-  UpdateDestinationSchemaDto,
-} from './services/destination-schema.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -58,11 +48,7 @@ type ExpressRequestType = ExpressRequest;
 export class PipelineController {
   private readonly logger = new Logger(PipelineController.name);
 
-  constructor(
-    private readonly pipelineService: PipelineService,
-    private readonly sourceSchemaService: SourceSchemaService,
-    private readonly destinationSchemaService: DestinationSchemaService,
-  ) {}
+  constructor(private readonly pipelineService: PipelineService) {}
 
   /**
    * Create pipeline
@@ -191,7 +177,7 @@ export class PipelineController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline updated successfully' })
   async updatePipeline(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Body() updates: UpdatePipelineDto,
     @Request() req: ExpressRequestType,
@@ -233,7 +219,7 @@ export class PipelineController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline deleted successfully' })
   async deletePipeline(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
   ) {
@@ -274,7 +260,7 @@ export class PipelineController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline run started' })
   async runPipeline(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
   ) {
@@ -315,7 +301,7 @@ export class PipelineController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline paused' })
   async pausePipeline(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
   ) {
@@ -356,7 +342,7 @@ export class PipelineController {
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline resumed' })
   async resumePipeline(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
   ) {
@@ -396,7 +382,10 @@ export class PipelineController {
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Validation result' })
-  async validatePipeline(@Param('organizationId') organizationId: string, @Param('id') id: string) {
+  async validatePipeline(
+    @Param('organizationId') _organizationId: string,
+    @Param('id') id: string,
+  ) {
     try {
       const result = await this.pipelineService.validatePipeline(id);
 
@@ -431,7 +420,7 @@ export class PipelineController {
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Dry run completed' })
-  async dryRunPipeline(@Param('organizationId') organizationId: string, @Param('id') id: string) {
+  async dryRunPipeline(@Param('organizationId') _organizationId: string, @Param('id') id: string) {
     try {
       const result = await this.pipelineService.dryRunPipeline(id);
 
@@ -466,7 +455,7 @@ export class PipelineController {
   @ApiQuery({ name: 'offset', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Pipeline run history' })
   async getPipelineRuns(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Query('limit') limit?: number,
     @Query('offset') offset?: number,
@@ -509,7 +498,7 @@ export class PipelineController {
   @ApiParam({ name: 'runId', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline run details' })
   async getPipelineRun(
-    @Param('organizationId') organizationId: string,
+    @Param('organizationId') _organizationId: string,
     @Param('id') id: string,
     @Param('runId') runId: string,
   ) {
@@ -548,7 +537,10 @@ export class PipelineController {
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
   @ApiResponse({ status: 200, description: 'Pipeline statistics' })
-  async getPipelineStats(@Param('organizationId') organizationId: string, @Param('id') id: string) {
+  async getPipelineStats(
+    @Param('organizationId') _organizationId: string,
+    @Param('id') id: string,
+  ) {
     try {
       const stats = await this.pipelineService.getPipelineStats(id);
 

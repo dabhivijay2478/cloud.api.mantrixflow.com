@@ -7,7 +7,13 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
-import type { ColumnMapping, SchemaValidationResult, WriteResult } from '../types/common.types';
+import { TransformerService } from './transformer.service';
+import type {
+  ColumnMapping,
+  SchemaValidationResult,
+  Transformation,
+  WriteResult,
+} from '../types/common.types';
 import type { PipelineDestinationSchema } from '../../../database/schemas';
 
 @Injectable()
@@ -17,10 +23,13 @@ export class EmitterService {
   constructor(
     private readonly connectionService: ConnectionService,
     private readonly dataSourceRepository: DataSourceRepository,
+    private readonly transformerService: TransformerService,
   ) {}
 
   /**
    * Write data to destination
+   * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
+   * Transformation happens during emission
    */
   async emit(options: {
     destinationSchema: PipelineDestinationSchema;
@@ -29,8 +38,19 @@ export class EmitterService {
     rows: any[];
     writeMode: 'append' | 'upsert' | 'replace';
     upsertKey?: string[];
+    columnMappings?: ColumnMapping[];
+    transformations?: Transformation[];
   }): Promise<WriteResult> {
-    const { destinationSchema, organizationId, userId, rows, writeMode, upsertKey } = options;
+    const {
+      destinationSchema,
+      organizationId,
+      userId,
+      rows,
+      writeMode,
+      upsertKey,
+      columnMappings = [],
+      transformations = [],
+    } = options;
 
     if (!destinationSchema.dataSourceId) {
       throw new BadRequestException('Destination schema must have a data source ID');
@@ -47,20 +67,59 @@ export class EmitterService {
       userId,
     );
 
+    // STEP 1: Transform data during emission (Collector → Emitter with transformation)
+    const transformedRows = await this.transformerService.transform(
+      rows,
+      columnMappings.length > 0
+        ? columnMappings
+        : (destinationSchema.columnMappings as ColumnMapping[]) || [],
+      transformations.length > 0 ? transformations : undefined,
+    );
+
+    // STEP 2: Emit transformed data to destination
     // Route to appropriate emitter based on destination type
+    let writeResult: WriteResult;
     switch (dataSource.sourceType) {
       case 'postgres':
       case 'mysql':
-        return this.emitToDatabase(destinationSchema, connectionConfig, rows, writeMode, upsertKey);
+        writeResult = await this.emitToDatabase(
+          destinationSchema,
+          connectionConfig,
+          transformedRows,
+          writeMode,
+          upsertKey,
+        );
+        break;
       case 'mongodb':
-        return this.emitToMongoDB(destinationSchema, connectionConfig, rows, writeMode, upsertKey);
+        writeResult = await this.emitToMongoDB(
+          destinationSchema,
+          connectionConfig,
+          transformedRows,
+          writeMode,
+          upsertKey,
+        );
+        break;
       case 's3':
-        return this.emitToS3(destinationSchema, connectionConfig, rows, writeMode);
+        writeResult = await this.emitToS3(
+          destinationSchema,
+          connectionConfig,
+          transformedRows,
+          writeMode,
+        );
+        break;
       case 'api':
-        return this.emitToAPI(destinationSchema, connectionConfig, rows);
+        writeResult = await this.emitToAPI(destinationSchema, connectionConfig, transformedRows);
+        break;
       default:
         throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
     }
+
+    // STEP 3: Post-processing with transformer (Transformer for validation/cleanup)
+    // This can be used for validation, cleanup, or additional processing after emission
+    // For now, we'll just return the write result
+    // Future: Add post-processing logic here if needed
+
+    return writeResult;
   }
 
   /**
@@ -199,10 +258,10 @@ export class EmitterService {
    */
   private async emitToDatabase(
     destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
+    _connectionConfig: any,
     rows: any[],
-    writeMode: 'append' | 'upsert' | 'replace',
-    upsertKey?: string[],
+    _writeMode: 'append' | 'upsert' | 'replace',
+    _upsertKey?: string[],
   ): Promise<WriteResult> {
     // TODO: Implement database emission
     // This should use appropriate database client library
@@ -223,10 +282,10 @@ export class EmitterService {
    */
   private async emitToMongoDB(
     destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
+    _connectionConfig: any,
     rows: any[],
-    writeMode: 'append' | 'upsert' | 'replace',
-    upsertKey?: string[],
+    _writeMode: 'append' | 'upsert' | 'replace',
+    _upsertKey?: string[],
   ): Promise<WriteResult> {
     // TODO: Implement MongoDB emission
     this.logger.log(
@@ -244,9 +303,9 @@ export class EmitterService {
    */
   private async emitToS3(
     destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
+    _connectionConfig: any,
     rows: any[],
-    writeMode: 'append' | 'upsert' | 'replace',
+    _writeMode: 'append' | 'upsert' | 'replace',
   ): Promise<WriteResult> {
     // TODO: Implement S3 emission
     this.logger.log(`Emitting ${rows.length} rows to S3: ${destinationSchema.destinationTable}`);
@@ -261,8 +320,8 @@ export class EmitterService {
    * Emit to API
    */
   private async emitToAPI(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
     rows: any[],
   ): Promise<WriteResult> {
     // TODO: Implement API emission
@@ -278,9 +337,9 @@ export class EmitterService {
    * Validate database schema
    */
   private async validateDatabaseSchema(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
+    _columnMappings: ColumnMapping[],
   ): Promise<SchemaValidationResult> {
     // TODO: Implement database schema validation
     return {
@@ -294,9 +353,9 @@ export class EmitterService {
    * Validate MongoDB schema
    */
   private async validateMongoDBSchema(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
+    _columnMappings: ColumnMapping[],
   ): Promise<SchemaValidationResult> {
     // TODO: Implement MongoDB schema validation
     return {
@@ -310,9 +369,9 @@ export class EmitterService {
    * Validate S3 schema
    */
   private async validateS3Schema(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
+    _columnMappings: ColumnMapping[],
   ): Promise<SchemaValidationResult> {
     // TODO: Implement S3 schema validation
     return {
@@ -326,9 +385,9 @@ export class EmitterService {
    * Validate API schema
    */
   private async validateAPISchema(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
+    _columnMappings: ColumnMapping[],
   ): Promise<SchemaValidationResult> {
     // TODO: Implement API schema validation
     return {
@@ -343,8 +402,8 @@ export class EmitterService {
    */
   private async createDatabaseTable(
     destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
+    _connectionConfig: any,
+    _columnMappings: ColumnMapping[],
   ): Promise<{ created: boolean; tableName: string }> {
     // TODO: Implement database table creation
     this.logger.log(
@@ -360,8 +419,8 @@ export class EmitterService {
    * Check if database table exists
    */
   private async databaseTableExists(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
   ): Promise<boolean> {
     // TODO: Implement database table existence check
     return false;

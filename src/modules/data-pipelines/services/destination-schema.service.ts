@@ -3,11 +3,8 @@
  * Business logic for pipeline destination schema management
  */
 
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type {
-  NewPipelineDestinationSchema,
-  PipelineDestinationSchema,
-} from '../../../database/schemas';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { PipelineDestinationSchema } from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DESTINATION_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
@@ -38,8 +35,6 @@ export interface UpdateDestinationSchemaDto {
 
 @Injectable()
 export class DestinationSchemaService {
-  private readonly logger = new Logger(DestinationSchemaService.name);
-
   constructor(
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,

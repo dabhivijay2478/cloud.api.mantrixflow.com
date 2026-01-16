@@ -3,8 +3,8 @@
  * Business logic for pipeline source schema management
  */
 
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { NewPipelineSourceSchema, PipelineSourceSchema } from '../../../database/schemas';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { PipelineSourceSchema } from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { SOURCE_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
@@ -32,8 +32,6 @@ export interface UpdateSourceSchemaDto {
 
 @Injectable()
 export class SourceSchemaService {
-  private readonly logger = new Logger(SourceSchemaService.name);
-
   constructor(
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,

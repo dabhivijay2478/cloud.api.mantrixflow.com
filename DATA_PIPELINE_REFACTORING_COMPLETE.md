@@ -14,27 +14,29 @@ Rebuilt the entire data pipeline module from scratch using the new database sche
      - `collect()` - Collect data from source
      - `discoverSchema()` - Discover schema structure
 
-2. **TransformerService** (`services/transformer.service.ts`)
-   - Generic data transformation
-   - Works with column mappings and transformations
-   - Methods:
-     - `transform()` - Transform rows using mappings
-     - `validate()` - Validate transformation configuration
-
-3. **EmitterService** (`services/emitter.service.ts`)
+2. **EmitterService** (`services/emitter.service.ts`)
    - Generic data emission to any destination type
+   - **Performs transformation internally** before emitting
    - Routes to appropriate emitter based on destination type
    - Methods:
-     - `emit()` - Write data to destination
+     - `emit()` - Transform and write data to destination (transformation happens here)
      - `validateSchema()` - Validate destination schema
      - `createTable()` - Create destination table if needed
      - `tableExists()` - Check if table exists
+
+3. **TransformerService** (`services/transformer.service.ts`)
+   - Generic data transformation
+   - Used by EmitterService for transformation during emission
+   - Can be used for post-processing after emission
+   - Methods:
+     - `transform()` - Transform rows using mappings
+     - `validate()` - Validate transformation configuration
 
 ### Core Services
 
 4. **PipelineService** (`services/pipeline.service.ts`)
    - Main pipeline orchestration
-   - Uses collector, transformer, and emitter services
+   - Follows architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
    - Full activity logging for all operations
    - Methods:
      - `createPipeline()` - Create new pipeline
@@ -158,7 +160,9 @@ Rebuilt the entire data pipeline module from scratch using the new database sche
 
 ### ✅ Generic Design
 - Works with PostgreSQL, MySQL, MongoDB, S3, API, and any future data source types
-- Collector, Transformer, and Emitter services route to appropriate handlers based on source/destination type
+- **Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)**
+- Transformation happens during emission phase (inside EmitterService)
+- Services route to appropriate handlers based on source/destination type
 - Easy to extend for new data source types
 
 ### ✅ New Database Schema

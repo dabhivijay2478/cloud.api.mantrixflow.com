@@ -5,7 +5,6 @@
  */
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
 import type {
   PipelineDestinationSchema,
   PipelineSourceSchema,
@@ -16,20 +15,12 @@ import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import {
   PIPELINE_ACTIONS,
   PIPELINE_RUN_ACTIONS,
-  SOURCE_SCHEMA_ACTIONS,
-  DESTINATION_SCHEMA_ACTIONS,
 } from '../../activity-logs/constants/activity-log-types';
-import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { CollectorService } from './collector.service';
 import { EmitterService } from './emitter.service';
 import { TransformerService } from './transformer.service';
-import type {
-  ColumnMapping,
-  DryRunResult,
-  PipelineRunResult,
-  ValidationResult,
-} from '../types/common.types';
+import type { ColumnMapping, DryRunResult, ValidationResult } from '../types/common.types';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
@@ -65,7 +56,6 @@ export class PipelineService {
     private readonly pipelineRepository: PipelineRepository,
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
-    private readonly connectionService: ConnectionService,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly collectorService: CollectorService,
     private readonly transformerService: TransformerService,
@@ -307,7 +297,7 @@ export class PipelineService {
         throw new BadRequestException('Source and destination must have data source IDs');
       }
 
-      // Collect data from source
+      // STEP 1: Collect data from source (Collector)
       const sourceData = await this.collectorService.collect({
         sourceSchema,
         organizationId: pipeline.organizationId,
@@ -315,25 +305,25 @@ export class PipelineService {
         limit: 1000,
       });
 
-      // Transform data
+      // STEP 2: Emit data to destination (Emitter handles transformation internally)
+      // Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
       const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
       const transformations = (pipeline.transformations as any[]) || [];
 
-      const transformedData = await this.transformerService.transform(
-        sourceData.rows,
-        columnMappings,
-        transformations,
-      );
-
-      // Emit data to destination
       const writeResult = await this.emitterService.emit({
         destinationSchema,
         organizationId: pipeline.organizationId,
         userId,
-        rows: transformedData,
+        rows: sourceData.rows, // Raw rows from collector
         writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
         upsertKey: (destinationSchema.upsertKey as string[]) || undefined,
+        columnMappings,
+        transformations,
       });
+
+      // STEP 3: Post-processing with transformer (optional validation/cleanup)
+      // The transformer can be used here for post-emission validation or cleanup
+      // For now, we rely on the emitter's internal transformation
 
       // Update run with results
       const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
@@ -527,7 +517,7 @@ export class PipelineService {
       limit: 10,
     });
 
-    // Transform sample data
+    // Transform sample data using transformer (for dry run preview)
     const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
     const transformations = (pipeline.transformations as any[]) || [];
 

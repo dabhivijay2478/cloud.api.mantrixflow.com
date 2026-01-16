@@ -120,10 +120,10 @@ export class CollectorService {
    */
   private async collectFromDatabase(
     sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    cursor?: string,
+    _connectionConfig: any,
+    _limit: number,
+    _offset: number,
+    _cursor?: string,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string }> {
     // TODO: Implement database collection
     // This should use a database client library (pg for postgres, mysql2 for mysql)
@@ -144,10 +144,10 @@ export class CollectorService {
    */
   private async collectFromMongoDB(
     sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    cursor?: string,
+    _connectionConfig: any,
+    _limit: number,
+    _offset: number,
+    _cursor?: string,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string }> {
     // TODO: Implement MongoDB collection
     this.logger.log(`Collecting from MongoDB: ${sourceSchema.sourceTable}`);
@@ -162,10 +162,10 @@ export class CollectorService {
    */
   private async collectFromS3(
     sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    cursor?: string,
+    _connectionConfig: any,
+    _limit: number,
+    _offset: number,
+    _cursor?: string,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string }> {
     // TODO: Implement S3 collection
     this.logger.log(`Collecting from S3: ${sourceSchema.sourceTable}`);
@@ -180,10 +180,10 @@ export class CollectorService {
    */
   private async collectFromAPI(
     sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    cursor?: string,
+    _connectionConfig: any,
+    _limit: number,
+    _offset: number,
+    _cursor?: string,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string }> {
     // TODO: Implement API collection
     this.logger.log(`Collecting from API: ${sourceSchema.sourceConfig?.endpoint}`);
@@ -198,7 +198,7 @@ export class CollectorService {
    */
   private async discoverDatabaseSchema(
     sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
+    _connectionConfig: any,
   ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
     // TODO: Implement database schema discovery
     this.logger.log(`Discovering database schema: ${sourceSchema.sourceTable}`);
@@ -212,8 +212,8 @@ export class CollectorService {
    * Discover MongoDB schema
    */
   private async discoverMongoDBSchema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
+    _sourceSchema: PipelineSourceSchema,
+    _connectionConfig: any,
   ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
     // TODO: Implement MongoDB schema discovery
     return {
@@ -226,8 +226,8 @@ export class CollectorService {
    * Discover S3 schema
    */
   private async discoverS3Schema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
+    _sourceSchema: PipelineSourceSchema,
+    _connectionConfig: any,
   ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
     // TODO: Implement S3 schema discovery
     return {
@@ -240,8 +240,8 @@ export class CollectorService {
    * Discover API schema
    */
   private async discoverAPISchema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
+    _sourceSchema: PipelineSourceSchema,
+    _connectionConfig: any,
   ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
     // TODO: Implement API schema discovery
     return {
