@@ -12,6 +12,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  Logger,
   NotFoundException,
   Param,
   Patch,
@@ -48,6 +49,8 @@ import { PostgresPipelineService } from './postgres-pipeline.service';
 @UseGuards(SupabaseAuthGuard)
 @Controller('data-pipelines')
 export class DataPipelineController {
+  private readonly logger = new Logger(DataPipelineController.name);
+
   constructor(private readonly pipelineService: PostgresPipelineService) {}
 
   /**
@@ -66,15 +69,15 @@ export class DataPipelineController {
   async createPipeline(
     @Body() dto: CreatePipelineDto,
     @Request() req: ExpressRequestType,
-    @Query('orgId') orgIdParam?: string,
+    @Query('organizationId') organizationIdParam?: string,
   ) {
     try {
-      const finalOrgId = orgIdParam || req?.user?.orgId;
+      const finalOrganizationId = organizationIdParam || req?.user?.organizationId;
       const finalUserId = req?.user?.id;
 
-      if (!finalOrgId) {
+      if (!finalOrganizationId) {
         throw new BadRequestException(
-          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+          'Organization ID is required. Please provide organizationId as a query parameter or ensure you are authenticated.',
         );
       }
 
@@ -84,7 +87,7 @@ export class DataPipelineController {
 
       // Validate UUID format
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(finalOrgId)) {
+      if (!uuidRegex.test(finalOrganizationId)) {
         throw new BadRequestException('Invalid Organization ID format. Must be a valid UUID v4.');
       }
 
@@ -138,17 +141,17 @@ export class DataPipelineController {
 
       // Create pipeline with schemas
       const pipeline = await this.pipelineService.createPipeline({
-        orgId: finalOrgId,
+        organizationId: finalOrganizationId,
         userId: finalUserId,
         name: dto.name,
         description: dto.description,
         sourceType: dto.sourceType,
-        sourceConnectionId: dto.sourceConnectionId,
+        sourceDataSourceId: dto.sourceDataSourceId,
         sourceConfig: dto.sourceConfig,
         sourceSchema: dto.sourceSchema,
         sourceTable: dto.sourceTable,
         sourceQuery: dto.sourceQuery,
-        destinationConnectionId: dto.destinationConnectionId,
+        destinationDataSourceId: dto.destinationDataSourceId,
         destinationSchema: dto.destinationSchema || 'public',
         destinationTable: dto.destinationTable,
         columnMappings: dto.columnMappings,
@@ -184,12 +187,12 @@ export class DataPipelineController {
       const pgErrorMessage = pgError?.message || drizzleError?.message || 'Unknown error';
 
       // Log the actual error for debugging
-      console.error('Pipeline creation error:', {
+      this.logger.error('Pipeline creation error', {
         errorCode: pgErrorCode,
         errorDetail: pgErrorDetail,
         errorConstraint: pgErrorConstraint,
         errorMessage: pgErrorMessage,
-        fullError: error,
+        stack: error instanceof Error ? error.stack : undefined,
       });
 
       // If we have a PostgreSQL error code, handle it specifically
@@ -265,7 +268,7 @@ export class DataPipelineController {
     description: 'Get all data pipelines for the organization.',
   })
   @ApiQuery({
-    name: 'orgId',
+    name: 'organizationId',
     required: false,
     description: 'Organization ID',
     type: String,
@@ -274,23 +277,26 @@ export class DataPipelineController {
     status: 200,
     description: 'List of pipelines',
   })
-  async listPipelines(@Request() req: ExpressRequestType, @Query('orgId') orgIdParam?: string) {
+  async listPipelines(
+    @Request() req: ExpressRequestType,
+    @Query('organizationId') organizationIdParam?: string,
+  ) {
     try {
-      const finalOrgId = orgIdParam || req?.user?.orgId;
+      const finalOrganizationId = organizationIdParam || req?.user?.organizationId;
 
-      if (!finalOrgId) {
+      if (!finalOrganizationId) {
         throw new BadRequestException(
-          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+          'Organization ID is required. Please provide organizationId as a query parameter or ensure you are authenticated.',
         );
       }
 
       // Validate UUID format
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(finalOrgId)) {
+      if (!uuidRegex.test(finalOrganizationId)) {
         throw new BadRequestException('Invalid Organization ID format. Must be a valid UUID v4.');
       }
 
-      const pipelines = await this.pipelineService.findPipelinesByOrg(finalOrgId);
+      const pipelines = await this.pipelineService.findPipelinesByOrg(finalOrganizationId);
 
       return createListResponse(pipelines, `Found ${pipelines.length} pipeline(s)`, {
         total: pipelines.length,
@@ -324,24 +330,24 @@ export class DataPipelineController {
   async getPipeline(
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
-    @Query('orgId') orgIdParam?: string,
+    @Query('organizationId') organizationIdParam?: string,
   ) {
     try {
-      const finalOrgId = orgIdParam || req?.user?.orgId;
+      const finalOrganizationId = organizationIdParam || req?.user?.organizationId;
 
-      if (!finalOrgId) {
+      if (!finalOrganizationId) {
         throw new BadRequestException(
-          'Organization ID is required. Please provide orgId as a query parameter or ensure you are authenticated.',
+          'Organization ID is required. Please provide organizationId as a query parameter or ensure you are authenticated.',
         );
       }
 
       // Validate UUID format
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(finalOrgId)) {
+      if (!uuidRegex.test(finalOrganizationId)) {
         throw new BadRequestException('Invalid Organization ID format. Must be a valid UUID v4.');
       }
 
-      const pipeline = await this.pipelineService.findPipelineById(id, finalOrgId);
+      const pipeline = await this.pipelineService.findPipelineById(id, finalOrganizationId);
 
       if (!pipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);
@@ -379,10 +385,10 @@ export class DataPipelineController {
     @Param('id') id: string,
     @Body() updates: UpdatePipelineDto,
     @Request() req: ExpressRequestType,
-    @Query('orgId') orgId?: string,
+    @Query('organizationId') organizationId?: string,
   ) {
     try {
-      const _finalOrgId = orgId || req?.user?.orgId;
+      const _finalOrganizationId = organizationId || req?.user?.organizationId;
 
       // If collectors/emitters are provided, update the transformations JSONB field
       if (updates.collectors || updates.emitters) {
@@ -457,10 +463,10 @@ export class DataPipelineController {
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
     @Query('dropTable') dropTable?: boolean,
-    @Query('orgId') orgId?: string,
+    @Query('organizationId') organizationId?: string,
   ) {
     try {
-      const _finalOrgId = orgId || req?.user?.orgId;
+      const _finalOrganizationId = organizationId || req?.user?.organizationId;
 
       await this.pipelineService.deletePipeline(id, dropTable || false);
 
@@ -554,15 +560,15 @@ export class DataPipelineController {
   async pausePipeline(
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
-    @Query('orgId') orgIdParam?: string,
+    @Query('organizationId') organizationIdParam?: string,
   ) {
     try {
-      const finalOrgId = orgIdParam || req?.user?.orgId;
+      const finalOrganizationId = organizationIdParam || req?.user?.organizationId;
 
       await this.pipelineService.togglePipeline(id, 'paused');
 
       // Fetch and return the updated pipeline to ensure frontend has latest state
-      const updatedPipeline = await this.pipelineService.findPipelineById(id, finalOrgId);
+      const updatedPipeline = await this.pipelineService.findPipelineById(id, finalOrganizationId);
 
       if (!updatedPipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);
@@ -595,15 +601,15 @@ export class DataPipelineController {
   async resumePipeline(
     @Param('id') id: string,
     @Request() req: ExpressRequestType,
-    @Query('orgId') orgIdParam?: string,
+    @Query('organizationId') organizationIdParam?: string,
   ) {
     try {
-      const finalOrgId = orgIdParam || req?.user?.orgId;
+      const finalOrganizationId = organizationIdParam || req?.user?.organizationId;
 
       await this.pipelineService.togglePipeline(id, 'active');
 
       // Fetch and return the updated pipeline to ensure frontend has latest state
-      const updatedPipeline = await this.pipelineService.findPipelineById(id, finalOrgId);
+      const updatedPipeline = await this.pipelineService.findPipelineById(id, finalOrganizationId);
 
       if (!updatedPipeline) {
         throw new NotFoundException(`Pipeline ${id} not found`);

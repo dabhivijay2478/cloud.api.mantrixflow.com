@@ -81,12 +81,16 @@ import { randomUUID } from 'node:crypto';
 import type {
   PipelineDestinationSchema,
   PipelineSourceSchema,
-  PostgresPipeline,
-  PostgresPipelineRun,
+  Pipeline,
+  PipelineRun,
 } from '../../database/schemas';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import { ENTITY_TYPES, PIPELINE_ACTIONS } from '../activity-logs/constants/activity-log-types';
+import {
+  ENTITY_TYPES,
+  PIPELINE_ACTIONS,
+  PIPELINE_RUN_ACTIONS,
+} from '../activity-logs/constants/activity-log-types';
 import type {
   ColumnMapping,
   DryRunResult,
@@ -95,7 +99,8 @@ import type {
   Transformation,
   ValidationResult,
 } from '../data-sources/postgres/postgres.types';
-import { PostgresConnectionRepository } from '../data-sources/postgres/repositories/postgres-connection.repository';
+import { ConnectionService } from '../data-sources/connection.service';
+import { DataSourceRepository } from '../data-sources/repositories/data-source.repository';
 import { PostgresConnectionPoolService } from '../data-sources/postgres/services/postgres-connection-pool.service';
 import { PostgresQueryExecutorService } from '../data-sources/postgres/services/postgres-query-executor.service';
 import { PostgresDestinationService } from './emitters/postgres-destination.service';
@@ -112,7 +117,8 @@ export class PostgresPipelineService {
     private readonly pipelineRepository: PostgresPipelineRepository,
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
-    private readonly connectionRepository: PostgresConnectionRepository,
+    private readonly connectionService: ConnectionService,
+    private readonly dataSourceRepository: DataSourceRepository,
     private readonly connectionPool: PostgresConnectionPoolService,
     readonly _queryExecutor: PostgresQueryExecutorService,
     private readonly destinationService: PostgresDestinationService,
@@ -124,17 +130,17 @@ export class PostgresPipelineService {
    * Create pipeline with source and destination schemas
    */
   async createPipeline(data: {
-    orgId: string;
+    organizationId: string;
     userId: string;
     name: string;
     description?: string;
     sourceType: string;
-    sourceConnectionId?: string;
+    sourceDataSourceId?: string;
     sourceConfig?: any;
     sourceSchema?: string;
     sourceTable?: string;
     sourceQuery?: string;
-    destinationConnectionId: string;
+    destinationDataSourceId: string;
     destinationSchema?: string;
     destinationTable: string;
     columnMappings?: any[];
@@ -164,68 +170,93 @@ export class PostgresPipelineService {
       destinationType: string;
       connectionConfig?: Record<string, string>; // Optional, ignored - connection is referenced by destinationId
     }>;
-  }): Promise<PostgresPipeline> {
-    // Validate that destination connection exists and is accessible
+  }): Promise<Pipeline> {
+    // Validate that destination data source exists and is accessible
     try {
-      const destinationConnection = await this.connectionRepository.findById(
-        data.destinationConnectionId,
-        data.orgId,
+      const destinationDataSource = await this.dataSourceRepository.findById(
+        data.destinationDataSourceId,
       );
+      if (!destinationDataSource) {
+        throw new BadRequestException(
+          `Destination data source ${data.destinationDataSourceId} not found. Please ensure the data source exists and you have access to it.`,
+        );
+      }
+
+      // Verify data source belongs to organization
+      if (destinationDataSource.organizationId !== data.organizationId) {
+        throw new BadRequestException(
+          'Destination data source does not belong to this organization',
+        );
+      }
+
+      // Get connection for data source
+      const destinationConnection = await this.connectionService.getConnection(
+        data.organizationId,
+        data.destinationDataSourceId,
+        data.userId,
+        true, // Include sensitive data for validation
+      );
+
       if (!destinationConnection) {
         throw new BadRequestException(
-          `Destination connection ${data.destinationConnectionId} not found or not accessible. Please ensure the connection exists and you have access to it.`,
+          `Connection not configured for destination data source ${data.destinationDataSourceId}. Please configure the connection first.`,
         );
       }
 
       // Check connection status
       if (destinationConnection.status === 'error') {
         this.logger.warn(
-          `Destination connection ${destinationConnection.name} has error status. Last error: ${destinationConnection.lastError}`,
+          `Destination connection for ${destinationDataSource.name} has error status. Last error: ${destinationConnection.lastError}`,
         );
         throw new BadRequestException(
-          `Destination connection "${destinationConnection.name}" has an error status. Please test and fix the connection in the Data Sources page before creating a pipeline. Last error: ${destinationConnection.lastError || 'Unknown error'}`,
+          `Destination data source "${destinationDataSource.name}" has an error status. Please test and fix the connection in the Data Sources page before creating a pipeline. Last error: ${destinationConnection.lastError || 'Unknown error'}`,
         );
       }
 
       this.logger.log(
-        `Validated destination connection: ${destinationConnection.name} (${data.destinationConnectionId})`,
+        `Validated destination data source: ${destinationDataSource.name} (${data.destinationDataSourceId})`,
       );
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;
       }
       this.logger.error(
-        `Failed to validate destination connection: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to validate destination data source: ${error instanceof Error ? error.message : String(error)}`,
       );
       throw new BadRequestException(
-        `Failed to validate destination connection: ${error instanceof Error ? error.message : 'Unknown error'}. Please ensure the connection exists and is accessible.`,
+        `Failed to validate destination data source: ${error instanceof Error ? error.message : 'Unknown error'}. Please ensure the data source exists and is accessible.`,
       );
     }
 
-    // Validate source connection if provided
-    if (data.sourceConnectionId) {
+    // Validate source data source if provided
+    if (data.sourceDataSourceId) {
       try {
-        const sourceConnection = await this.connectionRepository.findById(
-          data.sourceConnectionId,
-          data.orgId,
-        );
-        if (!sourceConnection) {
+        const sourceDataSource = await this.dataSourceRepository.findById(data.sourceDataSourceId);
+        if (!sourceDataSource) {
           throw new BadRequestException(
-            `Source connection ${data.sourceConnectionId} not found or not accessible`,
+            `Source data source ${data.sourceDataSourceId} not found or not accessible`,
           );
         }
+
+        // Verify data source belongs to organization
+        if (sourceDataSource.organizationId !== data.organizationId) {
+          throw new BadRequestException(
+            'Source data source does not belong to this organization',
+          );
+        }
+
         this.logger.log(
-          `Validated source connection: ${sourceConnection.name} (${data.sourceConnectionId})`,
+          `Validated source data source: ${sourceDataSource.name} (${data.sourceDataSourceId})`,
         );
       } catch (error) {
         if (error instanceof BadRequestException) {
           throw error;
         }
         this.logger.error(
-          `Failed to validate source connection: ${error instanceof Error ? error.message : String(error)}`,
+          `Failed to validate source data source: ${error instanceof Error ? error.message : String(error)}`,
         );
         throw new BadRequestException(
-          `Failed to validate source connection: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          `Failed to validate source data source: ${error instanceof Error ? error.message : 'Unknown error'}`,
         );
       }
     }
@@ -254,12 +285,14 @@ export class PostgresPipelineService {
     // 1. Create source schema
     let sourceSchema: PipelineSourceSchema;
     try {
+      if (!data.sourceDataSourceId) {
+        throw new BadRequestException('Source data source ID is required');
+      }
+
       sourceSchema = await this.sourceSchemaRepository.create({
-        orgId: data.orgId,
-        userId: data.userId,
+        organizationId: data.organizationId,
+        dataSourceId: data.sourceDataSourceId,
         sourceType: data.sourceType,
-        sourceConnectionId: data.sourceConnectionId,
-        sourceConfig: data.sourceConfig,
         sourceSchema: sourceSchemaName,
         sourceTable: sourceTableName,
         sourceQuery: data.sourceQuery,
@@ -317,17 +350,21 @@ export class PostgresPipelineService {
     ) {
       // Table name doesn't match auto-generated pattern - check if it actually exists in database
       try {
+        // Get decrypted connection config to check table existence
+        const decryptedConfig = await this.connectionService.getDecryptedConnection(
+          data.organizationId,
+          data.destinationDataSourceId,
+          data.userId,
+        );
+
         // Get connection pool to check table existence
-        let pool = this.connectionPool.getPool(data.destinationConnectionId);
+        let pool = this.connectionPool.getPool(data.destinationDataSourceId);
         if (!pool) {
-          const connection = await this.connectionRepository.findById(
-            data.destinationConnectionId,
-            data.orgId,
+          // Create pool from decrypted config
+          pool = await this.connectionPool.createPool(
+            data.destinationDataSourceId,
+            decryptedConfig as any,
           );
-          if (connection && connection.status === 'active') {
-            const credentials = this.connectionRepository.decryptCredentials(connection);
-            pool = await this.connectionPool.createPool(data.destinationConnectionId, credentials);
-          }
         }
 
         if (pool) {
@@ -374,9 +411,8 @@ export class PostgresPipelineService {
     let destinationSchema: PipelineDestinationSchema;
     try {
       destinationSchema = await this.destinationSchemaRepository.create({
-        orgId: data.orgId,
-        userId: data.userId,
-        destinationConnectionId: data.destinationConnectionId,
+        organizationId: data.organizationId,
+        dataSourceId: data.destinationDataSourceId,
         destinationSchema: destinationSchemaName,
         destinationTable: destinationTableName,
         destinationTableExists: destinationTableExists, // Set based on whether user selected existing table
@@ -503,10 +539,10 @@ export class PostgresPipelineService {
         `transformations=${pipelineConfig.transformations?.length || 0}`,
     );
 
-    // Validate destinationConnectionId is provided (required for legacy column)
-    if (!data.destinationConnectionId) {
+    // Validate destinationDataSourceId is provided
+    if (!data.destinationDataSourceId) {
       throw new BadRequestException(
-        'destinationConnectionId is required. Please ensure emitters are configured with valid destination connections.',
+        'destinationDataSourceId is required. Please ensure emitters are configured with valid destination data sources.',
       );
     }
 
@@ -529,15 +565,15 @@ export class PostgresPipelineService {
       }
 
       this.logger.log(
-        `Creating pipeline with source schema: ${sourceSchema.id}, destination schema: ${destinationSchema.id}, destination connection: ${data.destinationConnectionId}`,
+        `Creating pipeline with source schema: ${sourceSchema.id}, destination schema: ${destinationSchema.id}, destination data source: ${data.destinationDataSourceId}`,
       );
 
       // IMPORTANT: Check for duplicate pipeline before creating
       // Prevent duplicate creation by checking if a pipeline with the same configuration already exists
-      // Check by name + orgId + destination schema/table combination to ensure true uniqueness
-      const existingPipeline = await this.pipelineRepository.findByNameAndOrgId(
+      // Check by name + organizationId + destination schema/table combination to ensure true uniqueness
+      const existingPipeline = await this.pipelineRepository.findByNameAndOrganizationId(
         data.name,
-        data.orgId,
+        data.organizationId,
       );
 
       if (existingPipeline && !existingPipeline.deletedAt) {
@@ -548,13 +584,13 @@ export class PostgresPipelineService {
         if (existingWithSchemas) {
           const { destinationSchema: existingDestSchema } = existingWithSchemas;
           const isSameDestination =
-            existingDestSchema.destinationConnectionId === data.destinationConnectionId &&
+            existingDestSchema.dataSourceId === data.destinationDataSourceId &&
             existingDestSchema.destinationSchema === (data.destinationSchema || 'public') &&
             existingDestSchema.destinationTable === destinationTableName;
 
           if (isSameDestination) {
             this.logger.warn(
-              `Pipeline with name '${data.name}' and same destination already exists in org ${data.orgId}. Returning existing pipeline: ${existingPipeline.id}`,
+              `Pipeline with name '${data.name}' and same destination already exists in org ${data.organizationId}. Returning existing pipeline: ${existingPipeline.id}`,
             );
             // Return existing pipeline instead of creating a duplicate
             return existingPipeline;
@@ -562,7 +598,7 @@ export class PostgresPipelineService {
         } else {
           // Can't verify - but pipeline with same name exists, so return it to prevent duplicate
           this.logger.warn(
-            `Pipeline with name '${data.name}' already exists in org ${data.orgId}. Returning existing pipeline: ${existingPipeline.id}`,
+            `Pipeline with name '${data.name}' already exists in org ${data.organizationId}. Returning existing pipeline: ${existingPipeline.id}`,
           );
           return existingPipeline;
         }
@@ -584,15 +620,12 @@ export class PostgresPipelineService {
       );
 
       const pipeline = await this.pipelineRepository.create({
-        orgId: data.orgId,
-        userId: data.userId,
+        organizationId: data.organizationId,
+        createdBy: data.userId,
         name: data.name,
         description: data.description,
-        sourceType: data.sourceType, // Required by database table (legacy column)
         sourceSchemaId: sourceSchema.id,
         destinationSchemaId: destinationSchema.id,
-        destinationConnectionId: data.destinationConnectionId, // Legacy column - required during migration
-        destinationTable: data.destinationTable, // Legacy column - required during migration
         transformations: finalPipelineConfig, // Store full config including collectors/emitters
         syncMode: data.syncMode || 'full',
         incrementalColumn: data.incrementalColumn,
@@ -628,22 +661,25 @@ export class PostgresPipelineService {
 
       // Log activity
       try {
-        await this.activityLogService.logActivity({
-          organizationId: data.orgId,
-          userId: data.userId,
-          actionType: PIPELINE_ACTIONS.CREATED,
-          entityType: ENTITY_TYPES.PIPELINE,
-          entityId: pipeline.id,
-          message: `Pipeline "${pipeline.name}" created`,
-          metadata: {
-            name: pipeline.name,
+        await this.activityLogService.logPipelineAction(
+          data.organizationId,
+          data.userId,
+          PIPELINE_ACTIONS.CREATED,
+          pipeline.id,
+          pipeline.name,
+          {
             sourceType: data.sourceType,
             syncMode: pipeline.syncMode,
+            sourceSchemaId: sourceSchema.id,
+            destinationSchemaId: destinationSchema.id,
           },
-        });
+        );
       } catch (error) {
         // Don't fail pipeline creation if logging fails
-        this.logger.error('Failed to log pipeline creation activity:', error);
+        this.logger.error(
+          'Failed to log pipeline creation activity',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
 
       return pipeline;
@@ -803,12 +839,11 @@ export class PostgresPipelineService {
     // Job state starts as 'setup' - will be updated to 'running' after table resolution
     const run = await this.pipelineRepository.createRun({
       pipelineId: pipeline.id,
-      orgId: pipeline.orgId,
+      organizationId: pipeline.organizationId,
       status: 'running',
       jobState: 'setup' as any, // Start in setup phase
-      jobStateUpdatedAt: new Date(),
       startedAt: new Date(),
-      triggeredBy: pipeline.userId,
+      triggeredBy: pipeline.createdBy,
       triggerType: 'manual',
       runMetadata: { batchSize: 1000 },
     } as any);
@@ -824,22 +859,23 @@ export class PostgresPipelineService {
 
     // Log activity - pipeline run started
     try {
-      await this.activityLogService.logActivity({
-        organizationId: pipeline.orgId,
-        userId: pipeline.userId,
-        actionType: PIPELINE_ACTIONS.RUN_STARTED,
-        entityType: ENTITY_TYPES.PIPELINE,
-        entityId: pipeline.id,
-        message: `Pipeline "${pipeline.name}" run started`,
-        metadata: {
-          runId: run.id,
-          pipelineName: pipeline.name,
+      await this.activityLogService.logPipelineRunAction(
+        pipeline.organizationId,
+        pipeline.createdBy,
+        PIPELINE_RUN_ACTIONS.STARTED,
+        run.id,
+        pipeline.id,
+        pipeline.name,
+        {
           syncMode: pipeline.syncMode,
         },
-      });
+      );
     } catch (error) {
       // Don't fail execution if logging fails
-      this.logger.error('Failed to log pipeline run started activity:', error);
+      this.logger.error(
+        'Failed to log pipeline run started activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     const startTime = Date.now();
@@ -1427,26 +1463,27 @@ export class PostgresPipelineService {
 
       // Log activity - pipeline run succeeded
       try {
-        await this.activityLogService.logActivity({
-          organizationId: pipeline.orgId,
-          userId: pipeline.userId,
-          actionType: PIPELINE_ACTIONS.RUN_SUCCEEDED,
-          entityType: ENTITY_TYPES.PIPELINE,
-          entityId: pipeline.id,
-          message: `Pipeline "${pipeline.name}" run completed successfully`,
-          metadata: {
-            runId: run.id,
-            pipelineName: pipeline.name,
+        await this.activityLogService.logPipelineRunAction(
+          pipeline.organizationId,
+          pipeline.createdBy,
+          PIPELINE_RUN_ACTIONS.COMPLETED,
+          run.id,
+          pipeline.id,
+          pipeline.name,
+          {
             rowsRead: result.rowsRead,
             rowsWritten: result.rowsWritten,
             rowsSkipped: result.rowsSkipped,
             rowsFailed: result.rowsFailed,
             durationSeconds: result.durationSeconds,
           },
-        });
+        );
       } catch (error) {
         // Don't fail execution if logging fails
-        this.logger.error('Failed to log pipeline run succeeded activity:', error);
+        this.logger.error(
+          'Failed to log pipeline run succeeded activity',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
 
       return result;
@@ -1481,23 +1518,24 @@ export class PostgresPipelineService {
 
       // Log activity - pipeline run failed
       try {
-        await this.activityLogService.logActivity({
-          organizationId: pipeline.orgId,
-          userId: pipeline.userId,
-          actionType: PIPELINE_ACTIONS.RUN_FAILED,
-          entityType: ENTITY_TYPES.PIPELINE,
-          entityId: pipeline.id,
-          message: `Pipeline "${pipeline.name}" run failed`,
-          metadata: {
-            runId: run.id,
-            pipelineName: pipeline.name,
+        await this.activityLogService.logPipelineRunAction(
+          pipeline.organizationId,
+          pipeline.createdBy,
+          PIPELINE_RUN_ACTIONS.FAILED,
+          run.id,
+          pipeline.id,
+          pipeline.name,
+          {
             errorMessage,
             durationSeconds,
           },
-        });
+        );
       } catch (logError) {
         // Don't fail execution if logging fails
-        this.logger.error('Failed to log pipeline run failed activity:', logError);
+        this.logger.error(
+          'Failed to log pipeline run failed activity',
+          logError instanceof Error ? logError.stack : String(logError),
+        );
       }
 
       throw error;
@@ -1532,27 +1570,22 @@ export class PostgresPipelineService {
       return false;
     }
 
-    if (
-      sourceSchema.sourceType !== 'postgres' ||
-      !sourceSchema.sourceConnectionId ||
-      !sourceSchema.sourceTable
-    ) {
+    if (sourceSchema.sourceType !== 'postgres' || !sourceSchema.dataSourceId || !sourceSchema.sourceTable) {
       return false;
     }
 
     // Check if incremental column is UUID type - if so, skip (UUIDs can't be used for incremental sync)
     try {
-      let pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
+      // Get decrypted connection config
+      const decryptedConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        sourceSchema.dataSourceId,
+        pipeline.createdBy,
+      );
+
+      let pool = this.connectionPool.getPool(sourceSchema.dataSourceId);
       if (!pool) {
-        const connection = await this.connectionRepository.findById(
-          sourceSchema.sourceConnectionId,
-          pipeline.orgId,
-        );
-        if (!connection || connection.status !== 'active') {
-          return false;
-        }
-        const credentials = this.connectionRepository.decryptCredentials(connection);
-        pool = await this.connectionPool.createPool(sourceSchema.sourceConnectionId, credentials);
+        pool = await this.connectionPool.createPool(sourceSchema.dataSourceId, decryptedConfig as any);
       }
 
       const client = await pool.connect();
@@ -1636,30 +1669,25 @@ export class PostgresPipelineService {
    * Returns the column name to use, or null if no suitable column found
    */
   private async validateAndFixIncrementalColumn(
-    pipeline: PostgresPipeline,
+    pipeline: Pipeline,
     sourceSchema: PipelineSourceSchema,
   ): Promise<string | null> {
-    if (
-      !pipeline.incrementalColumn ||
-      !sourceSchema.sourceTable ||
-      !sourceSchema.sourceConnectionId
-    ) {
+    if (!pipeline.incrementalColumn || !sourceSchema.sourceTable || !sourceSchema.dataSourceId) {
       return pipeline.incrementalColumn || null;
     }
 
     try {
+      // Get decrypted connection config
+      const decryptedConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        sourceSchema.dataSourceId,
+        pipeline.createdBy,
+      );
+
       // Get connection pool
-      let pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
+      let pool = this.connectionPool.getPool(sourceSchema.dataSourceId);
       if (!pool) {
-        const connection = await this.connectionRepository.findById(
-          sourceSchema.sourceConnectionId,
-          pipeline.orgId,
-        );
-        if (!connection || connection.status !== 'active') {
-          return pipeline.incrementalColumn; // Return original if can't check
-        }
-        const credentials = this.connectionRepository.decryptCredentials(connection);
-        pool = await this.connectionPool.createPool(sourceSchema.sourceConnectionId, credentials);
+        pool = await this.connectionPool.createPool(sourceSchema.dataSourceId, decryptedConfig as any);
       }
 
       const client = await pool.connect();
@@ -1760,7 +1788,7 @@ export class PostgresPipelineService {
    * Step 1: Read data from source
    */
   private async readFromSource(
-    pipeline: PostgresPipeline,
+    pipeline: Pipeline,
     sourceSchema: PipelineSourceSchema,
     lastSyncValue?: string | null,
     runId?: string,
@@ -1769,34 +1797,26 @@ export class PostgresPipelineService {
       throw new BadRequestException(`Source type ${sourceSchema.sourceType} not yet supported`);
     }
 
-    if (!sourceSchema.sourceConnectionId) {
-      throw new BadRequestException('Source connection ID is required');
+    if (!sourceSchema.dataSourceId) {
+      throw new BadRequestException('Source data source ID is required');
     }
 
+    // Get decrypted connection config
+    const decryptedConfig = await this.connectionService.getDecryptedConnection(
+      pipeline.organizationId,
+      sourceSchema.dataSourceId,
+      pipeline.createdBy,
+    );
+
     // Get or create connection pool
-    let pool = this.connectionPool.getPool(sourceSchema.sourceConnectionId);
+    let pool = this.connectionPool.getPool(sourceSchema.dataSourceId);
     if (!pool) {
       // Pool doesn't exist, create it
       const logPrefix = runId ? `[${runId}]` : '';
       this.logger.log(
-        `${logPrefix} Creating connection pool for source connection ${sourceSchema.sourceConnectionId}`,
+        `${logPrefix} Creating connection pool for source data source ${sourceSchema.dataSourceId}`,
       );
-      const connection = await this.connectionRepository.findById(
-        sourceSchema.sourceConnectionId,
-        pipeline.orgId,
-      );
-      if (!connection) {
-        throw new BadRequestException(
-          `Source connection ${sourceSchema.sourceConnectionId} not found`,
-        );
-      }
-      if (connection.status !== 'active') {
-        throw new BadRequestException(
-          `Source connection is not active (status: ${connection.status})`,
-        );
-      }
-      const credentials = this.connectionRepository.decryptCredentials(connection);
-      pool = await this.connectionPool.createPool(sourceSchema.sourceConnectionId, credentials);
+      pool = await this.connectionPool.createPool(sourceSchema.dataSourceId, decryptedConfig as any);
     }
 
     const client = await pool.connect();
@@ -2014,7 +2034,7 @@ export class PostgresPipelineService {
    * @returns Resolved column mappings and table existence status
    */
   private async resolveAndPrepareDestinationTable(
-    pipeline: PostgresPipeline,
+    pipeline: Pipeline,
     destinationSchema: PipelineDestinationSchema,
     columnMappings: ColumnMapping[],
     runId?: string,
@@ -2028,31 +2048,20 @@ export class PostgresPipelineService {
       `${logPrefix} [TABLE RESOLVER] Resolving destination table: ${destinationSchema.destinationSchema ?? 'public'}.${destinationSchema.destinationTable}`,
     );
 
+    // Get decrypted connection config
+    const decryptedConfig = await this.connectionService.getDecryptedConnection(
+      pipeline.organizationId,
+      destinationSchema.dataSourceId,
+      pipeline.createdBy,
+    );
+
     // Get or create connection pool
-    let pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
+    let pool = this.connectionPool.getPool(destinationSchema.dataSourceId);
     if (!pool) {
       this.logger.log(
-        `${logPrefix} [TABLE RESOLVER] Creating connection pool for destination connection ${destinationSchema.destinationConnectionId}`,
+        `${logPrefix} [TABLE RESOLVER] Creating connection pool for destination data source ${destinationSchema.dataSourceId}`,
       );
-      const connection = await this.connectionRepository.findById(
-        destinationSchema.destinationConnectionId,
-        pipeline.orgId,
-      );
-      if (!connection) {
-        throw new BadRequestException(
-          `Destination connection ${destinationSchema.destinationConnectionId} not found`,
-        );
-      }
-      if (connection.status !== 'active') {
-        throw new BadRequestException(
-          `Destination connection is not active (status: ${connection.status})`,
-        );
-      }
-      const credentials = this.connectionRepository.decryptCredentials(connection);
-      pool = await this.connectionPool.createPool(
-        destinationSchema.destinationConnectionId,
-        credentials,
-      );
+      pool = await this.connectionPool.createPool(destinationSchema.dataSourceId, decryptedConfig as any);
     }
 
     const client = await pool.connect();
@@ -2279,7 +2288,7 @@ export class PostgresPipelineService {
    */
   private async writeToDestination(
     transformedData: any[],
-    pipeline: PostgresPipeline,
+    pipeline: Pipeline,
     destinationSchema: PipelineDestinationSchema,
     resolvedTable: {
       schema: string;
@@ -2305,31 +2314,20 @@ export class PostgresPipelineService {
       `${logPrefix} [MIGRATION] Writing to LOCKED destination: ${resolvedTable.schema}.${resolvedTable.table}`,
     );
 
+    // Get decrypted connection config
+    const decryptedConfig = await this.connectionService.getDecryptedConnection(
+      pipeline.organizationId,
+      destinationSchema.dataSourceId,
+      pipeline.createdBy,
+    );
+
     // Get or create connection pool
-    let pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
+    let pool = this.connectionPool.getPool(destinationSchema.dataSourceId);
     if (!pool) {
       this.logger.log(
-        `${logPrefix} Creating connection pool for destination connection ${destinationSchema.destinationConnectionId}`,
+        `${logPrefix} Creating connection pool for destination data source ${destinationSchema.dataSourceId}`,
       );
-      const connection = await this.connectionRepository.findById(
-        destinationSchema.destinationConnectionId,
-        pipeline.orgId,
-      );
-      if (!connection) {
-        throw new BadRequestException(
-          `Destination connection ${destinationSchema.destinationConnectionId} not found`,
-        );
-      }
-      if (connection.status !== 'active') {
-        throw new BadRequestException(
-          `Destination connection is not active (status: ${connection.status})`,
-        );
-      }
-      const credentials = this.connectionRepository.decryptCredentials(connection);
-      pool = await this.connectionPool.createPool(
-        destinationSchema.destinationConnectionId,
-        credentials,
-      );
+      pool = await this.connectionPool.createPool(destinationSchema.dataSourceId, decryptedConfig as any);
     }
 
     const client = await pool.connect();
@@ -2530,8 +2528,8 @@ export class PostgresPipelineService {
 
     // Validate source configuration
     if (sourceSchema.sourceType === 'postgres') {
-      if (!sourceSchema.sourceConnectionId) {
-        errors.push('Source connection ID is required for postgres source');
+      if (!sourceSchema.dataSourceId) {
+        errors.push('Source data source ID is required for postgres source');
       }
       if (!sourceSchema.sourceTable && !sourceSchema.sourceQuery) {
         errors.push('Either source table or source query must be specified');
@@ -2539,8 +2537,8 @@ export class PostgresPipelineService {
     }
 
     // Validate destination configuration
-    if (!destinationSchema.destinationConnectionId) {
-      errors.push('Destination connection ID is required');
+    if (!destinationSchema.dataSourceId) {
+      errors.push('Destination data source ID is required');
     }
     if (!destinationSchema.destinationTable) {
       errors.push('Destination table is required');
@@ -2643,11 +2641,19 @@ export class PostgresPipelineService {
       throw new NotFoundException(`Pipeline ${pipelineId} not found`);
     }
 
-    const { destinationSchema } = pipelineWithSchemas;
+    const { pipeline, destinationSchema } = pipelineWithSchemas;
 
     // Optionally drop destination table
     if (dropTable && destinationSchema.destinationTableExists) {
-      const pool = this.connectionPool.getPool(destinationSchema.destinationConnectionId);
+      const decryptedConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        destinationSchema.dataSourceId,
+        pipeline.createdBy,
+      );
+      const pool = this.connectionPool.getPool(destinationSchema.dataSourceId);
+      if (!pool) {
+        pool = await this.connectionPool.createPool(destinationSchema.dataSourceId, decryptedConfig as any);
+      }
       if (pool) {
         const client = await pool.connect();
         try {
@@ -2671,15 +2677,15 @@ export class PostgresPipelineService {
   /**
    * Find pipelines by organization
    */
-  async findPipelinesByOrg(orgId: string): Promise<PostgresPipeline[]> {
-    return await this.pipelineRepository.findByOrg(orgId);
+  async findPipelinesByOrg(organizationId: string): Promise<Pipeline[]> {
+    return await this.pipelineRepository.findByOrganization(organizationId);
   }
 
   /**
    * Find pipeline by ID
    */
-  async findPipelineById(id: string, orgId?: string): Promise<PostgresPipeline | null> {
-    return await this.pipelineRepository.findById(id, orgId);
+  async findPipelineById(id: string, organizationId?: string): Promise<Pipeline | null> {
+    return await this.pipelineRepository.findById(id, organizationId);
   }
 
   /**
@@ -2687,9 +2693,9 @@ export class PostgresPipelineService {
    */
   async updatePipeline(
     id: string,
-    updates: Partial<PostgresPipeline>,
+    updates: Partial<Pipeline>,
     userId?: string,
-  ): Promise<PostgresPipeline> {
+  ): Promise<Pipeline> {
     const pipeline = await this.pipelineRepository.findById(id);
     if (!pipeline) {
       throw new NotFoundException(`Pipeline ${id} not found`);
@@ -2710,21 +2716,22 @@ export class PostgresPipelineService {
         changes.push(`syncMode: "${pipeline.syncMode}" → "${updates.syncMode}"`);
       }
 
-      await this.activityLogService.logActivity({
-        organizationId: pipeline.orgId,
-        userId: userId || pipeline.userId || null,
-        actionType: PIPELINE_ACTIONS.UPDATED,
-        entityType: ENTITY_TYPES.PIPELINE,
-        entityId: id,
-        message:
-          changes.length > 0 ? `Pipeline updated: ${changes.join(', ')}` : 'Pipeline updated',
-        metadata: {
+      await this.activityLogService.logPipelineAction(
+        pipeline.organizationId,
+        userId || pipeline.createdBy || null,
+        PIPELINE_ACTIONS.UPDATED,
+        id,
+        pipeline.name,
+        {
           changes: updates,
         },
-      });
+      );
     } catch (error) {
       // Don't fail update if logging fails
-      this.logger.error('Failed to log pipeline update activity:', error);
+      this.logger.error(
+        'Failed to log pipeline update activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     return updated;
@@ -2737,14 +2744,14 @@ export class PostgresPipelineService {
     pipelineId: string,
     limit: number = 20,
     offset: number = 0,
-  ): Promise<PostgresPipelineRun[]> {
+  ): Promise<PipelineRun[]> {
     return await this.pipelineRepository.findRunsByPipeline(pipelineId, limit, offset);
   }
 
   /**
    * Find pipeline run by ID
    */
-  async findPipelineRunById(runId: string): Promise<PostgresPipelineRun | null> {
+  async findPipelineRunById(runId: string): Promise<PipelineRun | null> {
     return await this.pipelineRepository.findRunById(runId);
   }
 

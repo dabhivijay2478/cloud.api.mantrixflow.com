@@ -8,6 +8,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -22,6 +23,7 @@ import { OrganizationRoleService } from './services/organization-role.service';
 
 @Injectable()
 export class OrganizationMemberService {
+  private readonly logger = new Logger(OrganizationMemberService.name);
   private supabaseAdmin: ReturnType<typeof createClient> | null = null;
 
   constructor(
@@ -123,12 +125,18 @@ export class OrganizationMemberService {
         });
 
         if (error) {
-          console.error('Failed to send invite email via Supabase:', error);
+          this.logger.error(
+            'Failed to send invite email via Supabase',
+            error instanceof Error ? error.stack : String(error),
+          );
           // Don't fail the invite creation if email fails - invite record is still created
           // In production, you might want to queue this for retry
         }
       } catch (error) {
-        console.error('Error sending invite email:', error);
+        this.logger.error(
+          'Error sending invite email',
+          error instanceof Error ? error.stack : String(error),
+        );
         // Continue even if email fails
       }
     }
@@ -150,7 +158,10 @@ export class OrganizationMemberService {
       });
     } catch (error) {
       // Don't fail invite if logging fails
-      console.error('Failed to log user invite activity:', error);
+      this.logger.error(
+        'Failed to log user invite activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     return member;
@@ -245,7 +256,10 @@ export class OrganizationMemberService {
         });
       } catch (error) {
         // Don't fail update if logging fails
-        console.error('Failed to log role change activity:', error);
+        this.logger.error(
+          'Failed to log role change activity',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
     }
 
@@ -297,7 +311,10 @@ export class OrganizationMemberService {
       });
     } catch (error) {
       // Don't fail removal if logging fails
-      console.error('Failed to log user removal activity:', error);
+      this.logger.error(
+        'Failed to log user removal activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     await this.memberRepository.delete(id);
@@ -337,7 +354,10 @@ export class OrganizationMemberService {
         });
       } catch (error) {
         // Don't fail invite acceptance if logging fails
-        console.error('Failed to log invite acceptance activity:', error);
+        this.logger.error(
+          'Failed to log invite acceptance activity',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
 
       updatedMembers.push(updated);

@@ -4,7 +4,7 @@
  */
 
 import * as crypto from 'node:crypto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { NewPostgresConnection } from '../../../database/schemas/data-sources/connections/postgres-connections.schema';
 import type {
   ConnectionHealth,
@@ -29,6 +29,8 @@ import { PostgresSyncService } from './services/postgres-sync.service';
 
 @Injectable()
 export class PostgresDataSourceService {
+  private readonly logger = new Logger(PostgresDataSourceService.name);
+
   constructor(
     private readonly connectionRepository: PostgresConnectionRepository,
     private readonly syncJobRepository: PostgresSyncJobRepository,
@@ -71,8 +73,7 @@ export class PostgresDataSourceService {
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
     const validUserId = this.validateUUID(userId, 'User ID');
 
-    console.log('[PostgresDataSourceService.createConnection] Using orgId:', validOrgId);
-    console.log('[PostgresDataSourceService.createConnection] Using userId:', validUserId);
+    this.logger.log(`Creating connection for organization ${validOrgId} by user ${validUserId}`);
 
     // Validate connection count
     const currentCount = await this.connectionRepository.countByOrgId(validOrgId);
@@ -139,7 +140,10 @@ export class PostgresDataSourceService {
       });
     } catch (error) {
       // If database save fails, throw immediately - this is a real error
-      console.error('Failed to save connection to database:', error);
+      this.logger.error(
+        'Failed to save connection to database',
+        error instanceof Error ? error.stack : String(error),
+      );
       throw new BadRequestException(
         `Failed to save connection: ${error instanceof Error ? error.message : 'Database error'}`,
       );
@@ -186,7 +190,10 @@ export class PostgresDataSourceService {
         });
       } catch (updateError) {
         // Even the update failed - log but don't throw
-        console.error(`Failed to update connection status for ${connectionId}:`, updateError);
+        this.logger.error(
+          `Failed to update connection status for ${connectionId}`,
+          updateError instanceof Error ? updateError.stack : String(updateError),
+        );
       }
     }
   }
@@ -284,13 +291,9 @@ export class PostgresDataSourceService {
   async listConnections(orgId: string): Promise<PostgresConnection[]> {
     // Validate UUID - throw error if invalid (for queries)
     const validOrgId = this.validateUUID(orgId, 'Organization ID');
-    console.log('[PostgresDataSourceService.listConnections] Querying with orgId:', validOrgId);
+    this.logger.log(`Listing connections for organization ${validOrgId}`);
     const connections = await this.connectionRepository.findByOrgId(validOrgId);
-    console.log(
-      '[PostgresDataSourceService.listConnections] Repository returned:',
-      connections.length,
-      'connections',
-    );
+    this.logger.log(`Found ${connections.length} connection(s) for organization ${validOrgId}`);
     return connections;
   }
 

@@ -149,4 +149,190 @@ export class ActivityLogService {
       ...filters,
     });
   }
+
+  /**
+   * Helper: Log organization action
+   */
+  async logOrganizationAction(
+    organizationId: string,
+    userId: string | null,
+    action: string,
+    entityId?: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId: userId || null,
+        actionType: action as any,
+        entityType: 'organization',
+        entityId: entityId || organizationId,
+        message: `Organization action: ${action}`,
+        metadata,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log organization action: ${action}`, error);
+    }
+  }
+
+  /**
+   * Helper: Log data source action
+   */
+  async logDataSourceAction(
+    organizationId: string,
+    userId: string | null,
+    action: string,
+    dataSourceId: string,
+    dataSourceName: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId: userId || null,
+        actionType: action as any,
+        entityType: 'data_source',
+        entityId: dataSourceId,
+        message: `Data source "${dataSourceName}": ${action}`,
+        metadata,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log data source action: ${action}`, error);
+    }
+  }
+
+  /**
+   * Helper: Log connection action
+   */
+  async logConnectionAction(
+    organizationId: string,
+    userId: string | null,
+    action: string,
+    connectionId: string,
+    dataSourceName: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId: userId || null,
+        actionType: action as any,
+        entityType: 'data_source_connection',
+        entityId: connectionId,
+        message: `Connection for "${dataSourceName}": ${action}`,
+        metadata,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log connection action: ${action}`, error);
+    }
+  }
+
+  /**
+   * Helper: Log pipeline action
+   */
+  async logPipelineAction(
+    organizationId: string,
+    userId: string | null,
+    action: string,
+    pipelineId: string,
+    pipelineName: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId: userId || null,
+        actionType: action as any,
+        entityType: 'pipeline',
+        entityId: pipelineId,
+        message: `Pipeline "${pipelineName}": ${action}`,
+        metadata,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log pipeline action: ${action}`, error);
+    }
+  }
+
+  /**
+   * Helper: Log pipeline run action
+   */
+  async logPipelineRunAction(
+    organizationId: string,
+    userId: string | null,
+    action: string,
+    runId: string,
+    pipelineId: string,
+    pipelineName: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId: userId || null,
+        actionType: action as any,
+        entityType: 'pipeline_run',
+        entityId: runId,
+        message: `Pipeline run for "${pipelineName}": ${action}`,
+        metadata: {
+          pipelineId,
+          pipelineName,
+          ...metadata,
+        },
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log pipeline run action: ${action}`, error);
+    }
+  }
+
+  /**
+   * Helper: Log member action
+   */
+  async logMemberAction(
+    organizationId: string,
+    userId: string | null,
+    action: string,
+    memberId: string,
+    memberEmail: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId: userId || null,
+        actionType: action as any,
+        entityType: 'organization_member',
+        entityId: memberId,
+        message: `Member "${memberEmail}": ${action}`,
+        metadata,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log member action: ${action}`, error);
+    }
+  }
+
+  /**
+   * Helper: Log query action
+   */
+  async logQueryAction(
+    organizationId: string,
+    userId: string,
+    action: string,
+    queryId: string,
+    dataSourceName: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.logActivity({
+        organizationId,
+        userId,
+        actionType: action as any,
+        entityType: 'query_log',
+        entityId: queryId,
+        message: `Query on "${dataSourceName}": ${action}`,
+        metadata,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to log query action: ${action}`, error);
+    }
+  }
 }

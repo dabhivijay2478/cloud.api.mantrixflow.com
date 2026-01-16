@@ -18,7 +18,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { OrganizationMemberRepository } from '../../modules/organizations/repositories/organization-member.repository';
-import { OrganizationOwnerRepository } from '../../modules/organizations/repositories/organization-owner.repository';
+import { OrganizationRepository } from '../../modules/organizations/repositories/organization.repository';
 
 /**
  * Organization member role type
@@ -46,10 +46,10 @@ export async function getUserRoleInOrganization(
   userId: string,
   organizationId: string,
   memberRepository: OrganizationMemberRepository,
-  ownerRepository: OrganizationOwnerRepository,
+  organizationRepository: OrganizationRepository,
 ): Promise<OrganizationRole | null> {
-  // Check if user is owner (from organization_owners table)
-  const isOwner = await ownerRepository.isOwner(userId, organizationId);
+  // Check if user is owner (using owner_user_id in organizations table)
+  const isOwner = await organizationRepository.isOwner(userId, organizationId);
   if (isOwner) {
     return 'OWNER';
   }
@@ -74,7 +74,7 @@ export class OrganizationRoleGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly memberRepository: OrganizationMemberRepository,
-    private readonly ownerRepository: OrganizationOwnerRepository,
+    private readonly organizationRepository: OrganizationRepository,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -115,7 +115,7 @@ export class OrganizationRoleGuard implements CanActivate {
       userId,
       organizationId,
       this.memberRepository,
-      this.ownerRepository,
+      this.organizationRepository,
     );
 
     if (!userRole) {

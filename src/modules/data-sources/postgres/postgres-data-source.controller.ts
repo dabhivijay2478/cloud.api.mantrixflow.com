@@ -12,6 +12,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  Logger,
   NotFoundException,
   Param,
   Patch,
@@ -58,6 +59,8 @@ import { createErrorResponse } from './utils/error-mapper.util';
 @UseGuards(SupabaseAuthGuard)
 @Controller('data-sources/postgres')
 export class PostgresDataSourceController {
+  private readonly logger = new Logger(PostgresDataSourceController.name);
+
   constructor(private readonly postgresDataSourceService: PostgresDataSourceService) {}
 
   /**
@@ -240,13 +243,6 @@ export class PostgresDataSourceController {
     @Query('orgId') orgIdParam?: string,
   ) {
     try {
-      // Debug logging - check what we received
-      console.log('[createConnection] Query orgId param:', orgIdParam);
-      console.log('[createConnection] Query orgId param type:', typeof orgIdParam);
-      console.log('[createConnection] User orgId from auth:', req.user?.orgId);
-      console.log('[createConnection] Full request query:', JSON.stringify(req.query));
-      console.log('[createConnection] Request URL:', req.url);
-
       // Extract orgId from query parameter first, then from auth - REQUIRED
       // Query parameter MUST take absolute precedence - this is the selected organization from UI
       let orgId: string | undefined;
@@ -256,29 +252,23 @@ export class PostgresDataSourceController {
         const trimmed = orgIdParam.trim();
         if (trimmed.length > 0) {
           orgId = trimmed;
-          console.log(
-            '[createConnection] ✅ Using orgId from query parameter (UI selection):',
-            orgId,
-          );
+          this.logger.log(`Using orgId from query parameter: ${orgId}`);
         } else {
-          console.warn('[createConnection] ⚠️ Query parameter orgId is empty string');
+          this.logger.warn('Query parameter orgId is empty string');
         }
       } else {
-        console.warn('[createConnection] ⚠️ No orgId query parameter provided');
+        this.logger.warn('No orgId query parameter provided');
       }
 
       // Fallback to user auth orgId ONLY if query parameter was not provided
       if (!orgId && req.user?.orgId) {
         orgId = req.user.orgId;
-        console.log('[createConnection] ⚠️ Falling back to orgId from user auth:', orgId);
+        this.logger.log(`Falling back to orgId from user auth: ${orgId}`);
       }
 
       if (!orgId) {
-        console.error(
-          '[createConnection] ❌ No orgId available - query param:',
-          orgIdParam,
-          'user orgId:',
-          req.user?.orgId,
+        this.logger.error(
+          `No orgId available - query param: ${orgIdParam}, user orgId: ${req.user?.orgId}`,
         );
         throw new BadRequestException(
           'Organization ID is required. Please provide orgId as a query parameter (?orgId=...) or ensure you are authenticated with an organization.',
@@ -290,10 +280,9 @@ export class PostgresDataSourceController {
         throw new BadRequestException('User ID is required. Please ensure you are authenticated.');
       }
 
-      // Debug logging - final values being used
-      console.log('[createConnection] Final orgId being used:', orgId);
-      console.log('[createConnection] Final userId being used:', userId);
-      console.log('[createConnection] orgId source:', orgIdParam ? 'query parameter' : 'user auth');
+      this.logger.log(
+        `Creating connection - orgId: ${orgId}, userId: ${userId}, source: ${orgIdParam ? 'query parameter' : 'user auth'}`,
+      );
 
       // Parse connection string if provided, otherwise use individual fields
       let baseConfig: Partial<PostgresConnectionConfig> = {};
@@ -464,14 +453,13 @@ export class PostgresDataSourceController {
         );
       }
 
-      // Debug logging
-      console.log('[listConnections] Query orgId:', orgId);
-      console.log('[listConnections] User orgId:', req?.user?.orgId);
-      console.log('[listConnections] Final orgId:', finalOrgId);
+      this.logger.log(
+        `Listing connections - query orgId: ${orgId}, user orgId: ${req?.user?.orgId}, final orgId: ${finalOrgId}`,
+      );
 
       const connections = await this.postgresDataSourceService.listConnections(finalOrgId);
 
-      console.log('[listConnections] Found connections:', connections.length);
+      this.logger.log(`Found ${connections.length} connection(s) for organization ${finalOrgId}`);
 
       return createListResponse(connections, `Found ${connections.length} connection(s)`, {
         total: connections.length,

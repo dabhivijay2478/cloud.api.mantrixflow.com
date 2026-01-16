@@ -220,11 +220,11 @@ export class CreatePipelineDto {
   sourceType: string;
 
   @ApiPropertyOptional({
-    description: 'Source connection ID (for postgres source)',
+    description: 'Source data source ID (for postgres source)',
   })
   @IsUUID()
   @IsOptional()
-  sourceConnectionId?: string;
+  sourceDataSourceId?: string;
 
   @ApiPropertyOptional({
     description: 'Source configuration (for external sources)',
@@ -249,10 +249,10 @@ export class CreatePipelineDto {
   sourceQuery?: string;
 
   // Destination configuration
-  @ApiProperty({ description: 'Destination connection ID (PostgreSQL)' })
+  @ApiProperty({ description: 'Destination data source ID (PostgreSQL)' })
   @IsUUID()
   @IsNotEmpty()
-  destinationConnectionId: string;
+  destinationDataSourceId: string;
 
   @ApiPropertyOptional({
     description: 'Destination schema name',

@@ -5,19 +5,19 @@
 
 // Import types
 import type {
-  NewPostgresPipeline,
-  NewPostgresPipelineRun,
+  NewPipeline,
+  NewPipelineRun,
   PipelineDestinationSchema,
   PipelineSourceSchema,
-  PostgresPipeline,
-  PostgresPipelineRun,
+  Pipeline,
+  PipelineRun,
 } from '../../../database/schemas';
 // Import table definitions (runtime values)
 import {
   pipelineDestinationSchemas,
   pipelineSourceSchemas,
-  postgresPipelineRuns,
-  postgresPipelines,
+  pipelineRuns,
+  pipelines,
 } from '../../../database/schemas';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
@@ -27,7 +27,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
  * Pipeline with loaded schemas
  */
 export interface PipelineWithSchemas {
-  pipeline: PostgresPipeline;
+  pipeline: Pipeline;
   sourceSchema: PipelineSourceSchema;
   destinationSchema: PipelineDestinationSchema;
 }
@@ -42,19 +42,24 @@ export class PostgresPipelineRepository {
   /**
    * Create new pipeline
    */
-  async create(pipeline: NewPostgresPipeline): Promise<PostgresPipeline> {
-    const [created] = await this.db.insert(postgresPipelines).values(pipeline).returning();
+  async create(pipeline: NewPipeline): Promise<Pipeline> {
+    const [created] = await this.db.insert(pipelines).values(pipeline).returning();
     return created;
   }
 
   /**
-   * Find pipeline by name and orgId (for duplicate prevention)
+   * Find pipeline by name and organizationId (for duplicate prevention)
    */
-  async findByNameAndOrgId(name: string, orgId: string): Promise<PostgresPipeline | null> {
+  async findByNameAndOrganizationId(
+    name: string,
+    organizationId: string,
+  ): Promise<Pipeline | null> {
     const results = await this.db
       .select()
-      .from(postgresPipelines)
-      .where(and(eq(postgresPipelines.name, name), eq(postgresPipelines.orgId, orgId)))
+      .from(pipelines)
+      .where(
+        and(eq(pipelines.name, name), eq(pipelines.organizationId, organizationId)),
+      )
       .limit(1);
 
     return results[0] || null;
@@ -63,16 +68,16 @@ export class PostgresPipelineRepository {
   /**
    * Find pipeline by ID
    */
-  async findById(id: string, orgId?: string): Promise<PostgresPipeline | null> {
-    const conditions = [eq(postgresPipelines.id, id), isNull(postgresPipelines.deletedAt)];
+  async findById(id: string, organizationId?: string): Promise<Pipeline | null> {
+    const conditions = [eq(pipelines.id, id), isNull(pipelines.deletedAt)];
 
-    if (orgId) {
-      conditions.push(eq(postgresPipelines.orgId, orgId));
+    if (organizationId) {
+      conditions.push(eq(pipelines.organizationId, organizationId));
     }
 
     const [pipeline] = await this.db
       .select()
-      .from(postgresPipelines)
+      .from(pipelines)
       .where(and(...conditions))
       .limit(1);
 
@@ -82,8 +87,11 @@ export class PostgresPipelineRepository {
   /**
    * Find pipeline by ID with schemas loaded
    */
-  async findByIdWithSchemas(id: string, orgId?: string): Promise<PipelineWithSchemas | null> {
-    const pipeline = await this.findById(id, orgId);
+  async findByIdWithSchemas(
+    id: string,
+    organizationId?: string,
+  ): Promise<PipelineWithSchemas | null> {
+    const pipeline = await this.findById(id, organizationId);
     if (!pipeline) {
       return null;
     }
@@ -130,33 +138,32 @@ export class PostgresPipelineRepository {
   /**
    * Find pipelines by organization
    */
-  async findByOrg(orgId: string): Promise<PostgresPipeline[]> {
+  async findByOrganization(organizationId: string): Promise<Pipeline[]> {
     return await this.db
       .select()
-      .from(postgresPipelines)
-      .where(and(eq(postgresPipelines.orgId, orgId), isNull(postgresPipelines.deletedAt)))
-      .orderBy(desc(postgresPipelines.createdAt));
+      .from(pipelines)
+      .where(
+        and(eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)),
+      )
+      .orderBy(desc(pipelines.createdAt));
   }
 
   /**
-   * Find active pipelines that are in running or listing state
-   * These are pipelines that should be continuously monitored for new records
+   * Find active pipelines that are due for sync
    * Only returns pipelines that are due for checking (nextSyncAt is null or in the past)
    * This optimizes resource usage by skipping pipelines that were recently checked
    */
-  async findActiveContinuousPipelines(): Promise<PostgresPipeline[]> {
+  async findActivePipelinesDueForSync(): Promise<Pipeline[]> {
     const now = new Date();
     return await this.db
       .select()
-      .from(postgresPipelines)
+      .from(pipelines)
       .where(
         and(
-          eq(postgresPipelines.status, 'active'),
-          inArray(postgresPipelines.migrationState, ['running', 'listing']),
-          isNull(postgresPipelines.deletedAt),
+          eq(pipelines.status, 'active'),
+          isNull(pipelines.deletedAt),
           // Only check pipelines where nextSyncAt is null or in the past
-          // This allows us to skip pipelines that were recently checked and had no new records
-          or(isNull(postgresPipelines.nextSyncAt), lte(postgresPipelines.nextSyncAt, now)),
+          or(isNull(pipelines.nextSyncAt), lte(pipelines.nextSyncAt, now)),
         ),
       );
   }
@@ -164,11 +171,11 @@ export class PostgresPipelineRepository {
   /**
    * Update pipeline
    */
-  async update(id: string, updates: Partial<PostgresPipeline>): Promise<PostgresPipeline> {
+  async update(id: string, updates: Partial<Pipeline>): Promise<Pipeline> {
     const [updated] = await this.db
-      .update(postgresPipelines)
+      .update(pipelines)
       .set({ ...updates, updatedAt: new Date() })
-      .where(eq(postgresPipelines.id, id))
+      .where(eq(pipelines.id, id))
       .returning();
 
     if (!updated) {
@@ -183,34 +190,34 @@ export class PostgresPipelineRepository {
    */
   async delete(id: string): Promise<void> {
     await this.db
-      .update(postgresPipelines)
+      .update(pipelines)
       .set({ deletedAt: new Date() })
-      .where(eq(postgresPipelines.id, id));
+      .where(eq(pipelines.id, id));
   }
 
   /**
    * Hard delete pipeline
    */
   async hardDelete(id: string): Promise<void> {
-    await this.db.delete(postgresPipelines).where(eq(postgresPipelines.id, id));
+    await this.db.delete(pipelines).where(eq(pipelines.id, id));
   }
 
   /**
    * Create pipeline run
    */
-  async createRun(run: NewPostgresPipelineRun): Promise<PostgresPipelineRun> {
-    const [created] = await this.db.insert(postgresPipelineRuns).values(run).returning();
+  async createRun(run: NewPipelineRun): Promise<PipelineRun> {
+    const [created] = await this.db.insert(pipelineRuns).values(run).returning();
     return created;
   }
 
   /**
    * Update pipeline run
    */
-  async updateRun(id: string, updates: Partial<PostgresPipelineRun>): Promise<PostgresPipelineRun> {
+  async updateRun(id: string, updates: Partial<PipelineRun>): Promise<PipelineRun> {
     const [updated] = await this.db
-      .update(postgresPipelineRuns)
-      .set(updates)
-      .where(eq(postgresPipelineRuns.id, id))
+      .update(pipelineRuns)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(pipelineRuns.id, id))
       .returning();
 
     if (!updated) {
@@ -227,12 +234,12 @@ export class PostgresPipelineRepository {
     pipelineId: string,
     limit: number = 20,
     offset: number = 0,
-  ): Promise<PostgresPipelineRun[]> {
+  ): Promise<PipelineRun[]> {
     return await this.db
       .select()
-      .from(postgresPipelineRuns)
-      .where(eq(postgresPipelineRuns.pipelineId, pipelineId))
-      .orderBy(desc(postgresPipelineRuns.createdAt))
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.pipelineId, pipelineId))
+      .orderBy(desc(pipelineRuns.createdAt))
       .limit(limit)
       .offset(offset);
   }
@@ -240,11 +247,11 @@ export class PostgresPipelineRepository {
   /**
    * Find run by ID
    */
-  async findRunById(id: string): Promise<PostgresPipelineRun | null> {
+  async findRunById(id: string): Promise<PipelineRun | null> {
     const [run] = await this.db
       .select()
-      .from(postgresPipelineRuns)
-      .where(eq(postgresPipelineRuns.id, id))
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.id, id))
       .limit(1);
 
     return run || null;

@@ -7,13 +7,13 @@
 import { Injectable } from '@nestjs/common';
 import type { OrganizationRole } from '../../../common/guards/organization-role.guard';
 import { OrganizationMemberRepository } from '../repositories/organization-member.repository';
-import { OrganizationOwnerRepository } from '../repositories/organization-owner.repository';
+import { OrganizationRepository } from '../repositories/organization.repository';
 
 @Injectable()
 export class OrganizationRoleService {
   constructor(
     private readonly memberRepository: OrganizationMemberRepository,
-    private readonly ownerRepository: OrganizationOwnerRepository,
+    private readonly organizationRepository: OrganizationRepository,
   ) {}
 
   /**
@@ -21,8 +21,8 @@ export class OrganizationRoleService {
    * Returns null if user is not a member
    */
   async getUserRole(userId: string, organizationId: string): Promise<OrganizationRole | null> {
-    // Check if user is owner (from organization_owners table)
-    const isOwner = await this.ownerRepository.isOwner(userId, organizationId);
+    // Check if user is owner (using owner_user_id in organizations table)
+    const isOwner = await this.organizationRepository.isOwner(userId, organizationId);
     if (isOwner) {
       return 'OWNER';
     }

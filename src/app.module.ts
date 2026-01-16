@@ -1,11 +1,12 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
+import { DataSourceModule } from './modules/data-sources/data-source.module';
 import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
@@ -38,7 +39,11 @@ import { UserModule } from './modules/users/user.module';
               },
             };
           } catch (error) {
-            console.warn('Failed to parse REDIS_URL, falling back to individual config', error);
+            const logger = new Logger('AppModule');
+            logger.warn(
+              'Failed to parse REDIS_URL, falling back to individual config',
+              error instanceof Error ? error.stack : String(error),
+            );
           }
         }
 
@@ -54,6 +59,7 @@ import { UserModule } from './modules/users/user.module';
       },
     }),
     PostgresDataSourceModule,
+    DataSourceModule,
     DataPipelineModule,
     OrganizationModule,
     UserModule,

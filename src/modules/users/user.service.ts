@@ -3,13 +3,14 @@
  * Business logic for user management
  */
 
-import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import { OrganizationMemberService } from '../organizations/organization-member.service';
 import { UserRepository } from './repositories/user.repository';
 
 @Injectable()
 export class UserService {
+  private readonly logger = new Logger(UserService.name);
   private supabase: ReturnType<typeof createClient>;
   private supabaseAdmin: ReturnType<typeof createClient> | null = null;
 
@@ -113,7 +114,10 @@ export class UserService {
         }
       } catch (error) {
         // Log error but don't fail user update if invite linking fails
-        console.error('Failed to link user to invites:', error);
+        this.logger.error(
+          'Failed to link user to invites',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
 
       return { user: updated, created: false };
@@ -126,7 +130,10 @@ export class UserService {
         );
         wasInvited = pendingInvites && pendingInvites.length > 0;
       } catch (error) {
-        console.error('Error checking for invites:', error);
+        this.logger.error(
+          'Error checking for invites',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
 
       // Create new user
@@ -160,7 +167,10 @@ export class UserService {
         }
       } catch (error) {
         // Log error but don't fail user creation if invite linking fails
-        console.error('Failed to link user to invites:', error);
+        this.logger.error(
+          'Failed to link user to invites',
+          error instanceof Error ? error.stack : String(error),
+        );
       }
 
       return { user: created, created: true };
@@ -192,7 +202,7 @@ export class UserService {
           } else {
             // Fallback: try to get user info from the token
             // This is a workaround if service role key is not available
-            console.warn('Service role key not configured. Cannot auto-sync user from Supabase.');
+            this.logger.warn('Service role key not configured. Cannot auto-sync user from Supabase.');
           }
 
           if (supabaseUser) {
@@ -232,7 +242,10 @@ export class UserService {
                       }
                     }
                   } catch (findError) {
-                    console.error('Failed to find user by email after duplicate error:', findError);
+                    this.logger.error(
+                      'Failed to find user by email after duplicate error',
+                      findError instanceof Error ? findError.stack : String(findError),
+                    );
                   }
                 }
               }
@@ -246,7 +259,10 @@ export class UserService {
         } catch (error) {
           // If Supabase sync fails, log and continue to throw error
           if (!user) {
-            console.error('Failed to sync user from Supabase:', error);
+            this.logger.error(
+              'Failed to sync user from Supabase',
+              error instanceof Error ? error.stack : String(error),
+            );
           }
         }
       }
@@ -297,7 +313,10 @@ export class UserService {
           await this.supabaseAdmin.auth.admin.getUserById(updatedUser.supabaseUserId);
 
         if (getUserError) {
-          console.error('Failed to get existing user metadata:', getUserError);
+          this.logger.error(
+            'Failed to get existing user metadata',
+            getUserError instanceof Error ? getUserError.stack : String(getUserError),
+          );
           // Continue with update using only new values
         }
 
@@ -317,7 +336,10 @@ export class UserService {
           user_metadata: userMetadata,
         });
       } catch (error) {
-        console.error('Failed to update Supabase user metadata:', error);
+        this.logger.error(
+          'Failed to update Supabase user metadata',
+          error instanceof Error ? error.stack : String(error),
+        );
         // Don't fail the update if Supabase sync fails - database update succeeded
       }
     }

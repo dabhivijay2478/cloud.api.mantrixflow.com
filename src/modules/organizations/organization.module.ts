@@ -10,7 +10,6 @@ import { OrganizationMemberController } from './organization-member.controller';
 import { OrganizationMemberService } from './organization-member.service';
 import { OrganizationRepository } from './repositories/organization.repository';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
-import { OrganizationOwnerRepository } from './repositories/organization-owner.repository';
 import { OrganizationRoleService } from './services/organization-role.service';
 
 @Module({
@@ -29,7 +28,6 @@ import { OrganizationRoleService } from './services/organization-role.service';
     OrganizationRepository,
     OrganizationMemberService,
     OrganizationMemberRepository,
-    OrganizationOwnerRepository,
     OrganizationRoleService,
     OrganizationRoleGuard,
   ],
