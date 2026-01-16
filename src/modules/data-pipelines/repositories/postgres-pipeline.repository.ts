@@ -57,9 +57,7 @@ export class PostgresPipelineRepository {
     const results = await this.db
       .select()
       .from(pipelines)
-      .where(
-        and(eq(pipelines.name, name), eq(pipelines.organizationId, organizationId)),
-      )
+      .where(and(eq(pipelines.name, name), eq(pipelines.organizationId, organizationId)))
       .limit(1);
 
     return results[0] || null;
@@ -142,9 +140,7 @@ export class PostgresPipelineRepository {
     return await this.db
       .select()
       .from(pipelines)
-      .where(
-        and(eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)),
-      )
+      .where(and(eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)))
       .orderBy(desc(pipelines.createdAt));
   }
 
@@ -189,10 +185,7 @@ export class PostgresPipelineRepository {
    * Soft delete pipeline
    */
   async delete(id: string): Promise<void> {
-    await this.db
-      .update(pipelines)
-      .set({ deletedAt: new Date() })
-      .where(eq(pipelines.id, id));
+    await this.db.update(pipelines).set({ deletedAt: new Date() }).where(eq(pipelines.id, id));
   }
 
   /**
@@ -248,11 +241,7 @@ export class PostgresPipelineRepository {
    * Find run by ID
    */
   async findRunById(id: string): Promise<PipelineRun | null> {
-    const [run] = await this.db
-      .select()
-      .from(pipelineRuns)
-      .where(eq(pipelineRuns.id, id))
-      .limit(1);
+    const [run] = await this.db.select().from(pipelineRuns).where(eq(pipelineRuns.id, id)).limit(1);
 
     return run || null;
   }

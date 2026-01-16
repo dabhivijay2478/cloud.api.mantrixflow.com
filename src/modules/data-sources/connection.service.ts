@@ -97,9 +97,7 @@ export class ConnectionService {
           encrypted.access_key_id = this.encryptionService.encrypt(encrypted.access_key_id);
         }
         if (encrypted.secret_access_key) {
-          encrypted.secret_access_key = this.encryptionService.encrypt(
-            encrypted.secret_access_key,
-          );
+          encrypted.secret_access_key = this.encryptionService.encrypt(encrypted.secret_access_key);
         }
         break;
       case 'api':
@@ -130,10 +128,7 @@ export class ConnectionService {
   /**
    * Decrypt sensitive fields in config based on connection type
    */
-  private decryptConfig(
-    connectionType: string,
-    config: Record<string, any>,
-  ): Record<string, any> {
+  private decryptConfig(connectionType: string, config: Record<string, any>): Record<string, any> {
     const decrypted = { ...config };
 
     try {
@@ -352,9 +347,7 @@ export class ConnectionService {
       throw new BadRequestException('API config requires: base_url, auth_type');
     }
     if (!['bearer', 'api_key', 'oauth2', 'basic'].includes(config.auth_type)) {
-      throw new BadRequestException(
-        'auth_type must be one of: bearer, api_key, oauth2, basic',
-      );
+      throw new BadRequestException('auth_type must be one of: bearer, api_key, oauth2, basic');
     }
   }
 
@@ -411,9 +404,7 @@ export class ConnectionService {
     // AUTHORIZATION: Check if user can manage data sources
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can configure connections',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can configure connections');
     }
 
     // Validate config structure
@@ -520,9 +511,7 @@ export class ConnectionService {
     // For sensitive access, check if user has EDITOR+ role
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can view connection credentials',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can view connection credentials');
     }
 
     // Log activity
@@ -583,9 +572,7 @@ export class ConnectionService {
     // AUTHORIZATION: Check if user can manage data sources
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can test connections',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can test connections');
     }
 
     const connection = await this.connectionRepository.findByDataSourceId(dataSourceId);
@@ -771,11 +758,7 @@ export class ConnectionService {
    * Discover schema for a connection
    * AUTHORIZATION: Only EDITOR+ can discover schemas
    */
-  async discoverSchema(
-    organizationId: string,
-    dataSourceId: string,
-    userId: string,
-  ): Promise<any> {
+  async discoverSchema(organizationId: string, dataSourceId: string, userId: string): Promise<any> {
     // Verify data source exists
     const dataSource = await this.dataSourceRepository.findById(dataSourceId);
     if (!dataSource) {
@@ -788,9 +771,7 @@ export class ConnectionService {
     // AUTHORIZATION: Check if user can manage data sources
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can discover schemas',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can discover schemas');
     }
 
     const connection = await this.connectionRepository.findByDataSourceId(dataSourceId);

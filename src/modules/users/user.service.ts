@@ -202,7 +202,9 @@ export class UserService {
           } else {
             // Fallback: try to get user info from the token
             // This is a workaround if service role key is not available
-            this.logger.warn('Service role key not configured. Cannot auto-sync user from Supabase.');
+            this.logger.warn(
+              'Service role key not configured. Cannot auto-sync user from Supabase.',
+            );
           }
 
           if (supabaseUser) {

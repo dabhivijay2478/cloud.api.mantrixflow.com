@@ -240,9 +240,7 @@ export class PostgresPipelineService {
 
         // Verify data source belongs to organization
         if (sourceDataSource.organizationId !== data.organizationId) {
-          throw new BadRequestException(
-            'Source data source does not belong to this organization',
-          );
+          throw new BadRequestException('Source data source does not belong to this organization');
         }
 
         this.logger.log(
@@ -1570,7 +1568,11 @@ export class PostgresPipelineService {
       return false;
     }
 
-    if (sourceSchema.sourceType !== 'postgres' || !sourceSchema.dataSourceId || !sourceSchema.sourceTable) {
+    if (
+      sourceSchema.sourceType !== 'postgres' ||
+      !sourceSchema.dataSourceId ||
+      !sourceSchema.sourceTable
+    ) {
       return false;
     }
 
@@ -1585,7 +1587,10 @@ export class PostgresPipelineService {
 
       let pool = this.connectionPool.getPool(sourceSchema.dataSourceId);
       if (!pool) {
-        pool = await this.connectionPool.createPool(sourceSchema.dataSourceId, decryptedConfig as any);
+        pool = await this.connectionPool.createPool(
+          sourceSchema.dataSourceId,
+          decryptedConfig as any,
+        );
       }
 
       const client = await pool.connect();
@@ -1687,7 +1692,10 @@ export class PostgresPipelineService {
       // Get connection pool
       let pool = this.connectionPool.getPool(sourceSchema.dataSourceId);
       if (!pool) {
-        pool = await this.connectionPool.createPool(sourceSchema.dataSourceId, decryptedConfig as any);
+        pool = await this.connectionPool.createPool(
+          sourceSchema.dataSourceId,
+          decryptedConfig as any,
+        );
       }
 
       const client = await pool.connect();
@@ -1816,7 +1824,10 @@ export class PostgresPipelineService {
       this.logger.log(
         `${logPrefix} Creating connection pool for source data source ${sourceSchema.dataSourceId}`,
       );
-      pool = await this.connectionPool.createPool(sourceSchema.dataSourceId, decryptedConfig as any);
+      pool = await this.connectionPool.createPool(
+        sourceSchema.dataSourceId,
+        decryptedConfig as any,
+      );
     }
 
     const client = await pool.connect();
@@ -2061,7 +2072,10 @@ export class PostgresPipelineService {
       this.logger.log(
         `${logPrefix} [TABLE RESOLVER] Creating connection pool for destination data source ${destinationSchema.dataSourceId}`,
       );
-      pool = await this.connectionPool.createPool(destinationSchema.dataSourceId, decryptedConfig as any);
+      pool = await this.connectionPool.createPool(
+        destinationSchema.dataSourceId,
+        decryptedConfig as any,
+      );
     }
 
     const client = await pool.connect();
@@ -2327,7 +2341,10 @@ export class PostgresPipelineService {
       this.logger.log(
         `${logPrefix} Creating connection pool for destination data source ${destinationSchema.dataSourceId}`,
       );
-      pool = await this.connectionPool.createPool(destinationSchema.dataSourceId, decryptedConfig as any);
+      pool = await this.connectionPool.createPool(
+        destinationSchema.dataSourceId,
+        decryptedConfig as any,
+      );
     }
 
     const client = await pool.connect();
@@ -2652,7 +2669,10 @@ export class PostgresPipelineService {
       );
       const pool = this.connectionPool.getPool(destinationSchema.dataSourceId);
       if (!pool) {
-        pool = await this.connectionPool.createPool(destinationSchema.dataSourceId, decryptedConfig as any);
+        pool = await this.connectionPool.createPool(
+          destinationSchema.dataSourceId,
+          decryptedConfig as any,
+        );
       }
       if (pool) {
         const client = await pool.connect();
@@ -2691,11 +2711,7 @@ export class PostgresPipelineService {
   /**
    * Update pipeline
    */
-  async updatePipeline(
-    id: string,
-    updates: Partial<Pipeline>,
-    userId?: string,
-  ): Promise<Pipeline> {
+  async updatePipeline(id: string, updates: Partial<Pipeline>, userId?: string): Promise<Pipeline> {
     const pipeline = await this.pipelineRepository.findById(id);
     if (!pipeline) {
       throw new NotFoundException(`Pipeline ${id} not found`);

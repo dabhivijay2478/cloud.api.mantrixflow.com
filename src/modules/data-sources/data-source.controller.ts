@@ -34,8 +34,16 @@ import {
 } from '../../common/dto/api-response.dto';
 import { OrganizationRoleGuard, RequireRole } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import { DataSourceService, type CreateDataSourceDto, type UpdateDataSourceDto } from './data-source.service';
-import { ConnectionService, type CreateConnectionDto, type UpdateConnectionDto } from './connection.service';
+import {
+  DataSourceService,
+  type CreateDataSourceDto,
+  type UpdateDataSourceDto,
+} from './data-source.service';
+import {
+  ConnectionService,
+  type CreateConnectionDto,
+  type UpdateConnectionDto,
+} from './connection.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -124,11 +132,7 @@ export class DataSourceController {
       throw new Error('User not authenticated');
     }
 
-    const dataSource = await this.dataSourceService.createDataSource(
-      organizationId,
-      userId,
-      dto,
-    );
+    const dataSource = await this.dataSourceService.createDataSource(organizationId, userId, dto);
 
     return createSuccessResponse(dataSource, 'Data source created successfully');
   }
@@ -155,11 +159,7 @@ export class DataSourceController {
       throw new Error('User not authenticated');
     }
 
-    const dataSource = await this.dataSourceService.getDataSourceById(
-      organizationId,
-      id,
-      userId,
-    );
+    const dataSource = await this.dataSourceService.getDataSourceById(organizationId, id, userId);
 
     return createSuccessResponse(dataSource);
   }
@@ -321,11 +321,7 @@ export class DataSourceController {
       throw new Error('User not authenticated');
     }
 
-    const result = await this.connectionService.testConnection(
-      organizationId,
-      sourceId,
-      userId,
-    );
+    const result = await this.connectionService.testConnection(organizationId, sourceId, userId);
 
     return createSuccessResponse(result);
   }

@@ -77,7 +77,10 @@ export class DataSourceRepository {
       conditions.push(eq(dataSources.isActive, filters.isActive));
     }
 
-    return this.db.select().from(dataSources).where(and(...conditions));
+    return this.db
+      .select()
+      .from(dataSources)
+      .where(and(...conditions));
   }
 
   /**

@@ -431,7 +431,10 @@ export class OrganizationService {
       organizationId,
       newOwnerId,
     );
-    if (!newOwnerMember || (newOwnerMember.status !== 'active' && newOwnerMember.status !== 'accepted')) {
+    if (
+      !newOwnerMember ||
+      (newOwnerMember.status !== 'active' && newOwnerMember.status !== 'accepted')
+    ) {
       throw new BadRequestException(
         'New owner must be an active member of the organization. Please invite them first.',
       );

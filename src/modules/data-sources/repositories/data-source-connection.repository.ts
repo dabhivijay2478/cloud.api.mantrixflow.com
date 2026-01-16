@@ -20,10 +20,7 @@ export class DataSourceConnectionRepository {
    * Create a new connection
    */
   async create(data: NewDataSourceConnection): Promise<DataSourceConnection> {
-    const [connection] = await this.db
-      .insert(dataSourceConnections)
-      .values(data)
-      .returning();
+    const [connection] = await this.db.insert(dataSourceConnections).values(data).returning();
     return connection;
   }
 
@@ -54,10 +51,7 @@ export class DataSourceConnectionRepository {
   /**
    * Update connection
    */
-  async update(
-    id: string,
-    data: Partial<NewDataSourceConnection>,
-  ): Promise<DataSourceConnection> {
+  async update(id: string, data: Partial<NewDataSourceConnection>): Promise<DataSourceConnection> {
     const [connection] = await this.db
       .update(dataSourceConnections)
       .set({ ...data, updatedAt: new Date() })

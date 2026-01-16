@@ -36,6 +36,11 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
     // Common services
     EncryptionService,
   ],
-  exports: [DataSourceService, ConnectionService, DataSourceRepository, DataSourceConnectionRepository],
+  exports: [
+    DataSourceService,
+    ConnectionService,
+    DataSourceRepository,
+    DataSourceConnectionRepository,
+  ],
 })
 export class DataSourceModule {}

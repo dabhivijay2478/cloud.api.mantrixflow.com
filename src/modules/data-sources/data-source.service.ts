@@ -13,10 +13,7 @@ import {
 } from '@nestjs/common';
 import type { DataSource, NewDataSource } from '../../database/schemas/data-sources';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import {
-  DATASOURCE_ACTIONS,
-  ENTITY_TYPES,
-} from '../activity-logs/constants/activity-log-types';
+import { DATASOURCE_ACTIONS, ENTITY_TYPES } from '../activity-logs/constants/activity-log-types';
 import { OrganizationRoleService } from '../organizations/services/organization-role.service';
 import { DataSourceRepository } from './repositories/data-source.repository';
 
@@ -89,16 +86,11 @@ export class DataSourceService {
     // AUTHORIZATION: Check if user can manage data sources
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can create data sources',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can create data sources');
     }
 
     // Check for duplicate name in organization
-    const existing = await this.dataSourceRepository.findByName(
-      organizationId,
-      dto.name,
-    );
+    const existing = await this.dataSourceRepository.findByName(organizationId, dto.name);
     if (existing && !existing.deletedAt) {
       throw new BadRequestException(
         `Data source with name "${dto.name}" already exists in this organization`,
@@ -155,10 +147,7 @@ export class DataSourceService {
       throw new ForbiddenException('You are not a member of this organization');
     }
 
-    const dataSources = await this.dataSourceRepository.findByOrganization(
-      organizationId,
-      filters,
-    );
+    const dataSources = await this.dataSourceRepository.findByOrganization(organizationId, filters);
 
     // Log activity
     try {
@@ -205,9 +194,7 @@ export class DataSourceService {
 
     // Verify data source belongs to organization
     if (dataSource.organizationId !== organizationId) {
-      throw new ForbiddenException(
-        'Data source does not belong to this organization',
-      );
+      throw new ForbiddenException('Data source does not belong to this organization');
     }
 
     // Log activity
@@ -244,17 +231,12 @@ export class DataSourceService {
     // AUTHORIZATION: Check if user can manage data sources
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can update data sources',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can update data sources');
     }
 
     // Check for duplicate name if name is being updated
     if (dto.name && dto.name !== dataSource.name) {
-      const existing = await this.dataSourceRepository.findByName(
-        organizationId,
-        dto.name,
-      );
+      const existing = await this.dataSourceRepository.findByName(organizationId, dto.name);
       if (existing && existing.id !== dataSourceId && !existing.deletedAt) {
         throw new BadRequestException(
           `Data source with name "${dto.name}" already exists in this organization`,
@@ -310,9 +292,7 @@ export class DataSourceService {
     // AUTHORIZATION: Check if user can manage data sources
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
-      throw new ForbiddenException(
-        'Only OWNER, ADMIN, and EDITOR can delete data sources',
-      );
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can delete data sources');
     }
 
     // TODO: Check if data source is used by any active pipelines
@@ -348,7 +328,13 @@ export class DataSourceService {
     switch (sourceType) {
       case 'postgres':
       case 'mysql':
-        if (!config.host || !config.port || !config.database || !config.username || !config.password) {
+        if (
+          !config.host ||
+          !config.port ||
+          !config.database ||
+          !config.username ||
+          !config.password
+        ) {
           throw new BadRequestException(
             'PostgreSQL/MySQL config requires: host, port, database, username, password',
           );
@@ -362,7 +348,12 @@ export class DataSourceService {
         }
         break;
       case 's3':
-        if (!config.bucket || !config.region || !config.access_key_id || !config.secret_access_key) {
+        if (
+          !config.bucket ||
+          !config.region ||
+          !config.access_key_id ||
+          !config.secret_access_key
+        ) {
           throw new BadRequestException(
             'S3 config requires: bucket, region, access_key_id, secret_access_key',
           );
