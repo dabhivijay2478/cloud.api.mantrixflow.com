@@ -458,12 +458,22 @@ export class OrganizationService {
         role: 'OWNER',
       });
     } else {
+      // Get user details to get email
+      const newOwnerUser = await this.userRepository.findById(newOwnerId);
+      if (!newOwnerUser || !newOwnerUser.email) {
+        throw new BadRequestException(
+          `Cannot transfer ownership: User ${newOwnerId} not found or has no email`,
+        );
+      }
+
       // Create OWNER member record for new owner
       await this.memberRepository.create({
         organizationId,
         userId: newOwnerId,
+        email: newOwnerUser.email.toLowerCase(),
         role: 'OWNER',
         status: 'active',
+        acceptedAt: new Date(),
       });
     }
 

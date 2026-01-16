@@ -272,8 +272,8 @@ export class DataSourceController {
   async getConnection(
     @Param('organizationId', ParseUUIDPipe) organizationId: string,
     @Param('sourceId', ParseUUIDPipe) sourceId: string,
-    @Query('includeSensitive') includeSensitive?: string,
     @Request() req: ExpressRequestType,
+    @Query('includeSensitive') includeSensitive?: string,
   ) {
     const userId = req.user?.id;
     if (!userId) {

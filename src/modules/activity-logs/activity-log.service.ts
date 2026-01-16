@@ -27,7 +27,7 @@ export interface LogActivityParams {
 
 @Injectable()
 export class ActivityLogService {
-  private readonly logger = new Logger(ActivityLogService.name);
+  public readonly logger = new Logger(ActivityLogService.name);
 
   constructor(private readonly activityLogRepository: ActivityLogRepository) {}
 

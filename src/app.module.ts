@@ -7,7 +7,6 @@ import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 import { DataSourceModule } from './modules/data-sources/data-source.module';
-import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
 import { SearchModule } from './modules/search/search.module';
@@ -58,7 +57,6 @@ import { UserModule } from './modules/users/user.module';
         };
       },
     }),
-    PostgresDataSourceModule,
     DataSourceModule,
     DataPipelineModule,
     OrganizationModule,

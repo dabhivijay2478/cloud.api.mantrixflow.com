@@ -25,6 +25,7 @@ export const pipelineStatusEnum = pgEnum('pipeline_status', ['active', 'paused',
 
 /**
  * Enum for run status
+ * Shared enum used by both pipelines and pipeline_runs tables
  */
 export const runStatusEnum = pgEnum('run_status', [
   'pending',
@@ -97,6 +98,7 @@ export const pipelines = pgTable('pipelines', {
   // EXECUTION STATUS
   // ============================================================================
   status: pipelineStatusEnum('status').default('active'),
+  migrationState: varchar('migration_state', { length: 50 }), // 'pending', 'running', 'listing'
   lastRunAt: timestamp('last_run_at'),
   lastRunStatus: runStatusEnum('last_run_status'),
   lastError: text('last_error'),

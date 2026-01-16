@@ -5,12 +5,12 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
-import { PostgresPipelineRepository } from '../data-pipelines/repositories/postgres-pipeline.repository';
+import { PipelineRepository } from '../data-pipelines/repositories/pipeline.repository';
 import { OrganizationRepository } from '../organizations/repositories/organization.repository';
 import { OrganizationMemberRepository } from '../organizations/repositories/organization-member.repository';
 import type { DashboardOverviewDto } from './dto/dashboard-response.dto';
 import { eq, and, desc, inArray } from 'drizzle-orm';
-import { pipelineRuns } from '../../database/schemas';
+import { pipelineRuns, type Pipeline } from '../../database/schemas';
 import type { DrizzleDatabase } from '../../database/drizzle/database';
 
 @Injectable()
@@ -18,7 +18,7 @@ export class DashboardService {
   constructor(
     private readonly organizationRepository: OrganizationRepository,
     private readonly memberRepository: OrganizationMemberRepository,
-    private readonly pipelineRepository: PostgresPipelineRepository,
+    private readonly pipelineRepository: PipelineRepository,
     private readonly activityLogService: ActivityLogService,
     @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
   ) {}
@@ -39,7 +39,7 @@ export class DashboardService {
     const memberCount = activeMembers.length;
 
     // Get pipeline statistics
-    const pipelines = await this.pipelineRepository.findByOrg(organizationId);
+    const pipelines = await this.pipelineRepository.findByOrganization(organizationId);
     const totalPipelines = pipelines.length;
     const activePipelines = pipelines.filter((p) => p.status === 'active' && !p.deletedAt).length;
     const pausedPipelines = pipelines.filter((p) => p.status === 'paused' && !p.deletedAt).length;
@@ -132,9 +132,9 @@ export class DashboardService {
     limit: number = 10,
   ): Promise<DashboardOverviewDto['recentMigrations']> {
     // Get all pipelines for this organization
-    const pipelines = await this.pipelineRepository.findByOrg(organizationId);
+    const pipelines = await this.pipelineRepository.findByOrganization(organizationId);
     const pipelineIds = pipelines.map((p) => p.id);
-    const pipelineMap = new Map(pipelines.map((p) => [p.id, p]));
+    const pipelineMap = new Map<string, Pipeline>(pipelines.map((p) => [p.id, p]));
 
     if (pipelineIds.length === 0) {
       return [];

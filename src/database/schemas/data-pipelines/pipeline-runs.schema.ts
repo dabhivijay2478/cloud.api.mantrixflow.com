@@ -10,18 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { organizations } from '../organizations/organizations.schema';
 import { users } from '../users/users.schema';
-import { pipelines } from './pipelines.schema';
-
-/**
- * Enum for run status
- */
-export const runStatusEnum = pgEnum('run_status', [
-  'pending',
-  'running',
-  'success',
-  'failed',
-  'cancelled',
-]);
+import { pipelines, runStatusEnum } from './pipelines.schema';
 
 /**
  * Enum for job state
@@ -78,6 +67,14 @@ export const pipelineRuns = pgTable('pipeline_runs', {
   errorMessage: text('error_message'),
   errorCode: varchar('error_code', { length: 50 }),
   errorStack: text('error_stack'),
+
+  // Resolved destination table info (locked during setup phase)
+  resolvedDestinationSchema: varchar('resolved_destination_schema', { length: 255 }),
+  resolvedDestinationTable: varchar('resolved_destination_table', { length: 255 }),
+  resolvedColumnMappings: jsonb('resolved_column_mappings'),
+  destinationTableWasCreated: varchar('destination_table_was_created', { length: 10 }),
+  lastSyncCursor: text('last_sync_cursor'),
+  jobStateUpdatedAt: timestamp('job_state_updated_at'),
 
   // Metadata
   runMetadata: jsonb('run_metadata').$type<RunMetadata>(),
