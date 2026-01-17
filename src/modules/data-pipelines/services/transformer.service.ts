@@ -46,6 +46,15 @@ export class TransformerService {
       return rows;
     }
 
+    // Debug logging for troubleshooting
+    this.logger.log(`Transforming ${rows.length} rows with ${mappings.length} column mappings`);
+    if (rows.length > 0) {
+      const sampleRow = rows[0];
+      const rowKeys = Object.keys(sampleRow);
+      this.logger.log(`Sample row keys: ${rowKeys.join(', ')}`);
+      this.logger.log(`Column mappings: ${mappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`);
+    }
+
     const transformedRows: any[] = [];
     const errors: PipelineError[] = [];
 
@@ -466,27 +475,45 @@ export class TransformerService {
 
   /**
    * Get nested value from object using dot notation
+   * Handles both direct column names and table.column format from UI
    */
   private getNestedValue(obj: any, path: string): any {
     if (!obj || !path) return undefined;
 
-    // Handle simple case (no nesting)
+    // Handle simple case (no nesting) - direct column name
     if (!path.includes('.') && !path.includes('[')) {
       return obj[path];
     }
 
-    // Handle nested paths like "address.city" or "items[0].name"
+    // First, try to find the value using the full path
+    // This handles nested paths like "address.city" or "items[0].name"
     const parts = path.split(/\.|\[|\]/).filter(Boolean);
     let current = obj;
 
     for (const part of parts) {
       if (current === null || current === undefined) {
-        return undefined;
+        break;
       }
       current = current[part];
     }
 
-    return current;
+    // If we found a value, return it
+    if (current !== undefined) {
+      return current;
+    }
+
+    // Special handling for table.column format from UI (e.g., "users.email")
+    // The actual row data has columns directly by name, not nested under table
+    // Try looking up just the last part (column name)
+    if (parts.length >= 2) {
+      const columnName = parts[parts.length - 1];
+      if (obj[columnName] !== undefined) {
+        return obj[columnName];
+      }
+    }
+
+    // Not found
+    return undefined;
   }
 
   /**
