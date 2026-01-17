@@ -74,12 +74,13 @@ export class SourceSchemaController {
     try {
       const userId = this.extractUserId(req);
 
-      const schema = await this.sourceSchemaService.create(
-        { ...dto, organizationId },
-        userId,
-      );
+      const schema = await this.sourceSchemaService.create({ ...dto, organizationId }, userId);
 
-      return createSuccessResponse(schema, 'Source schema created successfully', HttpStatus.CREATED);
+      return createSuccessResponse(
+        schema,
+        'Source schema created successfully',
+        HttpStatus.CREATED,
+      );
     } catch (error) {
       this.handleError('create source schema', error);
     }
@@ -303,9 +304,6 @@ export class SourceSchemaController {
       throw error;
     }
 
-    throw new HttpException(
-      { success: false, error: message },
-      HttpStatus.INTERNAL_SERVER_ERROR,
-    );
+    throw new HttpException({ success: false, error: message }, HttpStatus.INTERNAL_SERVER_ERROR);
   }
 }

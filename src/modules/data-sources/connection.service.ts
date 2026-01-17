@@ -708,7 +708,6 @@ export class ConnectionService {
     details?: any;
   }> {
     try {
-      // @ts-ignore - Pool will be imported
       const pool = new Pool({
         host: config.host,
         port: config.port,
@@ -833,10 +832,7 @@ export class ConnectionService {
     }
 
     // Decrypt config
-    const decryptedConfig = this.decryptConfig(
-      connection.connectionType,
-      connection.config as any,
-    );
+    const decryptedConfig = this.decryptConfig(connection.connectionType, connection.config as any);
 
     const type = (connection.connectionType || dataSource.sourceType || '').toLowerCase();
     this.logger.log(`Discovering schema for type: ${type}`);
@@ -850,12 +846,12 @@ export class ConnectionService {
       // Add other types here
       default:
         this.logger.warn(`Unsupported connection type for schema discovery: ${type}`);
-        schema = { 
-            message: `Unsupported connection type. API Resolved type: '${type}'`,
-            debug: {
-                connectionType: connection.connectionType,
-                dataSourceType: dataSource.sourceType
-            }
+        schema = {
+          message: `Unsupported connection type. API Resolved type: '${type}'`,
+          debug: {
+            connectionType: connection.connectionType,
+            dataSourceType: dataSource.sourceType,
+          },
         };
         break;
     }
@@ -920,22 +916,28 @@ export class ConnectionService {
 
         for (const row of schemasResult.rows) {
           const schemaName = row.schema_name;
-          
+
           // 2. Get Tables for Schema
-          const tablesResult = await client.query(`
+          const tablesResult = await client.query(
+            `
             SELECT table_name, table_type
             FROM information_schema.tables
             WHERE table_schema = $1
             ORDER BY table_name
-          `, [schemaName]);
+          `,
+            [schemaName],
+          );
 
           // 3. Get Columns for Schema
-          const columnsResult = await client.query(`
+          const columnsResult = await client.query(
+            `
             SELECT table_name, column_name, data_type, is_nullable
             FROM information_schema.columns
             WHERE table_schema = $1
             ORDER BY table_name, ordinal_position
-          `, [schemaName]);
+          `,
+            [schemaName],
+          );
 
           // Group columns by table
           const columnsMap = new Map<string, any[]>();
@@ -950,7 +952,7 @@ export class ConnectionService {
             });
           }
 
-          const tables = tablesResult.rows.map(t => ({
+          const tables = tablesResult.rows.map((t) => ({
             name: t.table_name,
             type: t.table_type === 'BASE TABLE' ? 'table' : 'view',
             columns: columnsMap.get(t.table_name) || [],

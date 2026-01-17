@@ -12,6 +12,10 @@ import { organizations } from '../organizations/organizations.schema';
 import { users } from '../users/users.schema';
 import { pipelineDestinationSchemas } from './destination-schemas/pipeline-destination-schemas.schema';
 import { pipelineSourceSchemas } from './source-schemas/pipeline-source-schemas.schema';
+import type {
+  PollingConfig,
+  PipelineCheckpoint,
+} from '../../../modules/data-pipelines/types/pipeline-lifecycle.types';
 
 /**
  * Enum for write mode
@@ -19,9 +23,18 @@ import { pipelineSourceSchemas } from './source-schemas/pipeline-source-schemas.
 export const writeModeEnum = pgEnum('write_mode', ['append', 'upsert', 'replace']);
 
 /**
- * Enum for pipeline status
+ * Enum for pipeline status (lifecycle states)
  */
-export const pipelineStatusEnum = pgEnum('pipeline_status', ['active', 'paused', 'error']);
+export const pipelineStatusEnum = pgEnum('pipeline_status', [
+  'idle',
+  'initializing',
+  'running',
+  'listing',
+  'listening',
+  'paused',
+  'failed',
+  'completed',
+]);
 
 /**
  * Enum for run status
@@ -49,6 +62,7 @@ export const runStatusEnum = pgEnum('run_status', [
  * - Write Configuration: writeMode, upsertKey
  * - Sync Configuration: syncMode, incrementalColumn, lastSyncValue, syncFrequency, nextSyncAt
  * - Execution Status: status, lastRunAt, lastRunStatus, lastError
+ * - Lifecycle: checkpoint, pollingConfig, lastSyncAt
  * - Statistics: totalRowsProcessed, totalRunsSuccessful, totalRunsFailed
  * - Metadata: createdAt, updatedAt, deletedAt
  */
@@ -88,20 +102,41 @@ export const pipelines = pgTable('pipelines', {
   // ============================================================================
   // SYNC CONFIGURATION
   // ============================================================================
-  syncMode: varchar('sync_mode', { length: 50 }).default('full'), // 'full' or 'incremental'
+  syncMode: varchar('sync_mode', { length: 50 }).default('full'), // 'full', 'incremental', or 'cdc'
   incrementalColumn: varchar('incremental_column', { length: 255 }),
   lastSyncValue: text('last_sync_value'),
   syncFrequency: varchar('sync_frequency', { length: 50 }).default('manual'), // 'manual', 'hourly', 'daily', 'weekly'
   nextSyncAt: timestamp('next_sync_at'),
 
+  /** Polling interval in seconds (for LISTING mode) */
+  pollingIntervalSeconds: integer('polling_interval_seconds').default(300),
+
+  /** Polling configuration (batch size, backoff, etc.) */
+  pollingConfig: jsonb('polling_config').$type<PollingConfig>(),
+
   // ============================================================================
-  // EXECUTION STATUS
+  // EXECUTION STATUS & LIFECYCLE
   // ============================================================================
-  status: pipelineStatusEnum('status').default('active'),
-  migrationState: varchar('migration_state', { length: 50 }), // 'pending', 'running', 'listing'
+  /** Current lifecycle status */
+  status: pipelineStatusEnum('status').default('idle'),
+
+  /** Migration state for backward compatibility */
+  migrationState: varchar('migration_state', { length: 50 }),
+
+  /** Last run timestamp */
   lastRunAt: timestamp('last_run_at'),
+
+  /** Last run status */
   lastRunStatus: runStatusEnum('last_run_status'),
+
+  /** Last error message */
   lastError: text('last_error'),
+
+  /** Checkpoint data for resumable syncs (stores cursor, WAL position, etc.) */
+  checkpoint: jsonb('checkpoint').$type<PipelineCheckpoint>(),
+
+  /** Last successful sync timestamp */
+  lastSyncAt: timestamp('last_sync_at'),
 
   // ============================================================================
   // STATISTICS

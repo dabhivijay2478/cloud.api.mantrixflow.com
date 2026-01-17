@@ -41,7 +41,11 @@ export class DashboardService {
     // Get pipeline statistics
     const pipelines = await this.pipelineRepository.findByOrganization(organizationId);
     const totalPipelines = pipelines.length;
-    const activePipelines = pipelines.filter((p) => p.status === 'active' && !p.deletedAt).length;
+    const activePipelines = pipelines.filter(
+      (p) =>
+        ['idle', 'running', 'listing', 'listening', 'initializing'].includes(p.status || '') &&
+        !p.deletedAt,
+    ).length;
     const pausedPipelines = pipelines.filter((p) => p.status === 'paused' && !p.deletedAt).length;
 
     // Get pipeline runs for status breakdown

@@ -19,10 +19,8 @@ import type { PgBossModuleOptions, PgBossModuleAsyncOptions } from './pgboss.int
 
 @Global()
 @Module({})
+// biome-ignore lint/complexity/noStaticOnlyClass: NestJS module pattern
 export class PgBossModule {
-  /**
-   * Register PgBoss module with static configuration
-   */
   static forRoot(options: PgBossModuleOptions): DynamicModule {
     return {
       module: PgBossModule,
@@ -42,7 +40,7 @@ export class PgBossModule {
    * Uses factory pattern for dependency injection
    */
   static forRootAsync(options: PgBossModuleAsyncOptions): DynamicModule {
-    const asyncProviders = this.createAsyncProviders(options);
+    const asyncProviders = PgBossModule.createAsyncProviders(options);
 
     return {
       module: PgBossModule,
@@ -91,7 +89,7 @@ export class PgBossModule {
    * Convenience method for typical NestJS setup with ConfigService
    */
   static forRootWithConfig(): DynamicModule {
-    return this.forRootAsync({
+    return PgBossModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         const databaseUrl = configService.get<string>('DATABASE_URL');

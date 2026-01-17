@@ -201,11 +201,7 @@ export class PipelineRepository {
    * Find run by ID
    */
   async findRunById(id: string): Promise<PipelineRun | null> {
-    const [run] = await this.db
-      .select()
-      .from(pipelineRuns)
-      .where(eq(pipelineRuns.id, id))
-      .limit(1);
+    const [run] = await this.db.select().from(pipelineRuns).where(eq(pipelineRuns.id, id)).limit(1);
 
     return run || null;
   }
@@ -363,7 +359,8 @@ export class PipelineRepository {
       .where(
         and(
           isNull(pipelines.deletedAt),
-          eq(pipelines.status, 'active'),
+          // Only get pipelines that are in IDLE or LISTING mode and ready for sync
+          sql`${pipelines.status} IN ('idle', 'listing')`,
           sql`${pipelines.syncFrequency} != 'manual'`,
           sql`${pipelines.nextSyncAt} <= ${now}`,
         ),

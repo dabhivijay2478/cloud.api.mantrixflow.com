@@ -180,12 +180,8 @@
           "name": "activity_logs_organization_id_organizations_id_fk",
           "tableFrom": "activity_logs",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -193,12 +189,8 @@
           "name": "activity_logs_user_id_users_id_fk",
           "tableFrom": "activity_logs",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -375,12 +367,8 @@
           "name": "pipelines_organization_id_organizations_id_fk",
           "tableFrom": "pipelines",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -388,12 +376,8 @@
           "name": "pipelines_created_by_users_id_fk",
           "tableFrom": "pipelines",
           "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -401,12 +385,8 @@
           "name": "pipelines_source_schema_id_pipeline_source_schemas_id_fk",
           "tableFrom": "pipelines",
           "tableTo": "pipeline_source_schemas",
-          "columnsFrom": [
-            "source_schema_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_schema_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -414,12 +394,8 @@
           "name": "pipelines_destination_schema_id_pipeline_destination_schemas_id_fk",
           "tableFrom": "pipelines",
           "tableTo": "pipeline_destination_schemas",
-          "columnsFrom": [
-            "destination_schema_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["destination_schema_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -617,12 +593,8 @@
           "name": "pipeline_runs_pipeline_id_pipelines_id_fk",
           "tableFrom": "pipeline_runs",
           "tableTo": "pipelines",
-          "columnsFrom": [
-            "pipeline_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pipeline_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -630,12 +602,8 @@
           "name": "pipeline_runs_organization_id_organizations_id_fk",
           "tableFrom": "pipeline_runs",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -643,12 +611,8 @@
           "name": "pipeline_runs_triggered_by_users_id_fk",
           "tableFrom": "pipeline_runs",
           "tableTo": "users",
-          "columnsFrom": [
-            "triggered_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["triggered_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -794,12 +758,8 @@
           "name": "pipeline_source_schemas_data_source_id_data_sources_id_fk",
           "tableFrom": "pipeline_source_schemas",
           "tableTo": "data_sources",
-          "columnsFrom": [
-            "data_source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -948,12 +908,8 @@
           "name": "pipeline_destination_schemas_data_source_id_data_sources_id_fk",
           "tableFrom": "pipeline_destination_schemas",
           "tableTo": "data_sources",
-          "columnsFrom": [
-            "data_source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1076,12 +1032,8 @@
           "name": "data_sources_organization_id_organizations_id_fk",
           "tableFrom": "data_sources",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1089,12 +1041,8 @@
           "name": "data_sources_created_by_users_id_fk",
           "tableFrom": "data_sources",
           "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1239,12 +1187,8 @@
           "name": "data_source_connections_data_source_id_data_sources_id_fk",
           "tableFrom": "data_source_connections",
           "tableTo": "data_sources",
-          "columnsFrom": [
-            "data_source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1324,12 +1268,8 @@
           "name": "query_logs_data_source_id_data_sources_id_fk",
           "tableFrom": "query_logs",
           "tableTo": "data_sources",
-          "columnsFrom": [
-            "data_source_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1337,12 +1277,8 @@
           "name": "query_logs_user_id_users_id_fk",
           "tableFrom": "query_logs",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1458,12 +1394,8 @@
           "name": "organization_members_organization_id_organizations_id_fk",
           "tableFrom": "organization_members",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1471,12 +1403,8 @@
           "name": "organization_members_user_id_users_id_fk",
           "tableFrom": "organization_members",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1484,12 +1412,8 @@
           "name": "organization_members_invited_by_users_id_fk",
           "tableFrom": "organization_members",
           "tableTo": "users",
-          "columnsFrom": [
-            "invited_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["invited_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1575,12 +1499,8 @@
           "name": "organizations_owner_user_id_users_id_fk",
           "tableFrom": "organizations",
           "tableTo": "users",
-          "columnsFrom": [
-            "owner_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1590,9 +1510,7 @@
         "organizations_slug_unique": {
           "name": "organizations_slug_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         }
       },
       "policies": {},
@@ -1713,16 +1631,12 @@
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         },
         "users_supabase_user_id_unique": {
           "name": "users_supabase_user_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "supabase_user_id"
-          ]
+          "columns": ["supabase_user_id"]
         }
       },
       "policies": {},
@@ -1734,98 +1648,52 @@
     "public.pipeline_status": {
       "name": "pipeline_status",
       "schema": "public",
-      "values": [
-        "active",
-        "paused",
-        "error"
-      ]
+      "values": ["active", "paused", "error"]
     },
     "public.run_status": {
       "name": "run_status",
       "schema": "public",
-      "values": [
-        "pending",
-        "running",
-        "success",
-        "failed",
-        "cancelled"
-      ]
+      "values": ["pending", "running", "success", "failed", "cancelled"]
     },
     "public.write_mode": {
       "name": "write_mode",
       "schema": "public",
-      "values": [
-        "append",
-        "upsert",
-        "replace"
-      ]
+      "values": ["append", "upsert", "replace"]
     },
     "public.job_state": {
       "name": "job_state",
       "schema": "public",
-      "values": [
-        "pending",
-        "queued",
-        "running",
-        "completed",
-        "failed"
-      ]
+      "values": ["pending", "queued", "running", "completed", "failed"]
     },
     "public.trigger_type": {
       "name": "trigger_type",
       "schema": "public",
-      "values": [
-        "manual",
-        "scheduled",
-        "api"
-      ]
+      "values": ["manual", "scheduled", "api"]
     },
     "public.connection_status": {
       "name": "connection_status",
       "schema": "public",
-      "values": [
-        "active",
-        "inactive",
-        "error",
-        "testing"
-      ]
+      "values": ["active", "inactive", "error", "testing"]
     },
     "public.query_log_status": {
       "name": "query_log_status",
       "schema": "public",
-      "values": [
-        "success",
-        "error"
-      ]
+      "values": ["success", "error"]
     },
     "public.organization_member_role": {
       "name": "organization_member_role",
       "schema": "public",
-      "values": [
-        "OWNER",
-        "ADMIN",
-        "EDITOR",
-        "VIEWER"
-      ]
+      "values": ["OWNER", "ADMIN", "EDITOR", "VIEWER"]
     },
     "public.organization_member_status": {
       "name": "organization_member_status",
       "schema": "public",
-      "values": [
-        "invited",
-        "accepted",
-        "active",
-        "inactive"
-      ]
+      "values": ["invited", "accepted", "active", "inactive"]
     },
     "public.user_status": {
       "name": "user_status",
       "schema": "public",
-      "values": [
-        "active",
-        "inactive",
-        "suspended"
-      ]
+      "values": ["active", "inactive", "suspended"]
     }
   },
   "schemas": {},

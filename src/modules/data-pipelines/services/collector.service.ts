@@ -2,7 +2,7 @@
  * Collector Service
  * Generic service for collecting data from any data source type
  * Supports: PostgreSQL, MySQL, MongoDB, S3, REST API, BigQuery, Snowflake
- * 
+ *
  * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
  */
 
@@ -17,7 +17,7 @@ import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DATASOURCE_ACTIONS } from '../../activity-logs/constants/activity-log-types';
-import type { ColumnInfo, PipelineException, RateLimiterConfig } from '../types/common.types';
+import type { ColumnInfo } from '../types/common.types';
 import type { PipelineSourceSchema } from '../../../database/schemas';
 import { firstValueFrom } from 'rxjs';
 
@@ -276,7 +276,7 @@ export class CollectorService {
     connectionConfig: any,
     limit: number,
     offset: number,
-    cursor?: string,
+    _cursor?: string,
     incrementalColumn?: string,
     lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
@@ -438,7 +438,7 @@ export class CollectorService {
     connectionConfig: any,
     limit: number,
     offset: number,
-    cursor?: string,
+    _cursor?: string,
     incrementalColumn?: string,
     lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
@@ -722,7 +722,7 @@ export class CollectorService {
 
     const bucket = connectionConfig.bucket;
     const prefix = sourceSchema.sourceConfig?.prefix || sourceSchema.sourceTable || '';
-    const filePattern = sourceSchema.sourceConfig?.filePattern || '*.json';
+    const _filePattern = sourceSchema.sourceConfig?.filePattern || '*.json';
 
     try {
       // List objects in bucket
@@ -768,9 +768,7 @@ export class CollectorService {
       // Apply pagination
       const paginatedRows = rows.slice(offset, offset + limit);
       const hasMore =
-        paginatedRows.length === limit ||
-        listResponse.IsTruncated ||
-        offset + limit < rows.length;
+        paginatedRows.length === limit || listResponse.IsTruncated || offset + limit < rows.length;
       const nextCursor = listResponse.NextContinuationToken;
 
       return {
@@ -824,7 +822,9 @@ export class CollectorService {
     // Infer schema from sample
     const fieldSet = new Set<string>();
     for (const row of sample.rows) {
-      Object.keys(row).forEach((key) => fieldSet.add(key));
+      Object.keys(row).forEach((key) => {
+        fieldSet.add(key);
+      });
     }
 
     const columns: ColumnInfo[] = Array.from(fieldSet).map((name) => {
@@ -860,7 +860,7 @@ export class CollectorService {
     const baseUrl = connectionConfig.base_url;
     const endpoint = sourceSchema.sourceConfig?.endpoint || '';
     const authType = connectionConfig.auth_type;
-    const rateLimit = sourceSchema.sourceConfig?.rateLimit || 10; // requests per second
+    const _rateLimit = sourceSchema.sourceConfig?.rateLimit || 10; // requests per second
 
     // Build URL with pagination
     const url = new URL(endpoint, baseUrl);
@@ -879,17 +879,18 @@ export class CollectorService {
     // Add authentication
     switch (authType) {
       case 'bearer':
-        headers['Authorization'] = `Bearer ${connectionConfig.auth_token}`;
+        headers.Authorization = `Bearer ${connectionConfig.auth_token}`;
         break;
       case 'api_key':
         headers['X-API-Key'] = connectionConfig.api_key;
         break;
-      case 'basic':
+      case 'basic': {
         const credentials = Buffer.from(
           `${connectionConfig.username}:${connectionConfig.password}`,
         ).toString('base64');
-        headers['Authorization'] = `Basic ${credentials}`;
+        headers.Authorization = `Basic ${credentials}`;
         break;
+      }
     }
 
     // Execute request with retry
@@ -901,9 +902,7 @@ export class CollectorService {
           await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
         }
 
-        const response = await firstValueFrom(
-          this.httpService.get(url.toString(), { headers }),
-        );
+        const response = await firstValueFrom(this.httpService.get(url.toString(), { headers }));
 
         const data = response.data;
 
@@ -953,7 +952,9 @@ export class CollectorService {
 
     const fieldSet = new Set<string>();
     for (const row of sample.rows) {
-      Object.keys(row).forEach((key) => fieldSet.add(key));
+      Object.keys(row).forEach((key) => {
+        fieldSet.add(key);
+      });
     }
 
     const columns: ColumnInfo[] = Array.from(fieldSet).map((name) => {
@@ -1092,7 +1093,7 @@ export class CollectorService {
 
         conn.execute({
           sqlText: query,
-          complete: (err, stmt, rows) => {
+          complete: (err, _stmt, rows) => {
             if (err) {
               connection.destroy(() => {});
               reject(err);
@@ -1148,7 +1149,7 @@ export class CollectorService {
 
         conn.execute({
           sqlText: query,
-          complete: (err, stmt, rows) => {
+          complete: (err, _stmt, rows) => {
             if (err) {
               connection.destroy(() => {});
               reject(err);

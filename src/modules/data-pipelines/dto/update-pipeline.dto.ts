@@ -15,12 +15,10 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TransformationDto, SyncMode, SyncFrequency } from './create-pipeline.dto';
+import { PipelineStatus } from '../types/pipeline-lifecycle.types';
 
-export enum PipelineStatus {
-  ACTIVE = 'active',
-  PAUSED = 'paused',
-  ERROR = 'error',
-}
+// Re-export for backward compatibility
+export { PipelineStatus };
 
 export class UpdatePipelineDto {
   @ApiPropertyOptional({

@@ -4,14 +4,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsString,
-  IsUUID,
-  IsOptional,
-  IsEnum,
-  MaxLength,
-  IsObject,
-} from 'class-validator';
+import { IsString, IsUUID, IsOptional, IsEnum, MaxLength, IsObject } from 'class-validator';
 
 export enum SourceType {
   POSTGRES = 'postgres',

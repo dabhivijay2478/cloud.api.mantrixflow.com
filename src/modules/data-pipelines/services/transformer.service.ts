@@ -15,7 +15,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import type {
   ColumnMapping,
   Transformation,
@@ -52,7 +52,9 @@ export class TransformerService {
       const sampleRow = rows[0];
       const rowKeys = Object.keys(sampleRow);
       this.logger.log(`Sample row keys: ${rowKeys.join(', ')}`);
-      this.logger.log(`Column mappings: ${mappings.map(m => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`);
+      this.logger.log(
+        `Column mappings: ${mappings.map((m) => `${m.sourceColumn} -> ${m.destinationColumn}`).join(', ')}`,
+      );
     }
 
     const transformedRows: any[] = [];
@@ -74,7 +76,10 @@ export class TransformerService {
           }
 
           // Handle null values with defaults
-          if ((transformedValue === null || transformedValue === undefined) && mapping.defaultValue) {
+          if (
+            (transformedValue === null || transformedValue === undefined) &&
+            mapping.defaultValue
+          ) {
             transformedValue = mapping.defaultValue;
           }
 
@@ -157,7 +162,9 @@ export class TransformerService {
 
         // Check for duplicate destination columns
         if (destinationColumns.has(mapping.destinationColumn)) {
-          errors.push(`Mapping ${i + 1}: duplicate destinationColumn '${mapping.destinationColumn}'`);
+          errors.push(
+            `Mapping ${i + 1}: duplicate destinationColumn '${mapping.destinationColumn}'`,
+          );
         }
         destinationColumns.add(mapping.destinationColumn);
 
@@ -181,14 +188,25 @@ export class TransformerService {
           'uuid',
         ];
         if (mapping.dataType && !supportedTypes.includes(mapping.dataType.toLowerCase())) {
-          warnings.push(`Mapping ${i + 1}: unknown dataType '${mapping.dataType}', will treat as string`);
+          warnings.push(
+            `Mapping ${i + 1}: unknown dataType '${mapping.dataType}', will treat as string`,
+          );
         }
       }
     }
 
     // Validate transformations
     if (transformations) {
-      const validTransformTypes = ['rename', 'cast', 'concat', 'split', 'filter', 'mask', 'hash', 'custom'];
+      const validTransformTypes = [
+        'rename',
+        'cast',
+        'concat',
+        'split',
+        'filter',
+        'mask',
+        'hash',
+        'custom',
+      ];
 
       for (let i = 0; i < transformations.length; i++) {
         const transformation = transformations[i];
@@ -208,13 +226,19 @@ export class TransformerService {
         }
 
         // Validate transform-specific config
-        if (transformation.transformType === 'cast' && !transformation.transformConfig?.targetType) {
+        if (
+          transformation.transformType === 'cast' &&
+          !transformation.transformConfig?.targetType
+        ) {
           errors.push(`Transformation ${i + 1}: cast requires transformConfig.targetType`);
         }
         if (transformation.transformType === 'concat' && !transformation.transformConfig?.fields) {
           errors.push(`Transformation ${i + 1}: concat requires transformConfig.fields array`);
         }
-        if (transformation.transformType === 'split' && transformation.transformConfig?.separator === undefined) {
+        if (
+          transformation.transformType === 'split' &&
+          transformation.transformConfig?.separator === undefined
+        ) {
           warnings.push(`Transformation ${i + 1}: split defaults to comma separator`);
         }
       }
@@ -282,14 +306,16 @@ export class TransformerService {
 
         case 'number':
         case 'float':
-        case 'double':
+        case 'double': {
           const numVal = Number(value);
-          return isNaN(numVal) ? null : numVal;
+          return Number.isNaN(numVal) ? null : numVal;
+        }
 
         case 'integer':
-        case 'int':
+        case 'int': {
           const intVal = parseInt(String(value), 10);
-          return isNaN(intVal) ? null : intVal;
+          return Number.isNaN(intVal) ? null : intVal;
+        }
 
         case 'bigint':
           try {
@@ -308,16 +334,18 @@ export class TransformerService {
           }
           return Boolean(value);
 
-        case 'date':
+        case 'date': {
           if (value instanceof Date) return value;
           const dateVal = new Date(value);
-          return isNaN(dateVal.getTime()) ? null : dateVal;
+          return Number.isNaN(dateVal.getTime()) ? null : dateVal;
+        }
 
         case 'timestamp':
-        case 'datetime':
+        case 'datetime': {
           if (value instanceof Date) return value;
           const tsVal = new Date(value);
-          return isNaN(tsVal.getTime()) ? null : tsVal;
+          return Number.isNaN(tsVal.getTime()) ? null : tsVal;
+        }
 
         case 'json':
         case 'object':
@@ -343,11 +371,12 @@ export class TransformerService {
           }
           return [value];
 
-        case 'uuid':
+        case 'uuid': {
           // Basic UUID validation
           const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
           const strVal = String(value);
           return uuidRegex.test(strVal) ? strVal : null;
+        }
 
         default:
           return value;

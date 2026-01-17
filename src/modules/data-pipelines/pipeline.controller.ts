@@ -83,7 +83,11 @@ export class PipelineController {
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization UUID' })
   @ApiBody({ type: CreatePipelineDto })
-  @ApiResponse({ status: 201, description: 'Pipeline created successfully', type: PipelineResponseDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Pipeline created successfully',
+    type: PipelineResponseDto,
+  })
   @ApiResponse({ status: 400, description: 'Invalid input' })
   @ApiResponse({ status: 404, description: 'Source or destination schema not found' })
   async createPipeline(
@@ -203,7 +207,11 @@ export class PipelineController {
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
   @ApiBody({ type: UpdatePipelineDto })
-  @ApiResponse({ status: 200, description: 'Pipeline updated successfully', type: PipelineResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Pipeline updated successfully',
+    type: PipelineResponseDto,
+  })
   async updatePipeline(
     @Param('organizationId', RequiredUUIDPipe) _organizationId: string,
     @Param('id', RequiredUUIDPipe) id: string,
@@ -438,7 +446,12 @@ export class PipelineController {
   })
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max results (default: 20)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Max results (default: 20)',
+  })
   @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Offset for pagination' })
   @ApiResponse({ status: 200, description: 'Pipeline run history' })
   async getPipelineRuns(

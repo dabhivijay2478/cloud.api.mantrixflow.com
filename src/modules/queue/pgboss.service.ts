@@ -11,19 +11,13 @@
  * - Job chaining
  */
 
-import {
-  Inject,
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
-import type { 
-  Job, 
-  SendOptions, 
+import type {
+  Job,
+  SendOptions,
   WorkOptions as PgBossWorkOptions,
-  ScheduleOptions, 
+  ScheduleOptions,
   Schedule,
   JobWithMetadata,
   ConstructorOptions,
@@ -37,7 +31,7 @@ import type {
   WorkerOptions,
 } from './pgboss.interfaces';
 
-type JobHandler<T> = (job: Job<JobData<T>>) => Promise<JobResult<unknown> | void>;
+type JobHandler<T> = (job: Job<JobData<T>>) => Promise<JobResult<unknown> | undefined>;
 
 @Injectable()
 export class PgBossService implements OnModuleInit, OnModuleDestroy {
@@ -145,11 +139,11 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     };
 
     const jobId = await this.boss.send(queueName, jobData, jobOptions);
-    
+
     if (jobId) {
       this.logger.log(`Job ${jobId} sent to queue ${queueName}`);
     }
-    
+
     return jobId;
   }
 
@@ -205,7 +199,12 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     delaySeconds: number,
     options?: Partial<SendOptions>,
   ): Promise<string | null> {
-    return this.boss.sendAfter(queueName, { payload: data } as object, options ?? null, delaySeconds);
+    return this.boss.sendAfter(
+      queueName,
+      { payload: data } as object,
+      options ?? null,
+      delaySeconds,
+    );
   }
 
   /**
@@ -247,7 +246,13 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     debounceSeconds: number = 5,
     options?: Partial<SendOptions>,
   ): Promise<string | null> {
-    return this.boss.sendDebounced(queueName, { payload: data } as object, options ?? null, debounceSeconds, debounceKey);
+    return this.boss.sendDebounced(
+      queueName,
+      { payload: data } as object,
+      options ?? null,
+      debounceSeconds,
+      debounceKey,
+    );
   }
 
   /**
@@ -260,7 +265,13 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     throttleSeconds: number = 60,
     options?: Partial<SendOptions>,
   ): Promise<string | null> {
-    return this.boss.sendThrottled(queueName, { payload: data } as object, options ?? null, throttleSeconds, throttleKey);
+    return this.boss.sendThrottled(
+      queueName,
+      { payload: data } as object,
+      options ?? null,
+      throttleSeconds,
+      throttleKey,
+    );
   }
 
   // ==========================================
@@ -321,14 +332,14 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     const workerId = await this.boss.work<JobData<T>>(queueName, options, async (jobs) => {
       // Handle both single job and batch modes
       const jobArray = Array.isArray(jobs) ? jobs : [jobs];
-      
+
       for (const job of jobArray) {
         const startTime = Date.now();
         try {
           this.logger.debug(`Processing job ${job.id} from ${queueName}`);
-          
+
           const result = await handler(job as Job<JobData<T>>);
-          
+
           const duration = Date.now() - startTime;
           this.logger.log(
             `Job ${job.id} completed in ${duration}ms ${result?.success !== false ? '✓' : '✗'}`,
@@ -406,7 +417,8 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
    * Fail a job manually (mark as failed)
    */
   async fail(queueName: string, jobId: string, error?: Error | string): Promise<void> {
-    const errorData = error instanceof Error ? { message: error.message, stack: error.stack } : { message: error };
+    const errorData =
+      error instanceof Error ? { message: error.message, stack: error.stack } : { message: error };
     await this.boss.fail(queueName, jobId, errorData);
     this.logger.debug(`Job ${jobId} failed manually`);
   }
@@ -460,11 +472,11 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     options?: Partial<SendOptions>,
   ): Promise<string | null> {
     const jobId = await this.send(queueName, data, options);
-    
+
     if (jobId) {
       await callback(jobId);
     }
-    
+
     return jobId;
   }
 }

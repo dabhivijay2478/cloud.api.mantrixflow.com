@@ -17,8 +17,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { TransformerService } from './transformer.service';
-import { ActivityLogService } from '../../activity-logs/activity-log.service';
-import { DESTINATION_ACTIONS } from '../../activity-logs/constants/activity-log-types';
+
 import type {
   ColumnMapping,
   SchemaValidationResult,
@@ -44,7 +43,7 @@ export class EmitterService {
     private readonly connectionService: ConnectionService,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly transformerService: TransformerService,
-    private readonly activityLogService: ActivityLogService,
+
     private readonly httpService: HttpService,
   ) {}
 
@@ -107,7 +106,6 @@ export class EmitterService {
 
     // STEP 2: Emit transformed data to destination in batches
     let writeResult: WriteResult;
-    const errors: PipelineError[] = [];
 
     try {
       switch (dataSource.sourceType) {
@@ -147,11 +145,7 @@ export class EmitterService {
           );
           break;
         case 'api':
-          writeResult = await this.emitToAPI(
-            destinationSchema,
-            connectionConfig,
-            transformedRows,
-          );
+          writeResult = await this.emitToAPI(destinationSchema, connectionConfig, transformedRows);
           break;
         case 'bigquery':
           writeResult = await this.emitToBigQuery(
@@ -362,7 +356,7 @@ export class EmitterService {
     });
 
     let rowsWritten = 0;
-    let rowsSkipped = 0;
+    const rowsSkipped = 0;
     let rowsFailed = 0;
     const errors: PipelineError[] = [];
 
@@ -386,10 +380,12 @@ export class EmitterService {
             }
 
             for (const row of batch) {
-              const validEntries = Object.entries(row).filter(([_, v]) => v !== undefined && v !== null);
+              const validEntries = Object.entries(row).filter(
+                ([_, v]) => v !== undefined && v !== null,
+              );
               const columns = validEntries.map(([k]) => k);
               const values = validEntries.map(([_, v]) => v);
-              
+
               if (columns.length === 0) {
                 await client.query(`INSERT INTO ${fullTableName} DEFAULT VALUES`);
                 rowsWritten++;
@@ -435,7 +431,12 @@ export class EmitterService {
           }
         }
 
-        return { rowsWritten, rowsSkipped, rowsFailed, errors: errors.length > 0 ? errors : undefined };
+        return {
+          rowsWritten,
+          rowsSkipped,
+          rowsFailed,
+          errors: errors.length > 0 ? errors : undefined,
+        };
       } finally {
         client.release();
       }
@@ -482,7 +483,10 @@ export class EmitterService {
         `;
         const result = await client.query(query, [schemaName, tableName]);
         const existingColumns = new Map(
-          result.rows.map((r) => [r.column_name, { type: r.data_type, nullable: r.is_nullable === 'YES' }]),
+          result.rows.map((r) => [
+            r.column_name,
+            { type: r.data_type, nullable: r.is_nullable === 'YES' },
+          ]),
         );
 
         const errors: string[] = [];
@@ -590,7 +594,7 @@ export class EmitterService {
   private async postgresTableExists(
     destinationSchema: PipelineDestinationSchema,
     connectionConfig: any,
-    ): Promise<boolean> {
+  ): Promise<boolean> {
     const sslConfig =
       typeof connectionConfig.ssl === 'object'
         ? connectionConfig.ssl.enabled
@@ -673,7 +677,7 @@ export class EmitterService {
     });
 
     let rowsWritten = 0;
-    let rowsSkipped = 0;
+    const rowsSkipped = 0;
     let rowsFailed = 0;
     const errors: PipelineError[] = [];
 
@@ -727,7 +731,12 @@ export class EmitterService {
         }
       }
 
-      return { rowsWritten, rowsSkipped, rowsFailed, errors: errors.length > 0 ? errors : undefined };
+      return {
+        rowsWritten,
+        rowsSkipped,
+        rowsFailed,
+        errors: errors.length > 0 ? errors : undefined,
+      };
     } finally {
       await connection.end();
     }
@@ -760,7 +769,10 @@ export class EmitterService {
       );
 
       const existingColumns = new Map(
-        (rows as any[]).map((r) => [r.COLUMN_NAME, { type: r.DATA_TYPE, nullable: r.IS_NULLABLE === 'YES' }]),
+        (rows as any[]).map((r) => [
+          r.COLUMN_NAME,
+          { type: r.DATA_TYPE, nullable: r.IS_NULLABLE === 'YES' },
+        ]),
       );
 
       const errors: string[] = [];
@@ -885,7 +897,7 @@ export class EmitterService {
       const collection = db.collection(destinationSchema.destinationTable);
 
       let rowsWritten = 0;
-      let rowsSkipped = 0;
+      const rowsSkipped = 0;
       let rowsFailed = 0;
 
       if (writeMode === 'replace') {
@@ -903,7 +915,7 @@ export class EmitterService {
 
             await collection.updateOne(filter, { $set: row }, { upsert: true });
             rowsWritten++;
-          } catch (error) {
+          } catch (_error) {
             rowsFailed++;
           }
         }
@@ -927,7 +939,7 @@ export class EmitterService {
     destinationSchema: PipelineDestinationSchema,
     connectionConfig: any,
     rows: any[],
-    writeMode: 'append' | 'upsert' | 'replace',
+    _writeMode: 'append' | 'upsert' | 'replace',
   ): Promise<WriteResult> {
     const s3Client = new S3Client({
       region: connectionConfig.region,
@@ -987,7 +999,7 @@ export class EmitterService {
     // Add authentication
     switch (connectionConfig.auth_type) {
       case 'bearer':
-        headers['Authorization'] = `Bearer ${connectionConfig.auth_token}`;
+        headers.Authorization = `Bearer ${connectionConfig.auth_token}`;
         break;
       case 'api_key':
         headers['X-API-Key'] = connectionConfig.api_key;
@@ -1000,9 +1012,7 @@ export class EmitterService {
 
       for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
         try {
-          await firstValueFrom(
-            this.httpService.post(url.toString(), batch, { headers }),
-          );
+          await firstValueFrom(this.httpService.post(url.toString(), batch, { headers }));
           rowsWritten += batch.length;
           break;
         } catch (error) {
@@ -1019,7 +1029,12 @@ export class EmitterService {
       }
     }
 
-    return { rowsWritten, rowsSkipped: 0, rowsFailed, errors: errors.length > 0 ? errors : undefined };
+    return {
+      rowsWritten,
+      rowsSkipped: 0,
+      rowsFailed,
+      errors: errors.length > 0 ? errors : undefined,
+    };
   }
 
   // ============================================================================
@@ -1044,7 +1059,7 @@ export class EmitterService {
       const table = bigquery.dataset(dataset).table(tableName);
 
       // Configure write disposition
-      const writeDisposition = writeMode === 'replace' ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
+      const _writeDisposition = writeMode === 'replace' ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
 
       await table.insert(rows, {
         skipInvalidRows: true,
@@ -1105,9 +1120,11 @@ export class EmitterService {
       mode: col.nullable ? 'NULLABLE' : 'REQUIRED',
     }));
 
-    await bigquery.dataset(connectionConfig.dataset).createTable(destinationSchema.destinationTable, {
-      schema,
-    });
+    await bigquery
+      .dataset(connectionConfig.dataset)
+      .createTable(destinationSchema.destinationTable, {
+        schema,
+      });
 
     return { created: true, tableName: destinationSchema.destinationTable };
   }
@@ -1233,12 +1250,16 @@ export class EmitterService {
   }
 
   private async validateSnowflakeSchema(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
+    _columnMappings: ColumnMapping[],
   ): Promise<SchemaValidationResult> {
     // Simplified validation - return success for now
-    return { valid: true, errors: [], warnings: ['Full Snowflake schema validation not implemented'] };
+    return {
+      valid: true,
+      errors: [],
+      warnings: ['Full Snowflake schema validation not implemented'],
+    };
   }
 
   private async createSnowflakeTable(
@@ -1287,8 +1308,8 @@ export class EmitterService {
   }
 
   private async snowflakeTableExists(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
+    _destinationSchema: PipelineDestinationSchema,
+    _connectionConfig: any,
   ): Promise<boolean> {
     // Simplified check
     return false;
@@ -1324,7 +1345,16 @@ export class EmitterService {
 
     // Basic type compatibility check
     const stringTypes = ['string', 'text', 'varchar', 'char', 'character varying'];
-    const numericTypes = ['number', 'integer', 'int', 'bigint', 'float', 'double', 'numeric', 'decimal'];
+    const numericTypes = [
+      'number',
+      'integer',
+      'int',
+      'bigint',
+      'float',
+      'double',
+      'numeric',
+      'decimal',
+    ];
     const boolTypes = ['boolean', 'bool', 'tinyint'];
     const dateTypes = ['date', 'timestamp', 'datetime', 'timestamptz', 'timestamp with time zone'];
 

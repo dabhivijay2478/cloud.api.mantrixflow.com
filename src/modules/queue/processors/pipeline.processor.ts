@@ -13,9 +13,7 @@ import type { Job } from 'pg-boss';
 export class PipelineQueueProcessor implements OnModuleInit {
   private readonly logger = new Logger(PipelineQueueProcessor.name);
 
-  constructor(
-    private readonly pgBossService: PgBossService,
-  ) {}
+  constructor(private readonly pgBossService: PgBossService) {}
 
   /**
    * Register workers when module initializes
@@ -99,14 +97,10 @@ export class PipelineQueueProcessor implements OnModuleInit {
    * Schedule a pipeline for immediate execution
    */
   async schedulePipelineExecution(data: PipelineJobData): Promise<string | null> {
-    return this.pgBossService.sendWithContext(
-      QUEUE_NAMES.PIPELINE_EXECUTION,
-      data,
-      {
-        organizationId: data.organizationId,
-        userId: data.userId,
-      },
-    );
+    return this.pgBossService.sendWithContext(QUEUE_NAMES.PIPELINE_EXECUTION, data, {
+      organizationId: data.organizationId,
+      userId: data.userId,
+    });
   }
 
   /**
@@ -116,11 +110,7 @@ export class PipelineQueueProcessor implements OnModuleInit {
     data: PipelineJobData,
     delaySeconds: number,
   ): Promise<string | null> {
-    return this.pgBossService.sendDelayed(
-      QUEUE_NAMES.PIPELINE_EXECUTION,
-      data,
-      delaySeconds,
-    );
+    return this.pgBossService.sendDelayed(QUEUE_NAMES.PIPELINE_EXECUTION, data, delaySeconds);
   }
 
   /**

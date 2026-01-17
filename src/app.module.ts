@@ -87,4 +87,3 @@ import { PgBossModule } from './modules/queue';
   providers: [AppService],
 })
 export class AppModule {}
-

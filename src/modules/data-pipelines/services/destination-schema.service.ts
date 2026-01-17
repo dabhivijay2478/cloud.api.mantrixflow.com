@@ -20,7 +20,11 @@ import { EmitterService } from './emitter.service';
 import { TransformerService } from './transformer.service';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
 import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
-import type { ColumnMapping, SchemaValidationResult, ValidationResult } from '../types/common.types';
+import type {
+  ColumnMapping,
+  SchemaValidationResult,
+  ValidationResult,
+} from '../types/common.types';
 
 /**
  * Internal DTO with organization context
@@ -162,7 +166,9 @@ export class DestinationSchemaService {
 
     // Validate column mappings if being updated
     if (updates.columnMappings && updates.columnMappings.length > 0) {
-      const validation = this.transformerService.validate(updates.columnMappings as ColumnMapping[]);
+      const validation = this.transformerService.validate(
+        updates.columnMappings as ColumnMapping[],
+      );
       if (!validation.valid) {
         throw new BadRequestException(`Invalid column mappings: ${validation.errors.join(', ')}`);
       }
@@ -199,10 +205,7 @@ export class DestinationSchemaService {
   /**
    * Validate destination schema against actual database schema
    */
-  async validateSchema(
-    id: string,
-    userId: string,
-  ): Promise<SchemaValidationResult> {
+  async validateSchema(id: string, userId: string): Promise<SchemaValidationResult> {
     const schema = await this.destinationSchemaRepository.findById(id);
     if (!schema) {
       throw new NotFoundException(`Destination schema ${id} not found`);
@@ -283,10 +286,7 @@ export class DestinationSchemaService {
   /**
    * Create destination table based on column mappings
    */
-  async createTable(
-    id: string,
-    userId: string,
-  ): Promise<{ created: boolean; tableName: string }> {
+  async createTable(id: string, userId: string): Promise<{ created: boolean; tableName: string }> {
     const schema = await this.destinationSchemaRepository.findById(id);
     if (!schema) {
       throw new NotFoundException(`Destination schema ${id} not found`);
@@ -340,9 +340,9 @@ export class DestinationSchemaService {
    */
   async syncFromSource(
     id: string,
-    sourceSchemaId: string,
+    _sourceSchemaId: string,
     userId: string,
-    options?: {
+    _options?: {
       includeAllColumns?: boolean;
       preserveExisting?: boolean;
     },

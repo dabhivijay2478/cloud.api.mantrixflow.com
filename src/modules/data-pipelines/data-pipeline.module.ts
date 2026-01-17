@@ -32,6 +32,7 @@ import { DestinationSchemaService } from './services/destination-schema.service'
 import { CollectorService } from './services/collector.service';
 import { TransformerService } from './services/transformer.service';
 import { EmitterService } from './services/emitter.service';
+import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 
 // Repositories
 import { PipelineRepository } from './repositories/pipeline.repository';
@@ -59,11 +60,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
       },
     }),
   ],
-  controllers: [
-    PipelineController,
-    SourceSchemaController,
-    DestinationSchemaController,
-  ],
+  controllers: [PipelineController, SourceSchemaController, DestinationSchemaController],
   providers: [
     // Database provider using Drizzle ORM
     {
@@ -83,6 +80,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     PipelineService,
     SourceSchemaService,
     DestinationSchemaService,
+    PipelineLifecycleService,
 
     // Generic Data Services (support all source types)
     CollectorService, // Collects data from sources (Postgres, MySQL, MongoDB, S3, API, BigQuery, Snowflake)
@@ -94,6 +92,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     PipelineService,
     SourceSchemaService,
     DestinationSchemaService,
+    PipelineLifecycleService,
     CollectorService,
     TransformerService,
     EmitterService,

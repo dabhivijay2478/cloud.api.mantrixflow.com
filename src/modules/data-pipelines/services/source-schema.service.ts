@@ -43,10 +43,7 @@ export class SourceSchemaService {
   /**
    * Create source schema
    */
-  async create(
-    dto: CreateSourceSchemaInput,
-    userId: string,
-  ): Promise<PipelineSourceSchema> {
+  async create(dto: CreateSourceSchemaInput, userId: string): Promise<PipelineSourceSchema> {
     const { organizationId, dataSourceId, sourceType } = dto;
 
     // AUTHORIZATION

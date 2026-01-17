@@ -74,12 +74,13 @@ export class DestinationSchemaController {
     try {
       const userId = this.extractUserId(req);
 
-      const schema = await this.destinationSchemaService.create(
-        { ...dto, organizationId },
-        userId,
-      );
+      const schema = await this.destinationSchemaService.create({ ...dto, organizationId }, userId);
 
-      return createSuccessResponse(schema, 'Destination schema created successfully', HttpStatus.CREATED);
+      return createSuccessResponse(
+        schema,
+        'Destination schema created successfully',
+        HttpStatus.CREATED,
+      );
     } catch (error) {
       this.handleError('create destination schema', error);
     }
@@ -101,7 +102,10 @@ export class DestinationSchemaController {
   ) {
     try {
       const userId = this.extractUserId(req);
-      const schemas = await this.destinationSchemaService.findByOrganization(organizationId, userId);
+      const schemas = await this.destinationSchemaService.findByOrganization(
+        organizationId,
+        userId,
+      );
 
       return createListResponse(schemas, `Found ${schemas.length} destination schema(s)`, {
         total: schemas.length,
@@ -335,9 +339,6 @@ export class DestinationSchemaController {
       throw error;
     }
 
-    throw new HttpException(
-      { success: false, error: message },
-      HttpStatus.INTERNAL_SERVER_ERROR,
-    );
+    throw new HttpException({ success: false, error: message }, HttpStatus.INTERNAL_SERVER_ERROR);
   }
 }

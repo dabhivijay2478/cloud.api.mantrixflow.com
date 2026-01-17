@@ -11,27 +11,27 @@ export const QUEUE_NAMES = {
   // Data pipeline queues
   PIPELINE_EXECUTION: 'pipeline:execution',
   PIPELINE_SCHEDULED: 'pipeline:scheduled',
-  
+
   // Email/notification queues
   NOTIFICATIONS: 'notifications',
   EMAILS: 'emails',
-  
+
   // Data processing queues
   DATA_SYNC: 'data:sync',
   DATA_TRANSFORM: 'data:transform',
   DATA_EXPORT: 'data:export',
-  
+
   // System queues
   CLEANUP: 'system:cleanup',
   ANALYTICS: 'system:analytics',
   AUDIT_LOG: 'system:audit',
-  
+
   // Webhook queues
   WEBHOOKS: 'webhooks',
   WEBHOOK_RETRY: 'webhooks:retry',
 } as const;
 
-export type QueueName = typeof QUEUE_NAMES[keyof typeof QUEUE_NAMES];
+export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
 // Job priorities
 export const JOB_PRIORITY = {

@@ -6,7 +6,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PgBossService } from '../pgboss.service';
 import { QUEUE_NAMES } from '../pgboss.constants';
 
@@ -52,10 +52,7 @@ import { QUEUE_NAMES } from '../pgboss.constants';
 export class SchedulerExamples {
   private readonly logger = new Logger(SchedulerExamples.name);
 
-  constructor(
-    private readonly pgBossService: PgBossService,
-    private readonly schedulerRegistry: SchedulerRegistry,
-  ) {}
+  constructor(private readonly pgBossService: PgBossService) {}
 
   // ==========================================
   // NESTJS @CRON EXAMPLES
@@ -154,14 +151,11 @@ export class SchedulerExamples {
     });
 
     // Register a worker for this schedule
-    await this.pgBossService.work(
-      scheduleName,
-      async () => {
-        this.logger.log(`Executing dynamic schedule: ${scheduleId}`);
-        // Process the job
-        return { success: true };
-      },
-    );
+    await this.pgBossService.work(scheduleName, async () => {
+      this.logger.log(`Executing dynamic schedule: ${scheduleId}`);
+      // Process the job
+      return { success: true };
+    });
   }
 
   /**

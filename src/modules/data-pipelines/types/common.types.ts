@@ -46,25 +46,25 @@ export interface Transformation {
 export interface TransformConfig {
   // Cast transformation
   targetType?: string;
-  
+
   // Concat transformation
   fields?: string[];
   separator?: string;
-  
+
   // Split transformation
   index?: number;
-  
+
   // Filter transformation
   operator?: 'eq' | 'ne' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'startsWith' | 'endsWith';
   value?: any;
-  
+
   // Mask transformation
   maskChar?: string;
   visibleChars?: number;
-  
+
   // Hash transformation
   algorithm?: 'md5' | 'sha256' | 'sha512';
-  
+
   // Custom transformation
   transform?: (value: any) => any;
   expression?: string;
