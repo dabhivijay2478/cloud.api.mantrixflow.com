@@ -85,14 +85,35 @@ export class PipelineRepository {
   }
 
   /**
-   * Find pipelines by organization
+   * Find pipelines by organization with source and destination schemas
    */
-  async findByOrganization(organizationId: string): Promise<Pipeline[]> {
-    return await this.db
-      .select()
+  async findByOrganization(organizationId: string): Promise<
+    (Pipeline & {
+      sourceSchema?: PipelineSourceSchema | null;
+      destinationSchema?: PipelineDestinationSchema | null;
+    })[]
+  > {
+    const result = await this.db
+      .select({
+        pipeline: pipelines,
+        sourceSchema: pipelineSourceSchemas,
+        destinationSchema: pipelineDestinationSchemas,
+      })
       .from(pipelines)
+      .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+      .leftJoin(
+        pipelineDestinationSchemas,
+        eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+      )
       .where(and(eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)))
       .orderBy(desc(pipelines.createdAt));
+
+    // Flatten the result to include schemas as properties on the pipeline
+    return result.map((row) => ({
+      ...row.pipeline,
+      sourceSchema: row.sourceSchema,
+      destinationSchema: row.destinationSchema,
+    }));
   }
 
   /**
