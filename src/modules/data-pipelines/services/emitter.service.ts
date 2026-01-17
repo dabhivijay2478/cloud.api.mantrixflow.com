@@ -342,15 +342,22 @@ export class EmitterService {
     writeMode: 'append' | 'upsert' | 'replace',
     upsertKey?: string[],
   ): Promise<WriteResult> {
+    const sslConfig =
+      typeof connectionConfig.ssl === 'object'
+        ? connectionConfig.ssl.enabled
+          ? { rejectUnauthorized: false }
+          : undefined
+        : connectionConfig.ssl
+          ? { rejectUnauthorized: false }
+          : undefined;
+
     const pool = new Pool({
       host: connectionConfig.host,
       port: connectionConfig.port,
       database: connectionConfig.database,
       user: connectionConfig.username,
       password: connectionConfig.password,
-      ssl: connectionConfig.ssl?.enabled
-        ? { rejectUnauthorized: connectionConfig.ssl?.reject_unauthorized !== false }
-        : false,
+      ssl: sslConfig,
       max: 5,
     });
 
@@ -361,7 +368,7 @@ export class EmitterService {
 
     try {
       const client = await pool.connect();
-
+      // ... rest of implementation (unchanged logic) ...
       try {
         const schemaName = destinationSchema.destinationSchema || 'public';
         const tableName = destinationSchema.destinationTable;
@@ -379,8 +386,16 @@ export class EmitterService {
             }
 
             for (const row of batch) {
-              const columns = Object.keys(row);
-              const values = Object.values(row);
+              const validEntries = Object.entries(row).filter(([_, v]) => v !== undefined && v !== null);
+              const columns = validEntries.map(([k]) => k);
+              const values = validEntries.map(([_, v]) => v);
+              
+              if (columns.length === 0) {
+                await client.query(`INSERT INTO ${fullTableName} DEFAULT VALUES`);
+                rowsWritten++;
+                continue;
+              }
+
               const placeholders = columns.map((_, idx) => `$${idx + 1}`).join(', ');
               const columnList = columns.map((c) => `"${c}"`).join(', ');
 
@@ -434,12 +449,22 @@ export class EmitterService {
     connectionConfig: any,
     columnMappings: ColumnMapping[],
   ): Promise<SchemaValidationResult> {
+    const sslConfig =
+      typeof connectionConfig.ssl === 'object'
+        ? connectionConfig.ssl.enabled
+          ? { rejectUnauthorized: false }
+          : undefined
+        : connectionConfig.ssl
+          ? { rejectUnauthorized: false }
+          : undefined;
+
     const pool = new Pool({
       host: connectionConfig.host,
       port: connectionConfig.port,
       database: connectionConfig.database,
       user: connectionConfig.username,
       password: connectionConfig.password,
+      ssl: sslConfig,
     });
 
     try {
@@ -507,12 +532,22 @@ export class EmitterService {
     connectionConfig: any,
     columnMappings: ColumnMapping[],
   ): Promise<{ created: boolean; tableName: string }> {
+    const sslConfig =
+      typeof connectionConfig.ssl === 'object'
+        ? connectionConfig.ssl.enabled
+          ? { rejectUnauthorized: false }
+          : undefined
+        : connectionConfig.ssl
+          ? { rejectUnauthorized: false }
+          : undefined;
+
     const pool = new Pool({
       host: connectionConfig.host,
       port: connectionConfig.port,
       database: connectionConfig.database,
       user: connectionConfig.username,
       password: connectionConfig.password,
+      ssl: sslConfig,
     });
 
     try {
@@ -525,10 +560,18 @@ export class EmitterService {
 
         // Build column definitions
         const columnDefs = columnMappings.map((col) => {
+          let type = this.mapToPostgresType(col.dataType);
+
+          // Use SERIAL/BIGSERIAL for auto-incrementing primary keys
+          if (col.isPrimaryKey) {
+            if (type === 'INTEGER') type = 'SERIAL';
+            if (type === 'BIGINT') type = 'BIGSERIAL';
+          }
+
           const nullable = col.nullable ? '' : ' NOT NULL';
           const pk = col.isPrimaryKey ? ' PRIMARY KEY' : '';
           const defaultVal = col.defaultValue ? ` DEFAULT ${col.defaultValue}` : '';
-          return `"${col.destinationColumn}" ${this.mapToPostgresType(col.dataType)}${nullable}${pk}${defaultVal}`;
+          return `"${col.destinationColumn}" ${type}${nullable}${pk}${defaultVal}`;
         });
 
         const createQuery = `CREATE TABLE IF NOT EXISTS ${fullTableName} (${columnDefs.join(', ')})`;
@@ -547,13 +590,23 @@ export class EmitterService {
   private async postgresTableExists(
     destinationSchema: PipelineDestinationSchema,
     connectionConfig: any,
-  ): Promise<boolean> {
+    ): Promise<boolean> {
+    const sslConfig =
+      typeof connectionConfig.ssl === 'object'
+        ? connectionConfig.ssl.enabled
+          ? { rejectUnauthorized: false }
+          : undefined
+        : connectionConfig.ssl
+          ? { rejectUnauthorized: false }
+          : undefined;
+
     const pool = new Pool({
       host: connectionConfig.host,
       port: connectionConfig.port,
       database: connectionConfig.database,
       user: connectionConfig.username,
       password: connectionConfig.password,
+      ssl: sslConfig,
     });
 
     try {

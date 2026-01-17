@@ -134,6 +134,29 @@ export class DataSourceController {
   }
 
   /**
+   * Test connection with config (Ad-hoc)
+   */
+  @Post('test-connection')
+  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Test connection configuration',
+    description: 'Test a connection configuration without saving',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiResponse({ status: 200, description: 'Connection test completed' })
+  async testConnectionConfig(
+    @Param('organizationId', ParseUUIDPipe) _organizationId: string,
+    @Body() config: any,
+  ) {
+    // Determine type from config or default to postgres
+    // The frontend currently sends a flat object for postgres
+    const type = config.type || 'postgres';
+    const result = await this.connectionService.testConnectionConfig(type, config);
+    return createSuccessResponse(result);
+  }
+
+  /**
    * Get data source by ID
    */
   @Get(':id')

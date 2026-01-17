@@ -152,8 +152,8 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  const port = configService.get<number>('PORT', 8000);
-  await app.listen(port);
+  const port = configService.get<number>('PORT', 5000);
+  await app.listen(port, '0.0.0.0');
   logger.log(`🚀 Application is running on: http://localhost:${port}`);
   logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
 }

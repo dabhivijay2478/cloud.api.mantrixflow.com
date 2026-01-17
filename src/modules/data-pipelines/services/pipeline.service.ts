@@ -300,6 +300,14 @@ export class PipelineService {
       startedAt: new Date(),
     });
 
+    // Update parent pipeline status to running immediately for UI feedback
+    await this.pipelineRepository.update(pipelineId, {
+      lastRunStatus: 'running',
+      lastRunAt: new Date(),
+    });
+
+    this.logger.log(`Updated pipeline ${pipelineId} status to running`);
+
     // Log activity
     await this.activityLogService.logPipelineRunAction(
       pipeline.organizationId,
@@ -341,6 +349,8 @@ export class PipelineService {
     options?: BatchOptions,
   ): Promise<void> {
     const startTime = Date.now();
+    this.logger.log(`Starting pipeline execution for run ${runId} (Pipeline: ${pipeline.id})`);
+    
     const batchSize = Math.min(
       options?.batchSize || DEFAULT_BATCH_SIZE,
       MAX_BATCH_SIZE,
@@ -405,6 +415,25 @@ export class PipelineService {
         }
 
         totalRowsRead += sourceData.rows.length;
+        this.logger.log(`Collected batch of ${sourceData.rows.length} rows (Total Read: ${totalRowsRead})`);
+
+        const primaryKeys = columnMappings
+          .filter((m) => m.isPrimaryKey)
+          .map((m) => m.destinationColumn);
+
+        // Determine write mode based on usage intent
+        let effectiveWriteMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
+        let effectiveUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
+
+        // Force UPSERT if incremental and we have keys (prevents duplicates)
+        if (pipeline.syncMode === 'incremental' && primaryKeys.length > 0) {
+          effectiveWriteMode = 'upsert';
+          effectiveUpsertKey = primaryKeys;
+        }
+        // Force REPLACE if full sync (fresh start)
+        else if (pipeline.syncMode === 'full') {
+          effectiveWriteMode = 'replace';
+        }
 
         // STEP 2: Emit data to destination (with internal transformation)
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
@@ -414,8 +443,8 @@ export class PipelineService {
               organizationId: pipeline.organizationId,
               userId,
               rows: sourceData.rows,
-              writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
-              upsertKey: (destinationSchema.upsertKey as string[]) || undefined,
+              writeMode: effectiveWriteMode,
+              upsertKey: effectiveUpsertKey,
               columnMappings,
               transformations,
             });
@@ -423,6 +452,8 @@ export class PipelineService {
             totalRowsWritten += writeResult.rowsWritten;
             totalRowsSkipped += writeResult.rowsSkipped;
             totalRowsFailed += writeResult.rowsFailed;
+
+            this.logger.log(`Emitted batch: ${writeResult.rowsWritten} written, ${writeResult.rowsFailed} failed`);
 
             if (writeResult.errors) {
               allErrors.push(...writeResult.errors);

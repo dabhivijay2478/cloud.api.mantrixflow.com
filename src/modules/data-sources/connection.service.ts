@@ -11,6 +11,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Pool } from 'pg';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import type { DataSourceConnection } from '../../database/schemas/data-sources';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
@@ -674,17 +675,76 @@ export class ConnectionService {
   /**
    * Test PostgreSQL connection
    */
-  private async testPostgresConnection(_config: PostgresConfig): Promise<{
+  /**
+   * Test connection with explicit configuration (ad-hoc)
+   * Publicly accessible for pre-save testing
+   */
+  async testConnectionConfig(
+    connectionType: string,
+    config: Record<string, any>,
+  ): Promise<{ success: boolean; message: string; details?: any }> {
+    switch (connectionType) {
+      case 'postgres':
+        return this.testPostgresConnection(config as PostgresConfig);
+      case 'mysql':
+        return this.testMySQLConnection(config as MySQLConfig);
+      case 'mongodb':
+        return this.testMongoDBConnection(config as MongoDBConfig);
+      case 's3':
+        return this.testS3Connection(config as S3Config);
+      case 'api':
+        return this.testAPIConnection(config as APIConfig);
+      default:
+        throw new BadRequestException(`Unsupported connection type: ${connectionType}`);
+    }
+  }
+
+  /**
+   * Test PostgreSQL connection
+   */
+  private async testPostgresConnection(config: PostgresConfig): Promise<{
     success: boolean;
     message: string;
     details?: any;
   }> {
-    // TODO: Implement actual PostgreSQL connection test
-    // For now, return success if config is valid
-    return {
-      success: true,
-      message: 'PostgreSQL connection test not yet implemented',
-    };
+    try {
+      // @ts-ignore - Pool will be imported
+      const pool = new Pool({
+        host: config.host,
+        port: config.port,
+        user: config.username,
+        password: config.password,
+        database: config.database,
+        ssl: config.ssl?.enabled
+          ? {
+              rejectUnauthorized: false,
+              ca: config.ssl.ca_cert,
+              cert: config.ssl.client_cert,
+              key: config.ssl.client_key,
+            }
+          : false,
+        connectionTimeoutMillis: 5000, // 5s timeout
+      });
+
+      const client = await pool.connect();
+      try {
+        await client.query('SELECT 1');
+        return {
+          success: true,
+          message: 'Successfully connected to PostgreSQL database',
+        };
+      } finally {
+        client.release();
+        await pool.end();
+      }
+    } catch (error) {
+      this.logger.error(`PostgreSQL connection test failed: ${error.message}`);
+      return {
+        success: false,
+        message: `Connection failed: ${error.message}`,
+        details: error,
+      };
+    }
   }
 
   /**
@@ -772,13 +832,37 @@ export class ConnectionService {
       throw new NotFoundException('Connection not configured for this data source');
     }
 
-    // TODO: Implement schema discovery based on connection type
-    // For now, return empty schema
-    const schema = {};
+    // Decrypt config
+    const decryptedConfig = this.decryptConfig(
+      connection.connectionType,
+      connection.config as any,
+    );
+
+    const type = (connection.connectionType || dataSource.sourceType || '').toLowerCase();
+    this.logger.log(`Discovering schema for type: ${type}`);
+
+    let schema: any = {};
+
+    switch (type) {
+      case 'postgres':
+        schema = await this.discoverPostgresSchema(decryptedConfig as PostgresConfig);
+        break;
+      // Add other types here
+      default:
+        this.logger.warn(`Unsupported connection type for schema discovery: ${type}`);
+        schema = { 
+            message: `Unsupported connection type. API Resolved type: '${type}'`,
+            debug: {
+                connectionType: connection.connectionType,
+                dataSourceType: dataSource.sourceType
+            }
+        };
+        break;
+    }
 
     // Update schema cache
     await this.connectionRepository.updateByDataSourceId(dataSourceId, {
-      schemaCache: schema as any,
+      schemaCache: schema,
       schemaCachedAt: new Date(),
     });
 
@@ -799,5 +883,100 @@ export class ConnectionService {
     }
 
     return schema;
+  }
+
+  /**
+   * Discover PostgreSQL schema
+   */
+  private async discoverPostgresSchema(config: PostgresConfig): Promise<any> {
+    const pool = new Pool({
+      host: config.host,
+      port: config.port,
+      user: config.username,
+      password: config.password,
+      database: config.database,
+      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+      connectionTimeoutMillis: 10000,
+    });
+
+    try {
+      const client = await pool.connect();
+      try {
+        this.logger.log(`Connecting to Postgres database: ${config.database}`);
+
+        // 1. Get Schemas
+        const schemasResult = await client.query(`
+          SELECT schema_name 
+          FROM information_schema.schemata 
+          WHERE schema_name NOT IN ('information_schema', 'pg_catalog') 
+          AND schema_name NOT LIKE 'pg_toast%' 
+          AND schema_name NOT LIKE 'pg_temp%'
+          ORDER BY schema_name
+        `);
+
+        this.logger.log(`Found ${schemasResult.rows.length} schemas in Postgres`);
+
+        const result = { schemas: [] as any[] };
+
+        for (const row of schemasResult.rows) {
+          const schemaName = row.schema_name;
+          
+          // 2. Get Tables for Schema
+          const tablesResult = await client.query(`
+            SELECT table_name, table_type
+            FROM information_schema.tables
+            WHERE table_schema = $1
+            ORDER BY table_name
+          `, [schemaName]);
+
+          // 3. Get Columns for Schema
+          const columnsResult = await client.query(`
+            SELECT table_name, column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = $1
+            ORDER BY table_name, ordinal_position
+          `, [schemaName]);
+
+          // Group columns by table
+          const columnsMap = new Map<string, any[]>();
+          for (const col of columnsResult.rows) {
+            if (!columnsMap.has(col.table_name)) {
+              columnsMap.set(col.table_name, []);
+            }
+            columnsMap.get(col.table_name)?.push({
+              name: col.column_name,
+              type: col.data_type,
+              nullable: col.is_nullable === 'YES',
+            });
+          }
+
+          const tables = tablesResult.rows.map(t => ({
+            name: t.table_name,
+            type: t.table_type === 'BASE TABLE' ? 'table' : 'view',
+            columns: columnsMap.get(t.table_name) || [],
+          }));
+
+          this.logger.log(`Schema '${schemaName}': Found ${tables.length} tables`);
+
+          result.schemas.push({
+            name: schemaName,
+            tables: tables,
+          });
+        }
+
+        return result;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to discover Postgres schema: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new BadRequestException(
+        `Failed to discover schema: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    } finally {
+      await pool.end();
+    }
   }
 }
