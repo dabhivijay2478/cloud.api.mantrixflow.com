@@ -4,6 +4,20 @@
  */
 
 /**
+ * Supported data source types
+ */
+export enum DataSourceType {
+  POSTGRES = 'postgres',
+  MYSQL = 'mysql',
+  MONGODB = 'mongodb',
+  S3 = 's3',
+  API = 'api',
+  BIGQUERY = 'bigquery',
+  SNOWFLAKE = 'snowflake',
+  CSV = 'csv',
+}
+
+/**
  * Column mapping for data transformation
  */
 export interface ColumnMapping {
@@ -21,9 +35,39 @@ export interface ColumnMapping {
  */
 export interface Transformation {
   sourceColumn: string;
-  transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom';
-  transformConfig: any;
+  transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom' | 'filter' | 'mask' | 'hash';
+  transformConfig: TransformConfig;
   destinationColumn: string;
+}
+
+/**
+ * Transformation configuration options
+ */
+export interface TransformConfig {
+  // Cast transformation
+  targetType?: string;
+  
+  // Concat transformation
+  fields?: string[];
+  separator?: string;
+  
+  // Split transformation
+  index?: number;
+  
+  // Filter transformation
+  operator?: 'eq' | 'ne' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'startsWith' | 'endsWith';
+  value?: any;
+  
+  // Mask transformation
+  maskChar?: string;
+  visibleChars?: number;
+  
+  // Hash transformation
+  algorithm?: 'md5' | 'sha256' | 'sha512';
+  
+  // Custom transformation
+  transform?: (value: any) => any;
+  expression?: string;
 }
 
 /**
@@ -34,6 +78,7 @@ export interface WriteResult {
   rowsSkipped: number;
   rowsFailed: number;
   errors?: PipelineError[];
+  metadata?: Record<string, any>;
 }
 
 /**
@@ -44,6 +89,23 @@ export interface PipelineError {
   column?: string;
   message: string;
   error?: Error;
+  code?: string;
+  retryable?: boolean;
+}
+
+/**
+ * Custom pipeline exception
+ */
+export class PipelineException extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly retryable: boolean = false,
+    public readonly details?: Record<string, any>,
+  ) {
+    super(message);
+    this.name = 'PipelineException';
+  }
 }
 
 /**
@@ -51,13 +113,14 @@ export interface PipelineError {
  */
 export interface PipelineRunResult {
   runId: string;
-  status: 'success' | 'failed' | 'cancelled';
+  status: 'success' | 'failed' | 'cancelled' | 'partial';
   rowsRead: number;
   rowsWritten: number;
   rowsSkipped: number;
   rowsFailed: number;
   durationSeconds: number;
   errors: PipelineError[];
+  bytesProcessed?: number;
 }
 
 /**
@@ -77,6 +140,7 @@ export interface DryRunResult {
   sourceRowCount?: number;
   sampleRows: any[];
   errors: PipelineError[];
+  transformedSample?: any[];
 }
 
 /**
@@ -87,7 +151,11 @@ export interface ColumnInfo {
   dataType: string;
   nullable: boolean;
   isPrimaryKey?: boolean;
+  isForeignKey?: boolean;
   defaultValue?: any;
+  maxLength?: number;
+  precision?: number;
+  scale?: number;
 }
 
 /**
@@ -109,6 +177,7 @@ export interface TypeMismatch {
   expectedType: string;
   actualType: string;
   severity?: 'error' | 'warning';
+  canCast?: boolean;
 }
 
 /**
@@ -142,6 +211,34 @@ export interface ValidationError {
 }
 
 /**
+ * Batch processing options
+ */
+export interface BatchOptions {
+  batchSize: number;
+  parallelWorkers?: number;
+  retryAttempts?: number;
+  retryDelayMs?: number;
+}
+
+/**
+ * Progress callback for tracking
+ */
+export type ProgressCallback = (progress: ProgressInfo) => void;
+
+/**
+ * Progress information
+ */
+export interface ProgressInfo {
+  phase: 'collecting' | 'transforming' | 'emitting' | 'complete';
+  currentBatch: number;
+  totalBatches?: number;
+  rowsProcessed: number;
+  rowsTotal?: number;
+  percentage?: number;
+  message?: string;
+}
+
+/**
  * Collector interface - reads data from source
  */
 export interface ICollector {
@@ -154,10 +251,13 @@ export interface ICollector {
     limit?: number;
     offset?: number;
     cursor?: string;
+    incrementalColumn?: string;
+    lastSyncValue?: any;
   }): Promise<{
     rows: any[];
     totalRows?: number;
     nextCursor?: string;
+    hasMore?: boolean;
   }>;
 
   /**
@@ -226,4 +326,35 @@ export interface IEmitter {
    * Check if table exists
    */
   tableExists(options: { destinationSchema: any; connection: any }): Promise<boolean>;
+}
+
+/**
+ * Rate limiter configuration for API sources
+ */
+export interface RateLimiterConfig {
+  requestsPerSecond: number;
+  burstSize?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+}
+
+/**
+ * Cursor-based pagination state
+ */
+export interface CursorState {
+  cursor: string;
+  offset?: number;
+  pageToken?: string;
+  lastId?: string;
+  lastTimestamp?: Date;
+}
+
+/**
+ * Connection pool configuration
+ */
+export interface PoolConfig {
+  min: number;
+  max: number;
+  idleTimeoutMs?: number;
+  acquireTimeoutMs?: number;
 }

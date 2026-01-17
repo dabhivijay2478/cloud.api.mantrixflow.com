@@ -1,20 +1,40 @@
 /**
  * Emitter Service
  * Generic service for emitting/writing data to any destination type
- * Works with postgres, mysql, mongodb, s3, api, etc.
+ * Supports: PostgreSQL, MySQL, MongoDB, S3, REST API, BigQuery, Snowflake
+ *
+ * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
+ * Transformation happens during emission for efficiency
  */
 
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { Pool } from 'pg';
+import * as mysql from 'mysql2/promise';
+import { MongoClient } from 'mongodb';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { BigQuery } from '@google-cloud/bigquery';
 import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { TransformerService } from './transformer.service';
+import { ActivityLogService } from '../../activity-logs/activity-log.service';
+import { DESTINATION_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import type {
   ColumnMapping,
   SchemaValidationResult,
   Transformation,
   WriteResult,
+  PipelineError,
 } from '../types/common.types';
 import type { PipelineDestinationSchema } from '../../../database/schemas';
+import { firstValueFrom } from 'rxjs';
+
+/**
+ * Batch size for bulk operations
+ */
+const DEFAULT_BATCH_SIZE = 1000;
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1000;
 
 @Injectable()
 export class EmitterService {
@@ -24,6 +44,8 @@ export class EmitterService {
     private readonly connectionService: ConnectionService,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly transformerService: TransformerService,
+    private readonly activityLogService: ActivityLogService,
+    private readonly httpService: HttpService,
   ) {}
 
   /**
@@ -56,6 +78,10 @@ export class EmitterService {
       throw new BadRequestException('Destination schema must have a data source ID');
     }
 
+    if (rows.length === 0) {
+      return { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
+    }
+
     const dataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
     if (!dataSource) {
       throw new BadRequestException(`Data source ${destinationSchema.dataSourceId} not found`);
@@ -68,58 +94,97 @@ export class EmitterService {
     );
 
     // STEP 1: Transform data during emission (Collector → Emitter with transformation)
-    const transformedRows = await this.transformerService.transform(
-      rows,
+    const effectiveMappings =
       columnMappings.length > 0
         ? columnMappings
-        : (destinationSchema.columnMappings as ColumnMapping[]) || [],
+        : (destinationSchema.columnMappings as ColumnMapping[]) || [];
+
+    const transformedRows = await this.transformerService.transform(
+      rows,
+      effectiveMappings,
       transformations.length > 0 ? transformations : undefined,
     );
 
-    // STEP 2: Emit transformed data to destination
-    // Route to appropriate emitter based on destination type
+    // STEP 2: Emit transformed data to destination in batches
     let writeResult: WriteResult;
-    switch (dataSource.sourceType) {
-      case 'postgres':
-      case 'mysql':
-        writeResult = await this.emitToDatabase(
-          destinationSchema,
-          connectionConfig,
-          transformedRows,
-          writeMode,
-          upsertKey,
-        );
-        break;
-      case 'mongodb':
-        writeResult = await this.emitToMongoDB(
-          destinationSchema,
-          connectionConfig,
-          transformedRows,
-          writeMode,
-          upsertKey,
-        );
-        break;
-      case 's3':
-        writeResult = await this.emitToS3(
-          destinationSchema,
-          connectionConfig,
-          transformedRows,
-          writeMode,
-        );
-        break;
-      case 'api':
-        writeResult = await this.emitToAPI(destinationSchema, connectionConfig, transformedRows);
-        break;
-      default:
-        throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
+    const errors: PipelineError[] = [];
+
+    try {
+      switch (dataSource.sourceType) {
+        case 'postgres':
+          writeResult = await this.emitToPostgres(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+            writeMode,
+            upsertKey || (destinationSchema.upsertKey as string[]),
+          );
+          break;
+        case 'mysql':
+          writeResult = await this.emitToMySQL(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+            writeMode,
+            upsertKey || (destinationSchema.upsertKey as string[]),
+          );
+          break;
+        case 'mongodb':
+          writeResult = await this.emitToMongoDB(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+            writeMode,
+            upsertKey || (destinationSchema.upsertKey as string[]),
+          );
+          break;
+        case 's3':
+          writeResult = await this.emitToS3(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+            writeMode,
+          );
+          break;
+        case 'api':
+          writeResult = await this.emitToAPI(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+          );
+          break;
+        case 'bigquery':
+          writeResult = await this.emitToBigQuery(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+            writeMode,
+          );
+          break;
+        case 'snowflake':
+          writeResult = await this.emitToSnowflake(
+            destinationSchema,
+            connectionConfig,
+            transformedRows,
+            writeMode,
+          );
+          break;
+        default:
+          throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
+      }
+
+      // Log successful emission
+      this.logger.log(
+        `Emitted ${writeResult.rowsWritten} rows to ${dataSource.sourceType} destination`,
+      );
+
+      return writeResult;
+    } catch (error) {
+      this.logger.error(
+        `Emission failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
     }
-
-    // STEP 3: Post-processing with transformer (Transformer for validation/cleanup)
-    // This can be used for validation, cleanup, or additional processing after emission
-    // For now, we'll just return the write result
-    // Future: Add post-processing logic here if needed
-
-    return writeResult;
   }
 
   /**
@@ -134,12 +199,18 @@ export class EmitterService {
     const { destinationSchema, organizationId, userId, columnMappings } = options;
 
     if (!destinationSchema.dataSourceId) {
-      throw new BadRequestException('Destination schema must have a data source ID');
+      return {
+        valid: false,
+        errors: ['Destination schema must have a data source ID'],
+      };
     }
 
     const dataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
     if (!dataSource) {
-      throw new BadRequestException(`Data source ${destinationSchema.dataSourceId} not found`);
+      return {
+        valid: false,
+        errors: [`Data source ${destinationSchema.dataSourceId} not found`],
+      };
     }
 
     const connectionConfig = await this.connectionService.getDecryptedConnection(
@@ -148,19 +219,26 @@ export class EmitterService {
       userId,
     );
 
-    // Route to appropriate validator
     switch (dataSource.sourceType) {
       case 'postgres':
+        return this.validatePostgresSchema(destinationSchema, connectionConfig, columnMappings);
       case 'mysql':
-        return this.validateDatabaseSchema(destinationSchema, connectionConfig, columnMappings);
+        return this.validateMySQLSchema(destinationSchema, connectionConfig, columnMappings);
       case 'mongodb':
-        return this.validateMongoDBSchema(destinationSchema, connectionConfig, columnMappings);
+        return { valid: true, errors: [], warnings: ['MongoDB schema validation not required'] };
       case 's3':
-        return this.validateS3Schema(destinationSchema, connectionConfig, columnMappings);
+        return { valid: true, errors: [], warnings: ['S3 schema validation not required'] };
       case 'api':
-        return this.validateAPISchema(destinationSchema, connectionConfig, columnMappings);
+        return { valid: true, errors: [], warnings: ['API schema validation not required'] };
+      case 'bigquery':
+        return this.validateBigQuerySchema(destinationSchema, connectionConfig, columnMappings);
+      case 'snowflake':
+        return this.validateSnowflakeSchema(destinationSchema, connectionConfig, columnMappings);
       default:
-        throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
+        return {
+          valid: false,
+          errors: [`Unsupported destination type: ${dataSource.sourceType}`],
+        };
     }
   }
 
@@ -190,19 +268,20 @@ export class EmitterService {
       userId,
     );
 
-    // Route to appropriate table creator
     switch (dataSource.sourceType) {
       case 'postgres':
+        return this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
       case 'mysql':
-        return this.createDatabaseTable(destinationSchema, connectionConfig, columnMappings);
+        return this.createMySQLTable(destinationSchema, connectionConfig, columnMappings);
+      case 'bigquery':
+        return this.createBigQueryTable(destinationSchema, connectionConfig, columnMappings);
+      case 'snowflake':
+        return this.createSnowflakeTable(destinationSchema, connectionConfig, columnMappings);
       case 'mongodb':
         // MongoDB doesn't need table creation
         return { created: false, tableName: destinationSchema.destinationTable };
       case 's3':
-        // S3 doesn't need table creation
-        return { created: false, tableName: destinationSchema.destinationTable };
       case 'api':
-        // API doesn't need table creation
         return { created: false, tableName: destinationSchema.destinationTable };
       default:
         throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
@@ -234,195 +313,976 @@ export class EmitterService {
       userId,
     );
 
-    // Route to appropriate checker
     switch (dataSource.sourceType) {
       case 'postgres':
+        return this.postgresTableExists(destinationSchema, connectionConfig);
       case 'mysql':
-        return this.databaseTableExists(destinationSchema, connectionConfig);
+        return this.mysqlTableExists(destinationSchema, connectionConfig);
+      case 'bigquery':
+        return this.bigQueryTableExists(destinationSchema, connectionConfig);
+      case 'snowflake':
+        return this.snowflakeTableExists(destinationSchema, connectionConfig);
       case 'mongodb':
-        // MongoDB collections always exist
-        return true;
       case 's3':
-        // S3 buckets/keys always exist
-        return true;
       case 'api':
-        // API endpoints always exist
-        return true;
+        return true; // These don't require table existence checks
       default:
         return false;
     }
   }
 
-  /**
-   * Emit to database (PostgreSQL, MySQL)
-   */
-  private async emitToDatabase(
-    destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    rows: any[],
-    _writeMode: 'append' | 'upsert' | 'replace',
-    _upsertKey?: string[],
-  ): Promise<WriteResult> {
-    // TODO: Implement database emission
-    // This should use appropriate database client library
-    this.logger.log(
-      `Emitting ${rows.length} rows to database: ${destinationSchema.destinationSchema}.${destinationSchema.destinationTable}`,
-    );
+  // ============================================================================
+  // POSTGRESQL IMPLEMENTATION
+  // ============================================================================
 
-    // Placeholder
-    return {
-      rowsWritten: 0,
-      rowsSkipped: 0,
-      rowsFailed: 0,
-    };
+  private async emitToPostgres(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    rows: any[],
+    writeMode: 'append' | 'upsert' | 'replace',
+    upsertKey?: string[],
+  ): Promise<WriteResult> {
+    const pool = new Pool({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+      ssl: connectionConfig.ssl?.enabled
+        ? { rejectUnauthorized: connectionConfig.ssl?.reject_unauthorized !== false }
+        : false,
+      max: 5,
+    });
+
+    let rowsWritten = 0;
+    let rowsSkipped = 0;
+    let rowsFailed = 0;
+    const errors: PipelineError[] = [];
+
+    try {
+      const client = await pool.connect();
+
+      try {
+        const schemaName = destinationSchema.destinationSchema || 'public';
+        const tableName = destinationSchema.destinationTable;
+        const fullTableName = `"${schemaName}"."${tableName}"`;
+
+        // Process in batches
+        for (let i = 0; i < rows.length; i += DEFAULT_BATCH_SIZE) {
+          const batch = rows.slice(i, i + DEFAULT_BATCH_SIZE);
+
+          try {
+            await client.query('BEGIN');
+
+            if (writeMode === 'replace' && i === 0) {
+              await client.query(`TRUNCATE ${fullTableName}`);
+            }
+
+            for (const row of batch) {
+              const columns = Object.keys(row);
+              const values = Object.values(row);
+              const placeholders = columns.map((_, idx) => `$${idx + 1}`).join(', ');
+              const columnList = columns.map((c) => `"${c}"`).join(', ');
+
+              if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
+                // UPSERT using ON CONFLICT
+                const conflictTarget = upsertKey.map((k) => `"${k}"`).join(', ');
+                const updateSet = columns
+                  .filter((c) => !upsertKey.includes(c))
+                  .map((c) => `"${c}" = EXCLUDED."${c}"`)
+                  .join(', ');
+
+                const query = `
+                  INSERT INTO ${fullTableName} (${columnList})
+                  VALUES (${placeholders})
+                  ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}
+                `;
+
+                await client.query(query, values);
+              } else {
+                // APPEND mode
+                const query = `INSERT INTO ${fullTableName} (${columnList}) VALUES (${placeholders})`;
+                await client.query(query, values);
+              }
+
+              rowsWritten++;
+            }
+
+            await client.query('COMMIT');
+          } catch (error) {
+            await client.query('ROLLBACK');
+            rowsFailed += batch.length;
+            errors.push({
+              message: error instanceof Error ? error.message : String(error),
+              row: i,
+            });
+            this.logger.error(`Batch failed at row ${i}: ${error}`);
+          }
+        }
+
+        return { rowsWritten, rowsSkipped, rowsFailed, errors: errors.length > 0 ? errors : undefined };
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end();
+    }
   }
 
-  /**
-   * Emit to MongoDB
-   */
+  private async validatePostgresSchema(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<SchemaValidationResult> {
+    const pool = new Pool({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    try {
+      const client = await pool.connect();
+
+      try {
+        const schemaName = destinationSchema.destinationSchema || 'public';
+        const tableName = destinationSchema.destinationTable;
+
+        // Get existing columns
+        const query = `
+          SELECT column_name, data_type, is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = $2
+        `;
+        const result = await client.query(query, [schemaName, tableName]);
+        const existingColumns = new Map(
+          result.rows.map((r) => [r.column_name, { type: r.data_type, nullable: r.is_nullable === 'YES' }]),
+        );
+
+        const errors: string[] = [];
+        const warnings: string[] = [];
+        const missingColumns: string[] = [];
+        const typeMismatches: any[] = [];
+
+        for (const mapping of columnMappings) {
+          const existing = existingColumns.get(mapping.destinationColumn);
+          if (!existing) {
+            missingColumns.push(mapping.destinationColumn);
+          } else {
+            // Check type compatibility
+            const compatible = this.areTypesCompatible(mapping.dataType, existing.type);
+            if (!compatible) {
+              typeMismatches.push({
+                column: mapping.destinationColumn,
+                expectedType: mapping.dataType,
+                actualType: existing.type,
+                severity: 'warning',
+              });
+            }
+          }
+        }
+
+        if (missingColumns.length > 0) {
+          errors.push(`Missing columns: ${missingColumns.join(', ')}`);
+        }
+
+        return {
+          valid: errors.length === 0,
+          errors,
+          warnings,
+          missingColumns,
+          typeMismatches,
+        };
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end();
+    }
+  }
+
+  private async createPostgresTable(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<{ created: boolean; tableName: string }> {
+    const pool = new Pool({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    try {
+      const client = await pool.connect();
+
+      try {
+        const schemaName = destinationSchema.destinationSchema || 'public';
+        const tableName = destinationSchema.destinationTable;
+        const fullTableName = `"${schemaName}"."${tableName}"`;
+
+        // Build column definitions
+        const columnDefs = columnMappings.map((col) => {
+          const nullable = col.nullable ? '' : ' NOT NULL';
+          const pk = col.isPrimaryKey ? ' PRIMARY KEY' : '';
+          const defaultVal = col.defaultValue ? ` DEFAULT ${col.defaultValue}` : '';
+          return `"${col.destinationColumn}" ${this.mapToPostgresType(col.dataType)}${nullable}${pk}${defaultVal}`;
+        });
+
+        const createQuery = `CREATE TABLE IF NOT EXISTS ${fullTableName} (${columnDefs.join(', ')})`;
+        await client.query(createQuery);
+
+        this.logger.log(`Created PostgreSQL table: ${fullTableName}`);
+        return { created: true, tableName };
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end();
+    }
+  }
+
+  private async postgresTableExists(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+  ): Promise<boolean> {
+    const pool = new Pool({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    try {
+      const client = await pool.connect();
+      try {
+        const query = `
+          SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = $1 AND table_name = $2
+          )
+        `;
+        const result = await client.query(query, [
+          destinationSchema.destinationSchema || 'public',
+          destinationSchema.destinationTable,
+        ]);
+        return result.rows[0].exists;
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end();
+    }
+  }
+
+  private mapToPostgresType(type: string): string {
+    const typeMap: Record<string, string> = {
+      string: 'TEXT',
+      text: 'TEXT',
+      varchar: 'VARCHAR(255)',
+      number: 'NUMERIC',
+      integer: 'INTEGER',
+      bigint: 'BIGINT',
+      float: 'DOUBLE PRECISION',
+      double: 'DOUBLE PRECISION',
+      boolean: 'BOOLEAN',
+      date: 'DATE',
+      timestamp: 'TIMESTAMP WITH TIME ZONE',
+      datetime: 'TIMESTAMP WITH TIME ZONE',
+      json: 'JSONB',
+      object: 'JSONB',
+      array: 'JSONB',
+      uuid: 'UUID',
+    };
+    return typeMap[type.toLowerCase()] || 'TEXT';
+  }
+
+  // ============================================================================
+  // MYSQL IMPLEMENTATION
+  // ============================================================================
+
+  private async emitToMySQL(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    rows: any[],
+    writeMode: 'append' | 'upsert' | 'replace',
+    upsertKey?: string[],
+  ): Promise<WriteResult> {
+    const connection = await mysql.createConnection({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    let rowsWritten = 0;
+    let rowsSkipped = 0;
+    let rowsFailed = 0;
+    const errors: PipelineError[] = [];
+
+    try {
+      const schemaName = destinationSchema.destinationSchema || connectionConfig.database;
+      const tableName = destinationSchema.destinationTable;
+      const fullTableName = `\`${schemaName}\`.\`${tableName}\``;
+
+      if (writeMode === 'replace') {
+        await connection.execute(`TRUNCATE TABLE ${fullTableName}`);
+      }
+
+      for (let i = 0; i < rows.length; i += DEFAULT_BATCH_SIZE) {
+        const batch = rows.slice(i, i + DEFAULT_BATCH_SIZE);
+
+        try {
+          await connection.beginTransaction();
+
+          for (const row of batch) {
+            const columns = Object.keys(row);
+            const values = Object.values(row);
+            const placeholders = columns.map(() => '?').join(', ');
+            const columnList = columns.map((c) => `\`${c}\``).join(', ');
+
+            if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
+              const updateSet = columns
+                .filter((c) => !upsertKey.includes(c))
+                .map((c) => `\`${c}\` = VALUES(\`${c}\`)`)
+                .join(', ');
+
+              const query = `
+                INSERT INTO ${fullTableName} (${columnList})
+                VALUES (${placeholders})
+                ON DUPLICATE KEY UPDATE ${updateSet}
+              `;
+
+              await connection.execute(query, values);
+            } else {
+              const query = `INSERT INTO ${fullTableName} (${columnList}) VALUES (${placeholders})`;
+              await connection.execute(query, values);
+            }
+
+            rowsWritten++;
+          }
+
+          await connection.commit();
+        } catch (error) {
+          await connection.rollback();
+          rowsFailed += batch.length;
+          errors.push({ message: error instanceof Error ? error.message : String(error), row: i });
+        }
+      }
+
+      return { rowsWritten, rowsSkipped, rowsFailed, errors: errors.length > 0 ? errors : undefined };
+    } finally {
+      await connection.end();
+    }
+  }
+
+  private async validateMySQLSchema(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<SchemaValidationResult> {
+    const connection = await mysql.createConnection({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    try {
+      const [rows] = await connection.execute(
+        `
+        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+      `,
+        [
+          destinationSchema.destinationSchema || connectionConfig.database,
+          destinationSchema.destinationTable,
+        ],
+      );
+
+      const existingColumns = new Map(
+        (rows as any[]).map((r) => [r.COLUMN_NAME, { type: r.DATA_TYPE, nullable: r.IS_NULLABLE === 'YES' }]),
+      );
+
+      const errors: string[] = [];
+      const missingColumns: string[] = [];
+
+      for (const mapping of columnMappings) {
+        if (!existingColumns.has(mapping.destinationColumn)) {
+          missingColumns.push(mapping.destinationColumn);
+        }
+      }
+
+      if (missingColumns.length > 0) {
+        errors.push(`Missing columns: ${missingColumns.join(', ')}`);
+      }
+
+      return { valid: errors.length === 0, errors, missingColumns };
+    } finally {
+      await connection.end();
+    }
+  }
+
+  private async createMySQLTable(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<{ created: boolean; tableName: string }> {
+    const connection = await mysql.createConnection({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    try {
+      const schemaName = destinationSchema.destinationSchema || connectionConfig.database;
+      const tableName = destinationSchema.destinationTable;
+
+      const columnDefs = columnMappings.map((col) => {
+        const nullable = col.nullable ? '' : ' NOT NULL';
+        const pk = col.isPrimaryKey ? ' PRIMARY KEY' : '';
+        return `\`${col.destinationColumn}\` ${this.mapToMySQLType(col.dataType)}${nullable}${pk}`;
+      });
+
+      await connection.execute(
+        `CREATE TABLE IF NOT EXISTS \`${schemaName}\`.\`${tableName}\` (${columnDefs.join(', ')})`,
+      );
+
+      return { created: true, tableName };
+    } finally {
+      await connection.end();
+    }
+  }
+
+  private async mysqlTableExists(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+  ): Promise<boolean> {
+    const connection = await mysql.createConnection({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+    });
+
+    try {
+      const [rows] = await connection.execute(
+        `SELECT COUNT(*) as cnt FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+        [
+          destinationSchema.destinationSchema || connectionConfig.database,
+          destinationSchema.destinationTable,
+        ],
+      );
+      return (rows as any[])[0].cnt > 0;
+    } finally {
+      await connection.end();
+    }
+  }
+
+  private mapToMySQLType(type: string): string {
+    const typeMap: Record<string, string> = {
+      string: 'TEXT',
+      text: 'TEXT',
+      varchar: 'VARCHAR(255)',
+      number: 'DECIMAL(18,2)',
+      integer: 'INT',
+      bigint: 'BIGINT',
+      float: 'DOUBLE',
+      double: 'DOUBLE',
+      boolean: 'TINYINT(1)',
+      date: 'DATE',
+      timestamp: 'TIMESTAMP',
+      datetime: 'DATETIME',
+      json: 'JSON',
+      object: 'JSON',
+      array: 'JSON',
+    };
+    return typeMap[type.toLowerCase()] || 'TEXT';
+  }
+
+  // ============================================================================
+  // MONGODB IMPLEMENTATION
+  // ============================================================================
+
   private async emitToMongoDB(
     destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
+    connectionConfig: any,
     rows: any[],
-    _writeMode: 'append' | 'upsert' | 'replace',
-    _upsertKey?: string[],
+    writeMode: 'append' | 'upsert' | 'replace',
+    upsertKey?: string[],
   ): Promise<WriteResult> {
-    // TODO: Implement MongoDB emission
-    this.logger.log(
-      `Emitting ${rows.length} rows to MongoDB: ${destinationSchema.destinationTable}`,
-    );
-    return {
-      rowsWritten: 0,
-      rowsSkipped: 0,
-      rowsFailed: 0,
-    };
+    const connectionString =
+      connectionConfig.connection_string ||
+      `mongodb://${connectionConfig.username}:${connectionConfig.password}@${connectionConfig.host}:${connectionConfig.port}/${connectionConfig.database}`;
+
+    const client = new MongoClient(connectionString);
+
+    try {
+      await client.connect();
+      const db = client.db(connectionConfig.database);
+      const collection = db.collection(destinationSchema.destinationTable);
+
+      let rowsWritten = 0;
+      let rowsSkipped = 0;
+      let rowsFailed = 0;
+
+      if (writeMode === 'replace') {
+        await collection.deleteMany({});
+      }
+
+      if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
+        // Upsert each document
+        for (const row of rows) {
+          try {
+            const filter: any = {};
+            upsertKey.forEach((key) => {
+              filter[key] = row[key];
+            });
+
+            await collection.updateOne(filter, { $set: row }, { upsert: true });
+            rowsWritten++;
+          } catch (error) {
+            rowsFailed++;
+          }
+        }
+      } else {
+        // Bulk insert
+        const result = await collection.insertMany(rows, { ordered: false });
+        rowsWritten = result.insertedCount;
+      }
+
+      return { rowsWritten, rowsSkipped, rowsFailed };
+    } finally {
+      await client.close();
+    }
   }
 
-  /**
-   * Emit to S3
-   */
+  // ============================================================================
+  // S3 IMPLEMENTATION
+  // ============================================================================
+
   private async emitToS3(
     destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
+    connectionConfig: any,
     rows: any[],
-    _writeMode: 'append' | 'upsert' | 'replace',
+    writeMode: 'append' | 'upsert' | 'replace',
   ): Promise<WriteResult> {
-    // TODO: Implement S3 emission
-    this.logger.log(`Emitting ${rows.length} rows to S3: ${destinationSchema.destinationTable}`);
-    return {
-      rowsWritten: 0,
-      rowsSkipped: 0,
-      rowsFailed: 0,
-    };
+    const s3Client = new S3Client({
+      region: connectionConfig.region,
+      credentials: {
+        accessKeyId: connectionConfig.access_key_id,
+        secretAccessKey: connectionConfig.secret_access_key,
+      },
+    });
+
+    const bucket = connectionConfig.bucket;
+    const prefix = destinationSchema.destinationTable;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const key = `${prefix}/${timestamp}.json`;
+
+    try {
+      const content = JSON.stringify(rows, null, 2);
+
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: content,
+        ContentType: 'application/json',
+      });
+
+      await s3Client.send(command);
+
+      this.logger.log(`Uploaded ${rows.length} rows to s3://${bucket}/${key}`);
+
+      return { rowsWritten: rows.length, rowsSkipped: 0, rowsFailed: 0 };
+    } catch (error) {
+      this.logger.error(`S3 upload failed: ${error}`);
+      throw error;
+    }
   }
 
-  /**
-   * Emit to API
-   */
+  // ============================================================================
+  // REST API IMPLEMENTATION
+  // ============================================================================
+
   private async emitToAPI(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
     rows: any[],
   ): Promise<WriteResult> {
-    // TODO: Implement API emission
-    this.logger.log(`Emitting ${rows.length} rows to API`);
-    return {
-      rowsWritten: 0,
-      rowsSkipped: 0,
-      rowsFailed: 0,
+    const baseUrl = connectionConfig.base_url;
+    const endpoint = destinationSchema.destinationTable; // Use table name as endpoint
+    const url = new URL(endpoint, baseUrl);
+
+    let rowsWritten = 0;
+    let rowsFailed = 0;
+    const errors: PipelineError[] = [];
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
     };
+
+    // Add authentication
+    switch (connectionConfig.auth_type) {
+      case 'bearer':
+        headers['Authorization'] = `Bearer ${connectionConfig.auth_token}`;
+        break;
+      case 'api_key':
+        headers['X-API-Key'] = connectionConfig.api_key;
+        break;
+    }
+
+    // Send data in batches
+    for (let i = 0; i < rows.length; i += 100) {
+      const batch = rows.slice(i, i + 100);
+
+      for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+        try {
+          await firstValueFrom(
+            this.httpService.post(url.toString(), batch, { headers }),
+          );
+          rowsWritten += batch.length;
+          break;
+        } catch (error) {
+          if (attempt === RETRY_ATTEMPTS - 1) {
+            rowsFailed += batch.length;
+            errors.push({
+              message: error instanceof Error ? error.message : String(error),
+              row: i,
+            });
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
+          }
+        }
+      }
+    }
+
+    return { rowsWritten, rowsSkipped: 0, rowsFailed, errors: errors.length > 0 ? errors : undefined };
   }
 
-  /**
-   * Validate database schema
-   */
-  private async validateDatabaseSchema(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    _columnMappings: ColumnMapping[],
-  ): Promise<SchemaValidationResult> {
-    // TODO: Implement database schema validation
-    return {
-      valid: true,
-      errors: [],
-      warnings: [],
-    };
-  }
+  // ============================================================================
+  // BIGQUERY IMPLEMENTATION
+  // ============================================================================
 
-  /**
-   * Validate MongoDB schema
-   */
-  private async validateMongoDBSchema(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    _columnMappings: ColumnMapping[],
-  ): Promise<SchemaValidationResult> {
-    // TODO: Implement MongoDB schema validation
-    return {
-      valid: true,
-      errors: [],
-      warnings: [],
-    };
-  }
-
-  /**
-   * Validate S3 schema
-   */
-  private async validateS3Schema(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    _columnMappings: ColumnMapping[],
-  ): Promise<SchemaValidationResult> {
-    // TODO: Implement S3 schema validation
-    return {
-      valid: true,
-      errors: [],
-      warnings: [],
-    };
-  }
-
-  /**
-   * Validate API schema
-   */
-  private async validateAPISchema(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    _columnMappings: ColumnMapping[],
-  ): Promise<SchemaValidationResult> {
-    // TODO: Implement API schema validation
-    return {
-      valid: true,
-      errors: [],
-      warnings: [],
-    };
-  }
-
-  /**
-   * Create database table
-   */
-  private async createDatabaseTable(
+  private async emitToBigQuery(
     destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    _columnMappings: ColumnMapping[],
-  ): Promise<{ created: boolean; tableName: string }> {
-    // TODO: Implement database table creation
-    this.logger.log(
-      `Creating table: ${destinationSchema.destinationSchema}.${destinationSchema.destinationTable}`,
-    );
-    return {
-      created: false,
-      tableName: destinationSchema.destinationTable,
-    };
+    connectionConfig: any,
+    rows: any[],
+    writeMode: 'append' | 'upsert' | 'replace',
+  ): Promise<WriteResult> {
+    const bigquery = new BigQuery({
+      projectId: connectionConfig.project_id,
+      credentials: connectionConfig.credentials,
+    });
+
+    const dataset = connectionConfig.dataset;
+    const tableName = destinationSchema.destinationTable;
+
+    try {
+      const table = bigquery.dataset(dataset).table(tableName);
+
+      // Configure write disposition
+      const writeDisposition = writeMode === 'replace' ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
+
+      await table.insert(rows, {
+        skipInvalidRows: true,
+        ignoreUnknownValues: true,
+      });
+
+      return { rowsWritten: rows.length, rowsSkipped: 0, rowsFailed: 0 };
+    } catch (error) {
+      this.logger.error(`BigQuery insert failed: ${error}`);
+      throw error;
+    }
   }
 
-  /**
-   * Check if database table exists
-   */
-  private async databaseTableExists(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
+  private async validateBigQuerySchema(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<SchemaValidationResult> {
+    const bigquery = new BigQuery({
+      projectId: connectionConfig.project_id,
+      credentials: connectionConfig.credentials,
+    });
+
+    try {
+      const [metadata] = await bigquery
+        .dataset(connectionConfig.dataset)
+        .table(destinationSchema.destinationTable)
+        .getMetadata();
+
+      const existingFields = new Set(metadata.schema.fields.map((f: any) => f.name));
+      const missingColumns = columnMappings
+        .filter((m) => !existingFields.has(m.destinationColumn))
+        .map((m) => m.destinationColumn);
+
+      return {
+        valid: missingColumns.length === 0,
+        errors: missingColumns.length > 0 ? [`Missing columns: ${missingColumns.join(', ')}`] : [],
+        missingColumns,
+      };
+    } catch (error) {
+      return { valid: false, errors: [String(error)] };
+    }
+  }
+
+  private async createBigQueryTable(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<{ created: boolean; tableName: string }> {
+    const bigquery = new BigQuery({
+      projectId: connectionConfig.project_id,
+      credentials: connectionConfig.credentials,
+    });
+
+    const schema = columnMappings.map((col) => ({
+      name: col.destinationColumn,
+      type: this.mapToBigQueryType(col.dataType),
+      mode: col.nullable ? 'NULLABLE' : 'REQUIRED',
+    }));
+
+    await bigquery.dataset(connectionConfig.dataset).createTable(destinationSchema.destinationTable, {
+      schema,
+    });
+
+    return { created: true, tableName: destinationSchema.destinationTable };
+  }
+
+  private async bigQueryTableExists(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
   ): Promise<boolean> {
-    // TODO: Implement database table existence check
+    const bigquery = new BigQuery({
+      projectId: connectionConfig.project_id,
+      credentials: connectionConfig.credentials,
+    });
+
+    try {
+      const [exists] = await bigquery
+        .dataset(connectionConfig.dataset)
+        .table(destinationSchema.destinationTable)
+        .exists();
+      return exists;
+    } catch {
+      return false;
+    }
+  }
+
+  private mapToBigQueryType(type: string): string {
+    const typeMap: Record<string, string> = {
+      string: 'STRING',
+      text: 'STRING',
+      number: 'FLOAT64',
+      integer: 'INT64',
+      bigint: 'INT64',
+      float: 'FLOAT64',
+      double: 'FLOAT64',
+      boolean: 'BOOL',
+      date: 'DATE',
+      timestamp: 'TIMESTAMP',
+      datetime: 'DATETIME',
+      json: 'JSON',
+      object: 'JSON',
+      array: 'ARRAY',
+    };
+    return typeMap[type.toLowerCase()] || 'STRING';
+  }
+
+  // ============================================================================
+  // SNOWFLAKE IMPLEMENTATION
+  // ============================================================================
+
+  private async emitToSnowflake(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    rows: any[],
+    writeMode: 'append' | 'upsert' | 'replace',
+  ): Promise<WriteResult> {
+    const snowflake = await import('snowflake-sdk');
+
+    return new Promise((resolve, reject) => {
+      const connection = snowflake.createConnection({
+        account: connectionConfig.account,
+        username: connectionConfig.username,
+        password: connectionConfig.password,
+        warehouse: connectionConfig.warehouse,
+        database: connectionConfig.database,
+        schema: connectionConfig.schema,
+      });
+
+      connection.connect((err, conn) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const schema = destinationSchema.destinationSchema || connectionConfig.schema;
+        const tableName = destinationSchema.destinationTable;
+
+        const insertRows = async () => {
+          let rowsWritten = 0;
+
+          if (writeMode === 'replace') {
+            await new Promise<void>((res, rej) => {
+              conn.execute({
+                sqlText: `TRUNCATE TABLE "${schema}"."${tableName}"`,
+                complete: (err) => (err ? rej(err) : res()),
+              });
+            });
+          }
+
+          for (const row of rows) {
+            const columns = Object.keys(row);
+            const values = Object.values(row).map((v) =>
+              typeof v === 'string' ? `'${v.replace(/'/g, "''")}'` : v,
+            );
+
+            await new Promise<void>((res, rej) => {
+              conn.execute({
+                sqlText: `INSERT INTO "${schema}"."${tableName}" (${columns.join(', ')}) VALUES (${values.join(', ')})`,
+                complete: (err) => {
+                  if (err) {
+                    rej(err);
+                  } else {
+                    rowsWritten++;
+                    res();
+                  }
+                },
+              });
+            });
+          }
+
+          return rowsWritten;
+        };
+
+        insertRows()
+          .then((rowsWritten) => {
+            connection.destroy(() => {});
+            resolve({ rowsWritten, rowsSkipped: 0, rowsFailed: 0 });
+          })
+          .catch((error) => {
+            connection.destroy(() => {});
+            reject(error);
+          });
+      });
+    });
+  }
+
+  private async validateSnowflakeSchema(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<SchemaValidationResult> {
+    // Simplified validation - return success for now
+    return { valid: true, errors: [], warnings: ['Full Snowflake schema validation not implemented'] };
+  }
+
+  private async createSnowflakeTable(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+  ): Promise<{ created: boolean; tableName: string }> {
+    const snowflake = await import('snowflake-sdk');
+
+    return new Promise((resolve, reject) => {
+      const connection = snowflake.createConnection({
+        account: connectionConfig.account,
+        username: connectionConfig.username,
+        password: connectionConfig.password,
+        warehouse: connectionConfig.warehouse,
+        database: connectionConfig.database,
+        schema: connectionConfig.schema,
+      });
+
+      connection.connect((err, conn) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const schema = destinationSchema.destinationSchema || connectionConfig.schema;
+        const tableName = destinationSchema.destinationTable;
+
+        const columnDefs = columnMappings
+          .map((col) => `"${col.destinationColumn}" ${this.mapToSnowflakeType(col.dataType)}`)
+          .join(', ');
+
+        conn.execute({
+          sqlText: `CREATE TABLE IF NOT EXISTS "${schema}"."${tableName}" (${columnDefs})`,
+          complete: (err) => {
+            connection.destroy(() => {});
+            if (err) {
+              reject(err);
+            } else {
+              resolve({ created: true, tableName });
+            }
+          },
+        });
+      });
+    });
+  }
+
+  private async snowflakeTableExists(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+  ): Promise<boolean> {
+    // Simplified check
     return false;
+  }
+
+  private mapToSnowflakeType(type: string): string {
+    const typeMap: Record<string, string> = {
+      string: 'VARCHAR',
+      text: 'VARCHAR',
+      number: 'NUMBER',
+      integer: 'INTEGER',
+      bigint: 'BIGINT',
+      float: 'FLOAT',
+      double: 'DOUBLE',
+      boolean: 'BOOLEAN',
+      date: 'DATE',
+      timestamp: 'TIMESTAMP_NTZ',
+      datetime: 'TIMESTAMP_NTZ',
+      json: 'VARIANT',
+      object: 'VARIANT',
+      array: 'ARRAY',
+    };
+    return typeMap[type.toLowerCase()] || 'VARCHAR';
+  }
+
+  // ============================================================================
+  // HELPER METHODS
+  // ============================================================================
+
+  private areTypesCompatible(sourceType: string, destType: string): boolean {
+    const normalizedSource = sourceType.toLowerCase();
+    const normalizedDest = destType.toLowerCase();
+
+    // Basic type compatibility check
+    const stringTypes = ['string', 'text', 'varchar', 'char', 'character varying'];
+    const numericTypes = ['number', 'integer', 'int', 'bigint', 'float', 'double', 'numeric', 'decimal'];
+    const boolTypes = ['boolean', 'bool', 'tinyint'];
+    const dateTypes = ['date', 'timestamp', 'datetime', 'timestamptz', 'timestamp with time zone'];
+
+    const getTypeGroup = (type: string) => {
+      if (stringTypes.some((t) => type.includes(t))) return 'string';
+      if (numericTypes.some((t) => type.includes(t))) return 'numeric';
+      if (boolTypes.some((t) => type.includes(t))) return 'boolean';
+      if (dateTypes.some((t) => type.includes(t))) return 'date';
+      return 'other';
+    };
+
+    return getTypeGroup(normalizedSource) === getTypeGroup(normalizedDest);
   }
 }

@@ -1,100 +1,146 @@
 /**
  * Destination Schema Service
  * Business logic for pipeline destination schema management
+ * Supports schema validation, table creation, and column mapping management
  */
 
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import type { PipelineDestinationSchema } from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DESTINATION_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
 import { EmitterService } from './emitter.service';
+import { TransformerService } from './transformer.service';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
-import type { ColumnMapping } from '../types/common.types';
+import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
+import type { ColumnMapping, SchemaValidationResult, ValidationResult } from '../types/common.types';
 
-export interface CreateDestinationSchemaDto {
+/**
+ * Internal DTO with organization context
+ */
+export interface CreateDestinationSchemaInput extends CreateDestinationSchemaDto {
   organizationId: string;
-  dataSourceId: string;
-  destinationSchema?: string;
-  destinationTable: string;
-  destinationTableExists?: boolean;
-  columnMappings?: ColumnMapping[];
-  writeMode?: 'append' | 'upsert' | 'replace';
-  upsertKey?: string[];
-  name?: string;
-}
-
-export interface UpdateDestinationSchemaDto {
-  name?: string;
-  destinationSchema?: string;
-  destinationTable?: string;
-  columnMappings?: ColumnMapping[];
-  writeMode?: 'append' | 'upsert' | 'replace';
-  upsertKey?: string[];
 }
 
 @Injectable()
 export class DestinationSchemaService {
+  private readonly logger = new Logger(DestinationSchemaService.name);
+
   constructor(
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly emitterService: EmitterService,
+    private readonly transformerService: TransformerService,
     private readonly activityLogService: ActivityLogService,
+    private readonly roleService: OrganizationRoleService,
   ) {}
 
   /**
    * Create destination schema
    */
   async create(
-    dto: CreateDestinationSchemaDto,
+    dto: CreateDestinationSchemaInput,
     userId: string,
   ): Promise<PipelineDestinationSchema> {
+    const { organizationId, dataSourceId, destinationTable } = dto;
+
+    // AUTHORIZATION
+    await this.checkManagePermission(userId, organizationId);
+
     // Validate data source
-    const dataSource = await this.dataSourceRepository.findById(dto.dataSourceId);
+    const dataSource = await this.dataSourceRepository.findById(dataSourceId);
     if (!dataSource) {
-      throw new NotFoundException(`Data source ${dto.dataSourceId} not found`);
+      throw new NotFoundException(`Data source ${dataSourceId} not found`);
     }
-    if (dataSource.organizationId !== dto.organizationId) {
-      throw new BadRequestException('Data source does not belong to this organization');
+    if (dataSource.organizationId !== organizationId) {
+      throw new ForbiddenException('Data source does not belong to this organization');
+    }
+
+    // Validate column mappings if provided
+    if (dto.columnMappings && dto.columnMappings.length > 0) {
+      const validation = this.transformerService.validate(dto.columnMappings as ColumnMapping[]);
+      if (!validation.valid) {
+        throw new BadRequestException(`Invalid column mappings: ${validation.errors.join(', ')}`);
+      }
+    }
+
+    // Validate upsert configuration
+    if (dto.writeMode === 'upsert' && (!dto.upsertKey || dto.upsertKey.length === 0)) {
+      throw new BadRequestException('Upsert mode requires upsert key columns');
     }
 
     const schema = await this.destinationSchemaRepository.create({
-      organizationId: dto.organizationId,
-      dataSourceId: dto.dataSourceId,
+      organizationId,
+      dataSourceId,
       destinationSchema: dto.destinationSchema || 'public',
-      destinationTable: dto.destinationTable,
+      destinationTable,
       destinationTableExists: dto.destinationTableExists || false,
       columnMappings: (dto.columnMappings as any) || null,
       writeMode: dto.writeMode || 'append',
       upsertKey: (dto.upsertKey as any) || null,
-      name: dto.name || null,
+      name: dto.name || `${destinationTable}_destination`,
       isActive: true,
     });
 
     // Log activity
     await this.activityLogService.logActivity({
-      organizationId: dto.organizationId,
+      organizationId,
       userId,
       actionType: DESTINATION_SCHEMA_ACTIONS.CREATED,
       entityType: 'pipeline_destination_schema',
       entityId: schema.id,
       message: `Destination schema created: ${schema.name || schema.id}`,
+      metadata: {
+        dataSourceId,
+        destinationTable,
+        writeMode: dto.writeMode || 'append',
+        columnMappingsCount: dto.columnMappings?.length || 0,
+      },
     });
 
+    this.logger.log(`Destination schema created: ${schema.id}`);
     return schema;
   }
 
   /**
    * Get destination schema by ID
    */
-  async findById(id: string): Promise<PipelineDestinationSchema | null> {
-    return await this.destinationSchemaRepository.findById(id);
+  async findById(
+    id: string,
+    organizationId?: string,
+    userId?: string,
+  ): Promise<PipelineDestinationSchema | null> {
+    const schema = await this.destinationSchemaRepository.findById(id);
+
+    if (schema && organizationId && schema.organizationId !== organizationId) {
+      throw new ForbiddenException('Destination schema does not belong to this organization');
+    }
+
+    if (schema && userId) {
+      await this.checkViewPermission(userId, schema.organizationId);
+    }
+
+    return schema;
   }
 
   /**
    * Get destination schemas by organization
    */
-  async findByOrganization(organizationId: string): Promise<PipelineDestinationSchema[]> {
+  async findByOrganization(
+    organizationId: string,
+    userId?: string,
+  ): Promise<PipelineDestinationSchema[]> {
+    if (userId) {
+      await this.checkViewPermission(userId, organizationId);
+    }
+
     return await this.destinationSchemaRepository.findByOrganization(organizationId);
   }
 
@@ -111,7 +157,30 @@ export class DestinationSchemaService {
       throw new NotFoundException(`Destination schema ${id} not found`);
     }
 
-    const updated = await this.destinationSchemaRepository.update(id, updates);
+    // AUTHORIZATION
+    await this.checkManagePermission(userId, schema.organizationId);
+
+    // Validate column mappings if being updated
+    if (updates.columnMappings && updates.columnMappings.length > 0) {
+      const validation = this.transformerService.validate(updates.columnMappings as ColumnMapping[]);
+      if (!validation.valid) {
+        throw new BadRequestException(`Invalid column mappings: ${validation.errors.join(', ')}`);
+      }
+    }
+
+    // Validate upsert configuration
+    const newWriteMode = updates.writeMode || schema.writeMode;
+    const newUpsertKey = updates.upsertKey || (schema.upsertKey as string[]);
+    if (newWriteMode === 'upsert' && (!newUpsertKey || newUpsertKey.length === 0)) {
+      throw new BadRequestException('Upsert mode requires upsert key columns');
+    }
+
+    const updated = await this.destinationSchemaRepository.update(id, {
+      ...updates,
+      columnMappings: updates.columnMappings as any,
+      upsertKey: updates.upsertKey as any,
+      updatedAt: new Date(),
+    });
 
     // Log activity
     await this.activityLogService.logActivity({
@@ -121,23 +190,32 @@ export class DestinationSchemaService {
       entityType: 'pipeline_destination_schema',
       entityId: id,
       message: `Destination schema updated: ${schema.name || id}`,
-      metadata: { changes: updates },
+      metadata: { changes: Object.keys(updates) },
     });
 
     return updated;
   }
 
   /**
-   * Validate destination schema
+   * Validate destination schema against actual database schema
    */
-  async validateSchema(id: string, userId: string): Promise<any> {
+  async validateSchema(
+    id: string,
+    userId: string,
+  ): Promise<SchemaValidationResult> {
     const schema = await this.destinationSchemaRepository.findById(id);
     if (!schema) {
       throw new NotFoundException(`Destination schema ${id} not found`);
     }
 
+    // AUTHORIZATION
+    await this.checkManagePermission(userId, schema.organizationId);
+
     if (!schema.dataSourceId) {
-      throw new BadRequestException('Destination schema must have a data source ID');
+      return {
+        valid: false,
+        errors: ['Destination schema must have a data source ID'],
+      };
     }
 
     const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
@@ -152,7 +230,10 @@ export class DestinationSchemaService {
 
     // Update schema with validation result
     await this.destinationSchemaRepository.update(id, {
-      validationResult: validationResult as any,
+      validationResult: {
+        ...validationResult,
+        validatedAt: new Date().toISOString(),
+      } as any,
       lastValidatedAt: new Date(),
     });
 
@@ -163,10 +244,11 @@ export class DestinationSchemaService {
       actionType: DESTINATION_SCHEMA_ACTIONS.VALIDATED,
       entityType: 'pipeline_destination_schema',
       entityId: id,
-      message: `Destination schema validated: ${schema.name || id}`,
+      message: validationResult.valid ? 'Schema validation passed' : 'Schema validation failed',
       metadata: {
         valid: validationResult.valid,
         errorsCount: validationResult.errors.length,
+        missingColumns: validationResult.missingColumns,
       },
     });
 
@@ -174,13 +256,190 @@ export class DestinationSchemaService {
   }
 
   /**
-   * Delete destination schema
+   * Check if destination table exists
+   */
+  async checkTableExists(id: string, userId: string): Promise<boolean> {
+    const schema = await this.destinationSchemaRepository.findById(id);
+    if (!schema) {
+      throw new NotFoundException(`Destination schema ${id} not found`);
+    }
+
+    await this.checkViewPermission(userId, schema.organizationId);
+
+    const exists = await this.emitterService.tableExists({
+      destinationSchema: schema,
+      organizationId: schema.organizationId,
+      userId,
+    });
+
+    // Update cached existence status
+    await this.destinationSchemaRepository.update(id, {
+      destinationTableExists: exists,
+    });
+
+    return exists;
+  }
+
+  /**
+   * Create destination table based on column mappings
+   */
+  async createTable(
+    id: string,
+    userId: string,
+  ): Promise<{ created: boolean; tableName: string }> {
+    const schema = await this.destinationSchemaRepository.findById(id);
+    if (!schema) {
+      throw new NotFoundException(`Destination schema ${id} not found`);
+    }
+
+    // AUTHORIZATION
+    await this.checkManagePermission(userId, schema.organizationId);
+
+    const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
+    if (columnMappings.length === 0) {
+      throw new BadRequestException('Column mappings are required to create table');
+    }
+
+    const result = await this.emitterService.createTable({
+      destinationSchema: schema,
+      organizationId: schema.organizationId,
+      userId,
+      columnMappings,
+    });
+
+    if (result.created) {
+      // Update schema status
+      await this.destinationSchemaRepository.update(id, {
+        destinationTableExists: true,
+        lastSyncedAt: new Date(),
+      });
+
+      // Log activity
+      await this.activityLogService.logActivity({
+        organizationId: schema.organizationId,
+        userId,
+        actionType: DESTINATION_SCHEMA_ACTIONS.SYNCED,
+        entityType: 'pipeline_destination_schema',
+        entityId: id,
+        message: `Destination table created: ${result.tableName}`,
+        metadata: {
+          tableName: result.tableName,
+          columnsCount: columnMappings.length,
+        },
+      });
+
+      this.logger.log(`Created destination table: ${result.tableName}`);
+    }
+
+    return result;
+  }
+
+  /**
+   * Sync column mappings from source schema
+   * Automatically generates column mappings based on source columns
+   */
+  async syncFromSource(
+    id: string,
+    sourceSchemaId: string,
+    userId: string,
+    options?: {
+      includeAllColumns?: boolean;
+      preserveExisting?: boolean;
+    },
+  ): Promise<PipelineDestinationSchema> {
+    const schema = await this.destinationSchemaRepository.findById(id);
+    if (!schema) {
+      throw new NotFoundException(`Destination schema ${id} not found`);
+    }
+
+    // AUTHORIZATION
+    await this.checkManagePermission(userId, schema.organizationId);
+
+    // TODO: Get source schema columns and generate mappings
+    // This would integrate with SourceSchemaService to get discovered columns
+
+    throw new BadRequestException('Sync from source not yet implemented');
+  }
+
+  /**
+   * Validate configuration
+   */
+  async validateConfiguration(id: string, userId: string): Promise<ValidationResult> {
+    const schema = await this.destinationSchemaRepository.findById(id);
+    if (!schema) {
+      throw new NotFoundException(`Destination schema ${id} not found`);
+    }
+
+    await this.checkViewPermission(userId, schema.organizationId);
+
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    // Check required fields
+    if (!schema.dataSourceId) {
+      errors.push('Data source ID is required');
+    }
+    if (!schema.destinationTable) {
+      errors.push('Destination table is required');
+    }
+
+    // Check data source exists
+    if (schema.dataSourceId) {
+      const dataSource = await this.dataSourceRepository.findById(schema.dataSourceId);
+      if (!dataSource) {
+        errors.push('Referenced data source does not exist');
+      } else if (!dataSource.isActive) {
+        warnings.push('Referenced data source is inactive');
+      }
+    }
+
+    // Check column mappings
+    const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
+    if (columnMappings.length === 0) {
+      warnings.push('No column mappings defined');
+    } else {
+      const mappingValidation = this.transformerService.validate(columnMappings);
+      errors.push(...mappingValidation.errors);
+      if (mappingValidation.warnings) {
+        warnings.push(...mappingValidation.warnings);
+      }
+    }
+
+    // Check upsert configuration
+    if (schema.writeMode === 'upsert') {
+      const upsertKey = schema.upsertKey as string[];
+      if (!upsertKey || upsertKey.length === 0) {
+        errors.push('Upsert mode requires upsert key columns');
+      } else {
+        // Check upsert keys are in column mappings
+        for (const key of upsertKey) {
+          if (!columnMappings.find((m) => m.destinationColumn === key)) {
+            errors.push(`Upsert key '${key}' not found in column mappings`);
+          }
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  }
+
+  /**
+   * Delete destination schema (soft delete)
    */
   async delete(id: string, userId: string): Promise<void> {
     const schema = await this.destinationSchemaRepository.findById(id);
     if (!schema) {
       throw new NotFoundException(`Destination schema ${id} not found`);
     }
+
+    // AUTHORIZATION
+    await this.checkManagePermission(userId, schema.organizationId);
+
+    // TODO: Check if schema is used by any active pipelines
 
     await this.destinationSchemaRepository.delete(id);
 
@@ -193,5 +452,25 @@ export class DestinationSchemaService {
       entityId: id,
       message: `Destination schema deleted: ${schema.name || id}`,
     });
+
+    this.logger.log(`Destination schema deleted: ${id}`);
+  }
+
+  // ============================================================================
+  // AUTHORIZATION HELPERS
+  // ============================================================================
+
+  private async checkViewPermission(userId: string, organizationId: string): Promise<void> {
+    const canView = await this.roleService.canViewOrganization(userId, organizationId);
+    if (!canView) {
+      throw new ForbiddenException('You are not a member of this organization');
+    }
+  }
+
+  private async checkManagePermission(userId: string, organizationId: string): Promise<void> {
+    const canManage = await this.roleService.canManageDataSources(userId, organizationId);
+    if (!canManage) {
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can manage destination schemas');
+    }
   }
 }
