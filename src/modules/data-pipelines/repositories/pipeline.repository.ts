@@ -369,6 +369,34 @@ export class PipelineRepository {
   }
 
   /**
+   * Find pipelines that are due to run based on their schedule
+   * Returns pipelines where:
+   * - scheduleType is NOT 'none'
+   * - nextScheduledRunAt is in the past
+   * - status is 'idle' (not already running)
+   * - not soft deleted
+   */
+  async findDuePipelines(now: Date = new Date()): Promise<Pipeline[]> {
+    return await this.db
+      .select()
+      .from(pipelines)
+      .where(
+        and(
+          isNull(pipelines.deletedAt),
+          // Has a schedule configured
+          sql`${pipelines.scheduleType} IS NOT NULL`,
+          sql`${pipelines.scheduleType} != 'none'`,
+          // Is due to run
+          sql`${pipelines.nextScheduledRunAt} IS NOT NULL`,
+          sql`${pipelines.nextScheduledRunAt} <= ${now}`,
+          // Not currently running
+          sql`${pipelines.status} IN ('idle', 'failed')`,
+        ),
+      )
+      .orderBy(pipelines.nextScheduledRunAt);
+  }
+
+  /**
    * Count pipelines by organization
    */
   async countByOrganization(organizationId: string): Promise<number> {

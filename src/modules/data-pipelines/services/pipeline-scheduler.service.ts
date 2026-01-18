@@ -54,39 +54,20 @@ export class PipelineSchedulerService {
       throw new BadRequestException('Invalid schedule configuration');
     }
 
-    // Create unique queue name for this pipeline
-    const queueName = `${PIPELINE_SCHEDULE_QUEUE}.${pipelineId}`;
-
-    // Unschedule any existing job first
-    try {
-      await this.pgBossService.unschedule(queueName);
-      this.logger.log(`[SCHEDULE] Cleared existing schedule for pipeline ${pipelineId}`);
-    } catch {
-      // Ignore if no existing schedule
-    }
-
-    // Schedule the new job
-    await this.pgBossService.schedule(queueName, {
-      cron: cronExpression,
-      timezone,
-      data: {
-        pipelineId,
-        organizationId,
-        isScheduled: true,
-        scheduleType,
-        scheduleValue,
-      },
-    });
-
+    // We DON'T use PgBoss schedule directly for per-pipeline schedules
+    // Instead, we store the schedule config in the database and
+    // the ScheduledPipelineWorkerService polls for due pipelines
+    
     // Calculate next run time
     const nextRunAt = this.calculateNextRunTime(cronExpression, timezone);
     const humanReadable = this.getHumanReadableSchedule(scheduleType, scheduleValue, timezone);
 
     // Log to console with details
-    this.logger.log(`[SCHEDULE] ✅ Pipeline scheduled successfully:`);
+    this.logger.log(`[SCHEDULE] ✅ Pipeline schedule configured:`);
     this.logger.log(`[SCHEDULE]    Pipeline ID: ${pipelineId}`);
     this.logger.log(`[SCHEDULE]    Organization: ${organizationId}`);
-    this.logger.log(`[SCHEDULE]    Queue Name: ${queueName}`);
+    this.logger.log(`[SCHEDULE]    Schedule Type: ${scheduleType}`);
+    this.logger.log(`[SCHEDULE]    Schedule Value: ${scheduleValue}`);
     this.logger.log(`[SCHEDULE]    Cron: ${cronExpression}`);
     this.logger.log(`[SCHEDULE]    Timezone: ${timezone}`);
     this.logger.log(`[SCHEDULE]    Human Readable: ${humanReadable}`);
@@ -107,7 +88,6 @@ export class PipelineSchedulerService {
           cronExpression,
           humanReadable,
           nextRunAt: nextRunAt.toISOString(),
-          queueName,
         },
       );
     } catch (error) {
@@ -119,31 +99,26 @@ export class PipelineSchedulerService {
 
   /**
    * Unschedule a pipeline
+   * With database-based scheduling, this just logs the action
+   * The actual schedule is removed by setting scheduleType to 'none' in the pipeline
    */
   async unschedulePipeline(pipelineId: string, organizationId?: string): Promise<void> {
-    const queueName = `${PIPELINE_SCHEDULE_QUEUE}.${pipelineId}`;
+    this.logger.log(`[SCHEDULE] ❌ Pipeline ${pipelineId} schedule removed`);
 
-    try {
-      await this.pgBossService.unschedule(queueName);
-      this.logger.log(`[SCHEDULE] ❌ Pipeline ${pipelineId} unscheduled (queue: ${queueName})`);
-
-      // Log to activity log if organizationId provided
-      if (organizationId) {
-        try {
-          await this.activityLogService.logPipelineAction(
-            organizationId,
-            'system',
-            PIPELINE_ACTIONS.SCHEDULE_REMOVED,
-            pipelineId,
-            `Pipeline ${pipelineId}`,
-            { queueName, action: 'unscheduled' },
-          );
-        } catch (error) {
-          this.logger.warn(`[SCHEDULE] Failed to log unschedule activity: ${error}`);
-        }
+    // Log to activity log if organizationId provided
+    if (organizationId) {
+      try {
+        await this.activityLogService.logPipelineAction(
+          organizationId,
+          'system',
+          PIPELINE_ACTIONS.SCHEDULE_REMOVED,
+          pipelineId,
+          `Pipeline ${pipelineId}`,
+          { action: 'unscheduled' },
+        );
+      } catch (error) {
+        this.logger.warn(`[SCHEDULE] Failed to log unschedule activity: ${error}`);
       }
-    } catch (error) {
-      this.logger.warn(`[SCHEDULE] Failed to unschedule pipeline ${pipelineId}: ${error}`);
     }
   }
 
