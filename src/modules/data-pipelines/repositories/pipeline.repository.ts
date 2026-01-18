@@ -377,6 +377,11 @@ export class PipelineRepository {
    * - not soft deleted
    */
   async findDuePipelines(now: Date = new Date()): Promise<Pipeline[]> {
+    // Convert date to ISO string for proper PostgreSQL compatibility
+    const nowIso = now.toISOString();
+    
+    this.logger.debug(`[findDuePipelines] Checking for pipelines due before: ${nowIso}`);
+    
     return await this.db
       .select()
       .from(pipelines)
@@ -388,7 +393,7 @@ export class PipelineRepository {
           sql`${pipelines.scheduleType} != 'none'`,
           // Is due to run
           sql`${pipelines.nextScheduledRunAt} IS NOT NULL`,
-          sql`${pipelines.nextScheduledRunAt} <= ${now}`,
+          sql`${pipelines.nextScheduledRunAt} <= ${nowIso}::timestamp`,
           // Not currently running
           sql`${pipelines.status} IN ('idle', 'failed')`,
         ),

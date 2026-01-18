@@ -144,7 +144,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
       // Log the scheduled run start
       await this.activityLogService.logPipelineAction(
         organizationId,
-        'system',
+        null, // System action - no user ID
         PIPELINE_ACTIONS.SCHEDULED_RUN_STARTED,
         pipelineId,
         name,
@@ -158,7 +158,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
       // Execute the pipeline
       const run = await this.pipelineService.runPipeline(
         pipelineId,
-        'system',
+        '', // System-triggered run - empty userId
         'scheduled',
         { batchSize: 1000 },
       );
@@ -193,7 +193,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
       // Log success
       await this.activityLogService.logPipelineAction(
         organizationId,
-        'system',
+        null, // System action - no user ID
         PIPELINE_ACTIONS.SCHEDULED_RUN_COMPLETED,
         pipelineId,
         name,
@@ -229,7 +229,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
       try {
         await this.activityLogService.logPipelineAction(
           organizationId,
-          'system',
+          null, // System action - no user ID
           PIPELINE_ACTIONS.SCHEDULED_RUN_FAILED,
           pipelineId,
           name,

@@ -77,7 +77,7 @@ export class PipelineSchedulerService {
     try {
       await this.activityLogService.logPipelineAction(
         organizationId,
-        'system',
+        null, // System action - no user ID
         PIPELINE_ACTIONS.SCHEDULE_UPDATED,
         pipelineId,
         `Pipeline ${pipelineId}`,
@@ -110,7 +110,7 @@ export class PipelineSchedulerService {
       try {
         await this.activityLogService.logPipelineAction(
           organizationId,
-          'system',
+          null, // System action - no user ID
           PIPELINE_ACTIONS.SCHEDULE_REMOVED,
           pipelineId,
           `Pipeline ${pipelineId}`,
