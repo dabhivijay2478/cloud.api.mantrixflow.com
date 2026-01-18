@@ -289,6 +289,18 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const { cron, timezone = 'UTC', data = {} } = cronOptions;
 
+    // Create the queue first to ensure it exists
+    // PgBoss requires the queue to exist before scheduling
+    try {
+      await this.boss.createQueue(queueName);
+    } catch (error) {
+      // Queue might already exist, which is fine
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('already exists')) {
+        this.logger.warn(`Queue creation warning for ${queueName}: ${message}`);
+      }
+    }
+
     await this.boss.schedule(queueName, cron, data, {
       tz: timezone,
       ...options,
@@ -301,8 +313,17 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
    * Unschedule a recurring job
    */
   async unschedule(queueName: string): Promise<void> {
-    await this.boss.unschedule(queueName);
-    this.logger.log(`Unscheduled cron job: ${queueName}`);
+    try {
+      await this.boss.unschedule(queueName);
+      this.logger.log(`Unscheduled cron job: ${queueName}`);
+    } catch (error) {
+      // Ignore if schedule doesn't exist
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('not found')) {
+        throw error;
+      }
+      this.logger.log(`No existing schedule found for: ${queueName}`);
+    }
   }
 
   /**

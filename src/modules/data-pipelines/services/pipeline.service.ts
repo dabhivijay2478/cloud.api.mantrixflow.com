@@ -42,6 +42,8 @@ import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
+import { ScheduleType } from '../dto/create-pipeline.dto';
+import { PipelineSchedulerService } from './pipeline-scheduler.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -74,6 +76,7 @@ export class PipelineService {
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
     private readonly lifecycleService: PipelineLifecycleService,
+    private readonly schedulerService: PipelineSchedulerService,
   ) {}
 
   /**
@@ -126,7 +129,12 @@ export class PipelineService {
       throw new BadRequestException(`Pipeline with name "${dto.name}" already exists`);
     }
 
-    // Create pipeline
+    // Determine schedule type
+    const scheduleType = (dto.scheduleType as ScheduleType) || ScheduleType.NONE;
+    const scheduleValue = dto.scheduleValue;
+    const scheduleTimezone = dto.scheduleTimezone || 'UTC';
+
+    // Create pipeline with scheduling fields
     const pipeline = await this.pipelineRepository.create({
       organizationId,
       createdBy: userId,
@@ -139,7 +147,30 @@ export class PipelineService {
       incrementalColumn: dto.incrementalColumn || null,
       syncFrequency: dto.syncFrequency || 'manual',
       status: PipelineStatus.IDLE,
+      scheduleType,
+      scheduleValue,
+      scheduleTimezone,
     });
+
+    // Set up scheduling if configured
+    if (scheduleType !== ScheduleType.NONE) {
+      try {
+        const { nextRunAt } = await this.schedulerService.schedulePipeline(
+          pipeline.id,
+          organizationId,
+          { scheduleType, scheduleValue, timezone: scheduleTimezone },
+        );
+        
+        // Update pipeline with next scheduled run time
+        await this.pipelineRepository.update(pipeline.id, {
+          nextScheduledRunAt: nextRunAt,
+        });
+        
+        this.logger.log(`Pipeline ${pipeline.id} scheduled: ${this.schedulerService.getHumanReadableSchedule(scheduleType, scheduleValue, scheduleTimezone)}`);
+      } catch (error) {
+        this.logger.warn(`Failed to schedule pipeline ${pipeline.id}: ${error}`);
+      }
+    }
 
     // Log activity
     await this.activityLogService.logPipelineAction(
@@ -153,6 +184,9 @@ export class PipelineService {
         destinationSchemaId,
         syncMode: pipeline.syncMode,
         syncFrequency: pipeline.syncFrequency,
+        scheduleType,
+        scheduleValue,
+        scheduleTimezone,
       },
     );
 
@@ -216,7 +250,52 @@ export class PipelineService {
       }
     }
 
-    const updated = await this.pipelineRepository.update(id, updates);
+    // Handle schedule updates
+    const scheduleType = (updates.scheduleType as ScheduleType) || (pipeline.scheduleType as ScheduleType) || ScheduleType.NONE;
+    const scheduleValue = updates.scheduleValue !== undefined ? updates.scheduleValue : pipeline.scheduleValue;
+    const scheduleTimezone = updates.scheduleTimezone || pipeline.scheduleTimezone || 'UTC';
+
+    // Check if schedule has changed
+    const scheduleChanged = 
+      updates.scheduleType !== undefined ||
+      updates.scheduleValue !== undefined ||
+      updates.scheduleTimezone !== undefined;
+
+    let nextScheduledRunAt = pipeline.nextScheduledRunAt;
+
+    if (scheduleChanged) {
+      if (scheduleType === ScheduleType.NONE) {
+        // Unschedule the pipeline
+        await this.schedulerService.unschedulePipeline(id);
+        nextScheduledRunAt = null;
+        this.logger.log(`Pipeline ${id} schedule removed`);
+      } else {
+        // Schedule or reschedule the pipeline
+        try {
+          const { nextRunAt } = await this.schedulerService.schedulePipeline(
+            id,
+            pipeline.organizationId,
+            { scheduleType, scheduleValue: scheduleValue || undefined, timezone: scheduleTimezone },
+          );
+          nextScheduledRunAt = nextRunAt;
+          this.logger.log(`Pipeline ${id} rescheduled: ${this.schedulerService.getHumanReadableSchedule(scheduleType, scheduleValue || undefined, scheduleTimezone)}`);
+        } catch (error) {
+          this.logger.warn(`Failed to reschedule pipeline ${id}: ${error}`);
+          throw error;
+        }
+      }
+    }
+
+    // Update pipeline with all fields including schedule
+    const updateData: any = {
+      ...updates,
+      scheduleType,
+      scheduleValue,
+      scheduleTimezone,
+      nextScheduledRunAt,
+    };
+
+    const updated = await this.pipelineRepository.update(id, updateData);
 
     // Log activity
     await this.activityLogService.logPipelineAction(
@@ -225,7 +304,12 @@ export class PipelineService {
       PIPELINE_ACTIONS.UPDATED,
       id,
       updated.name,
-      { changes: updates },
+      { 
+        changes: updates,
+        scheduleType,
+        scheduleValue,
+        scheduleTimezone,
+      },
     );
 
     this.logger.log(`Pipeline updated: ${id}`);

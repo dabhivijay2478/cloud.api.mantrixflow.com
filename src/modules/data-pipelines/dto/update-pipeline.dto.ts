@@ -14,7 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { TransformationDto, SyncMode, SyncFrequency } from './create-pipeline.dto';
+import { TransformationDto, SyncMode, SyncFrequency, ScheduleType } from './create-pipeline.dto';
 import { PipelineStatus } from '../types/pipeline-lifecycle.types';
 
 // Re-export for backward compatibility
@@ -81,4 +81,37 @@ export class UpdatePipelineDto {
   @ValidateNested({ each: true })
   @Type(() => TransformationDto)
   transformations?: TransformationDto[];
+
+  // ============================================================================
+  // SCHEDULING CONFIGURATION
+  // ============================================================================
+
+  @ApiPropertyOptional({
+    description: 'Schedule type for automatic runs',
+    enum: ScheduleType,
+    example: 'daily',
+  })
+  @IsOptional()
+  @IsEnum(ScheduleType)
+  scheduleType?: ScheduleType;
+
+  @ApiPropertyOptional({
+    description: 'Schedule value: "15" for every 15 mins, "14:30" for daily at 14:30, "0 3 * * *" for cron',
+    example: '09:00',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  scheduleValue?: string;
+
+  @ApiPropertyOptional({
+    description: 'Timezone for schedule (IANA format)',
+    example: 'Asia/Kolkata',
+    default: 'UTC',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  scheduleTimezone?: string;
 }
+

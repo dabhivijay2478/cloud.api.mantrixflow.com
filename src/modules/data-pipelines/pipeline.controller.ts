@@ -535,6 +535,92 @@ export class PipelineController {
     }
   }
 
+  /**
+   * Get pipeline schedule information
+   */
+  @Get(':id/schedule-info')
+  @ApiOperation({
+    summary: 'Get pipeline schedule information',
+    description: 'Retrieve schedule status, next run time, and configuration for a pipeline.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Pipeline schedule information' })
+  async getScheduleInfo(
+    @Param('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+  ) {
+    try {
+      const pipeline = await this.pipelineService.findById(id, organizationId);
+
+      if (!pipeline) {
+        throw new NotFoundException(`Pipeline ${id} not found`);
+      }
+
+      const scheduleInfo = {
+        isScheduled: pipeline.scheduleType && pipeline.scheduleType !== 'none',
+        scheduleType: pipeline.scheduleType || 'none',
+        scheduleValue: pipeline.scheduleValue,
+        scheduleTimezone: pipeline.scheduleTimezone || 'UTC',
+        nextScheduledRunAt: pipeline.nextScheduledRunAt,
+        lastScheduledRunAt: pipeline.lastScheduledRunAt,
+        lastRunAt: pipeline.lastRunAt,
+        lastRunStatus: pipeline.lastRunStatus,
+        status: pipeline.status,
+        humanReadable: this.getHumanReadableSchedule(
+          pipeline.scheduleType || 'none',
+          pipeline.scheduleValue,
+          pipeline.scheduleTimezone || 'UTC',
+        ),
+      };
+
+      return createSuccessResponse(scheduleInfo, 'Pipeline schedule information retrieved successfully');
+    } catch (error) {
+      this.handleError('get pipeline schedule info', error);
+    }
+  }
+
+  /**
+   * Get human-readable schedule description
+   */
+  private getHumanReadableSchedule(
+    scheduleType: string,
+    scheduleValue: string | null | undefined,
+    timezone: string,
+  ): string {
+    switch (scheduleType) {
+      case 'none':
+        return 'Manual (no automatic schedule)';
+      case 'minutes': {
+        const minutes = parseInt(scheduleValue || '30', 10);
+        return `Every ${minutes} minute${minutes === 1 ? '' : 's'}`;
+      }
+      case 'hourly': {
+        const hours = parseInt(scheduleValue || '1', 10);
+        return hours === 1 ? 'Every hour' : `Every ${hours} hours`;
+      }
+      case 'daily':
+        return `Daily at ${scheduleValue || '00:00'} (${timezone})`;
+      case 'weekly': {
+        const parts = (scheduleValue || '1:00:00').split(':');
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const day = parseInt(parts[0], 10);
+        const time = parts.length > 1 ? `${parts[1]}:${parts[2] || '00'}` : '00:00';
+        return `Every ${dayNames[day] || 'Monday'} at ${time} (${timezone})`;
+      }
+      case 'monthly': {
+        const parts = (scheduleValue || '1:00:00').split(':');
+        const dayOfMonth = parseInt(parts[0], 10);
+        const time = parts.length > 1 ? `${parts[1]}:${parts[2] || '00'}` : '00:00';
+        return `Monthly on day ${dayOfMonth} at ${time} (${timezone})`;
+      }
+      case 'custom_cron':
+        return `Custom: ${scheduleValue || 'Not set'}`;
+      default:
+        return 'Unknown schedule';
+    }
+  }
+
   // ============================================================================
   // HELPER METHODS
   // ============================================================================

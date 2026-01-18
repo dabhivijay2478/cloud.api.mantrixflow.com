@@ -33,11 +33,16 @@ import { CollectorService } from './services/collector.service';
 import { TransformerService } from './services/transformer.service';
 import { EmitterService } from './services/emitter.service';
 import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
+import { PipelineSchedulerService } from './services/pipeline-scheduler.service';
+import { ScheduledPipelineWorkerService } from './services/scheduled-pipeline-worker.service';
 
 // Repositories
 import { PipelineRepository } from './repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
 import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
+
+// Queue module
+import { PgBossModule } from '../queue/pgboss.module';
 
 @Module({
   imports: [
@@ -50,6 +55,9 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
+
+    // Import PgBoss module for job scheduling
+    PgBossModule,
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
@@ -81,6 +89,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     SourceSchemaService,
     DestinationSchemaService,
     PipelineLifecycleService,
+    PipelineSchedulerService, // Handles pipeline scheduling with PgBoss
+    ScheduledPipelineWorkerService, // Worker for processing scheduled pipeline jobs
 
     // Generic Data Services (support all source types)
     CollectorService, // Collects data from sources (Postgres, MySQL, MongoDB, S3, API, BigQuery, Snowflake)
@@ -93,6 +103,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     SourceSchemaService,
     DestinationSchemaService,
     PipelineLifecycleService,
+    PipelineSchedulerService,
     CollectorService,
     TransformerService,
     EmitterService,
