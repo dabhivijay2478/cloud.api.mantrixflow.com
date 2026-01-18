@@ -52,6 +52,8 @@
     "class-validator": "^0.14.2",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.44.7",
+    "mongodb": "^7.0.0",
+    "mysql2": "^3.16.1",
     "pg": "^8.16.3",
     "pg-boss": "^12.5.4",
     "postgres": "^3.4.7",
