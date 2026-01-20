@@ -429,21 +429,62 @@ export class PipelineService {
   ): Promise<void> {
     const startTime = Date.now();
 
-    // Determine sync type
+    // Get existing checkpoint for potential incremental sync
     let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
-    const isFullSync = !checkpoint?.lastSyncValue && pipeline.syncMode !== 'incremental';
+    
+    // Determine sync type based on:
+    // 1. If syncMode is 'full', always do full sync
+    // 2. If syncMode is 'incremental':
+    //    - If we have lastSyncValue (from checkpoint OR pipeline), do incremental
+    //    - If no lastSyncValue, this is the first run - do full sync, then switch to incremental
+    const effectiveLastSyncValue = checkpoint?.lastSyncValue || pipeline.lastSyncValue;
+    
+    let isFullSync: boolean;
+    let syncReason: string;
+    
+    if (pipeline.syncMode === 'full') {
+      // Explicit full sync mode
+      isFullSync = true;
+      syncReason = 'syncMode is set to "full"';
+    } else if (pipeline.syncMode === 'incremental') {
+      if (effectiveLastSyncValue && pipeline.incrementalColumn) {
+        // We have a checkpoint value and incremental column - do incremental
+        isFullSync = false;
+        syncReason = `incremental from lastSyncValue: ${effectiveLastSyncValue}`;
+      } else if (!pipeline.incrementalColumn) {
+        // No incremental column configured - fallback to full
+        isFullSync = true;
+        syncReason = 'incremental mode but no incrementalColumn configured - falling back to full';
+        this.logger.warn(`Pipeline ${pipeline.id}: ${syncReason}`);
+      } else {
+        // First run (no checkpoint) - do full sync, will switch to incremental after
+        isFullSync = true;
+        syncReason = 'first run (no checkpoint) - initial full sync before incremental';
+      }
+    } else {
+      // Default/unknown mode - treat as full
+      isFullSync = true;
+      syncReason = `unknown syncMode "${pipeline.syncMode}" - defaulting to full`;
+    }
+    
     const syncType = isFullSync ? 'full' : 'incremental';
 
-    // Log startup
+    // Log startup with detailed sync info
     console.log(`\n${'='.repeat(60)}`);
     console.log(`🚀 STARTING PIPELINE: ${pipeline.name}`);
     console.log(`${'='.repeat(60)}`);
-    console.log(`   Run ID:     ${runId}`);
-    console.log(`   Sync Type:  ${syncType.toUpperCase()}`);
-    console.log(`   Batch Size: ${options?.batchSize || DEFAULT_BATCH_SIZE}`);
-    console.log(
-      `   Source:     ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`,
-    );
+    console.log(`   Run ID:          ${runId}`);
+    console.log(`   Sync Mode:       ${pipeline.syncMode}`);
+    console.log(`   Sync Type:       ${syncType.toUpperCase()}`);
+    console.log(`   Sync Reason:     ${syncReason}`);
+    console.log(`   Batch Size:      ${options?.batchSize || DEFAULT_BATCH_SIZE}`);
+    console.log(`   Source:          ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`);
+    if (pipeline.incrementalColumn) {
+      console.log(`   Incremental Col: ${pipeline.incrementalColumn}`);
+    }
+    if (effectiveLastSyncValue && !isFullSync) {
+      console.log(`   Last Sync Value: ${effectiveLastSyncValue}`);
+    }
     console.log(`${'='.repeat(60)}\n`);
 
     const batchSize = Math.min(options?.batchSize || DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE);
@@ -539,6 +580,13 @@ export class PipelineService {
 
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
+            // For incremental sync, pass the lastSyncValue to filter data
+            const collectLastSyncValue = isFullSync ? undefined : effectiveLastSyncValue;
+            
+            if (!isFullSync && collectLastSyncValue) {
+              console.log(`   🔄 Incremental sync: fetching records where ${pipeline.incrementalColumn} > ${collectLastSyncValue}`);
+            }
+            
             sourceData = await this.collectorService.collect({
               sourceSchema,
               organizationId: pipeline.organizationId,
@@ -547,9 +595,7 @@ export class PipelineService {
               offset,
               cursor,
               incrementalColumn: pipeline.incrementalColumn || undefined,
-              lastSyncValue: isFullSync
-                ? undefined
-                : checkpoint?.lastSyncValue?.toString() || pipeline.lastSyncValue || undefined,
+              lastSyncValue: collectLastSyncValue,
             });
             break;
           } catch (error) {
@@ -659,6 +705,47 @@ export class PipelineService {
         offset += batchSize;
         cursor = sourceData.nextCursor;
 
+        // Extract the max value of the incremental column from this batch
+        // This is needed for BOTH full and incremental modes:
+        // - Full mode: will become the starting point for next incremental run
+        // - Incremental mode: updates the checkpoint for subsequent runs
+        let batchMaxSyncValue: string | number | undefined;
+        if (pipeline.incrementalColumn && sourceData.rows.length > 0) {
+          const incrementalValues = sourceData.rows
+            .map((row: any) => row[pipeline.incrementalColumn!])
+            .filter((val: any) => val !== null && val !== undefined);
+          if (incrementalValues.length > 0) {
+            // Get the max value - works for both dates and numbers
+            batchMaxSyncValue = incrementalValues.reduce((max: any, val: any) => {
+              // Handle date strings, timestamps, and numbers
+              if (val && typeof val === 'object' && val.constructor === Date) {
+                return max && typeof max === 'object' && max.constructor === Date 
+                  ? (val > max ? val : max) 
+                  : val;
+              }
+              return val > max ? val : max;
+            });
+            // Convert Date to ISO string for storage
+            if (batchMaxSyncValue && typeof batchMaxSyncValue === 'object' && (batchMaxSyncValue as any).constructor === Date) {
+              batchMaxSyncValue = (batchMaxSyncValue as Date).toISOString();
+            }
+          }
+        }
+        
+        // Track the overall max sync value across all batches
+        // Compare with existing checkpoint value to ensure we always have the highest
+        let overallMaxSyncValue: string | number | undefined = batchMaxSyncValue;
+        if (checkpoint?.lastSyncValue && batchMaxSyncValue) {
+          // Keep the higher value
+          if (String(checkpoint.lastSyncValue) > String(batchMaxSyncValue)) {
+            overallMaxSyncValue = checkpoint.lastSyncValue;
+          }
+        }
+        
+        if (batchMaxSyncValue) {
+          console.log(`   📌 Batch max ${pipeline.incrementalColumn}: ${batchMaxSyncValue}`);
+        }
+
         // Save checkpoint after each batch for resumability
         const currentCheckpoint: PipelineCheckpoint = {
           lastSyncAt: new Date().toISOString(),
@@ -667,9 +754,14 @@ export class PipelineService {
           rowsProcessed: totalRowsWritten,
           totalRows: estimatedTotalRows,
           currentBatch: batchCount,
+          // Save the incremental sync value for next run - use overall max
+          lastSyncValue: overallMaxSyncValue,
         };
 
         await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
+        
+        // Update local checkpoint reference so subsequent batches use the updated value
+        checkpoint = currentCheckpoint;
 
         // Update progress in database
         await this.pipelineRepository.updateRun(runId, {
@@ -711,15 +803,50 @@ export class PipelineService {
         durationSeconds,
       });
 
-      // Update pipeline statistics
+      // Get the final lastSyncValue from checkpoint
+      const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
+      
+      // Determine target status after completion
+      // For incremental sync mode, transition to LISTING mode (polling)
+      // For full sync mode, go to IDLE (ready for manual run or scheduling)
+      const targetStatus = pipeline.syncMode === 'incremental' 
+        ? PipelineStatus.LISTING 
+        : PipelineStatus.IDLE;
+
+      // Update pipeline statistics and status
+      const finalLastSyncValue = finalCheckpoint?.lastSyncValue?.toString() || pipeline.lastSyncValue;
+      
       await this.pipelineRepository.update(pipeline.id, {
         lastRunAt: new Date(),
         lastRunStatus: totalRowsFailed > 0 && totalRowsWritten === 0 ? 'failed' : 'success',
+        status: targetStatus, // Reset status so scheduler can pick it up
         totalRowsProcessed: (pipeline.totalRowsProcessed || 0) + totalRowsWritten,
         totalRunsSuccessful: (pipeline.totalRunsSuccessful || 0) + (totalRowsFailed === 0 ? 1 : 0),
         totalRunsFailed:
           (pipeline.totalRunsFailed || 0) + (totalRowsFailed > 0 && totalRowsWritten === 0 ? 1 : 0),
+        // Persist the lastSyncValue for incremental syncs - CRITICAL for next run
+        lastSyncValue: finalLastSyncValue,
+        lastSyncAt: new Date(),
       });
+      
+      // Log completion summary
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`✅ PIPELINE COMPLETED: ${pipeline.name}`);
+      console.log(`${'='.repeat(60)}`);
+      console.log(`   Sync Type:       ${syncType.toUpperCase()}`);
+      console.log(`   Rows Read:       ${totalRowsRead.toLocaleString()}`);
+      console.log(`   Rows Written:    ${totalRowsWritten.toLocaleString()}`);
+      console.log(`   Rows Skipped:    ${totalRowsSkipped.toLocaleString()}`);
+      console.log(`   Rows Failed:     ${totalRowsFailed.toLocaleString()}`);
+      console.log(`   Duration:        ${durationSeconds}s`);
+      console.log(`   Final Status:    ${targetStatus}`);
+      if (finalLastSyncValue && pipeline.incrementalColumn) {
+        console.log(`   Last Sync Value: ${finalLastSyncValue} (${pipeline.incrementalColumn})`);
+        console.log(`   ➡️  Next incremental run will sync records where ${pipeline.incrementalColumn} > ${finalLastSyncValue}`);
+      }
+      console.log(`${'='.repeat(60)}\n`);
+      
+      this.logger.log(`Pipeline ${pipeline.id} status set to ${targetStatus} after completion`);
 
       // Log activity
       await this.activityLogService.logPipelineRunAction(
@@ -730,11 +857,14 @@ export class PipelineService {
         pipeline.id,
         pipeline.name,
         {
+          syncType,
           rowsRead: totalRowsRead,
           rowsWritten: totalRowsWritten,
           rowsSkipped: totalRowsSkipped,
           rowsFailed: totalRowsFailed,
           durationSeconds,
+          finalStatus: targetStatus,
+          lastSyncValue: finalLastSyncValue,
         },
       );
 
@@ -797,6 +927,7 @@ export class PipelineService {
       status: 'paused',
       migrationState: 'pending',
       nextSyncAt: null,
+      nextScheduledRunAt: null, // Clear scheduled run time when paused
     });
 
     await this.activityLogService.logPipelineAction(
@@ -821,9 +952,32 @@ export class PipelineService {
 
     await this.checkPipelineManagePermission(userId, pipeline.organizationId);
 
+    // Recalculate next scheduled run time if the pipeline has a schedule
+    let nextScheduledRunAt: Date | null = null;
+    const scheduleType = pipeline.scheduleType as string;
+    
+    if (scheduleType && scheduleType !== 'none') {
+      try {
+        const result = await this.schedulerService.schedulePipeline(
+          pipelineId,
+          pipeline.organizationId,
+          { 
+            scheduleType: scheduleType as any, 
+            scheduleValue: pipeline.scheduleValue || undefined, 
+            timezone: pipeline.scheduleTimezone || 'UTC' 
+          },
+        );
+        nextScheduledRunAt = result.nextRunAt;
+        this.logger.log(`Pipeline ${pipelineId} rescheduled on resume: next run at ${nextScheduledRunAt?.toISOString()}`);
+      } catch (error) {
+        this.logger.warn(`Failed to reschedule pipeline ${pipelineId} on resume: ${error}`);
+      }
+    }
+
     const updated = await this.pipelineRepository.update(pipelineId, {
       status: PipelineStatus.IDLE,
       nextSyncAt: new Date(),
+      nextScheduledRunAt: nextScheduledRunAt,
     });
 
     await this.activityLogService.logPipelineAction(
@@ -832,6 +986,7 @@ export class PipelineService {
       PIPELINE_ACTIONS.RUN_RESUMED,
       pipelineId,
       pipeline.name,
+      { nextScheduledRunAt: nextScheduledRunAt?.toISOString() },
     );
 
     return updated;

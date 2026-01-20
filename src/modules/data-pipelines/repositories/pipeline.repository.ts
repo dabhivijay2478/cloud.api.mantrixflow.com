@@ -394,8 +394,8 @@ export class PipelineRepository {
           // Is due to run
           sql`${pipelines.nextScheduledRunAt} IS NOT NULL`,
           sql`${pipelines.nextScheduledRunAt} <= ${nowIso}::timestamp`,
-          // Not currently running
-          sql`${pipelines.status} IN ('idle', 'failed')`,
+          // Not currently running - include idle, listing (incremental waiting), completed, and failed
+          sql`${pipelines.status} IN ('idle', 'listing', 'completed', 'failed')`,
         ),
       )
       .orderBy(pipelines.nextScheduledRunAt);

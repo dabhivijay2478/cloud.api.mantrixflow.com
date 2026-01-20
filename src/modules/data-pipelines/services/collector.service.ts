@@ -128,6 +128,8 @@ export class CollectorService {
             effectiveLimit,
             offset,
             cursor,
+            incrementalColumn,
+            lastSyncValue,
           );
           break;
         case 's3':
@@ -137,6 +139,8 @@ export class CollectorService {
             effectiveLimit,
             offset,
             cursor,
+            incrementalColumn,
+            lastSyncValue,
           );
           break;
         case 'api':
@@ -146,6 +150,8 @@ export class CollectorService {
             effectiveLimit,
             offset,
             cursor,
+            incrementalColumn,
+            lastSyncValue,
           );
           break;
         case 'bigquery':
@@ -154,6 +160,8 @@ export class CollectorService {
             connectionConfig,
             effectiveLimit,
             offset,
+            incrementalColumn,
+            lastSyncValue,
           );
           break;
         case 'snowflake':
@@ -162,6 +170,8 @@ export class CollectorService {
             connectionConfig,
             effectiveLimit,
             offset,
+            incrementalColumn,
+            lastSyncValue,
           );
           break;
         default:
@@ -577,6 +587,8 @@ export class CollectorService {
     limit: number,
     offset: number,
     cursor?: string,
+    incrementalColumn?: string,
+    lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
     const connectionString =
       connectionConfig.connection_string ||
@@ -629,6 +641,29 @@ export class CollectorService {
         }
       }
 
+      // Add incremental filter if provided
+      if (incrementalColumn && lastSyncValue) {
+        this.logger.log(`MongoDB incremental sync: ${incrementalColumn} > ${lastSyncValue}`);
+        // Handle different types of lastSyncValue
+        let filterValue = lastSyncValue;
+        
+        // Try to parse as ObjectId if it looks like one
+        if (incrementalColumn === '_id' && typeof lastSyncValue === 'string' && lastSyncValue.length === 24) {
+          try {
+            const { ObjectId } = await import('mongodb');
+            filterValue = new ObjectId(lastSyncValue);
+          } catch {
+            // Keep as string
+          }
+        }
+        // Try to parse as Date if it's an ISO string
+        else if (typeof lastSyncValue === 'string' && lastSyncValue.match(/^\d{4}-\d{2}-\d{2}/)) {
+          filterValue = new Date(lastSyncValue);
+        }
+        
+        query[incrementalColumn] = { $gt: filterValue };
+      }
+
       this.logger.log(`MongoDB query: ${JSON.stringify(query)}, limit=${limit}, skip=${offset}`);
 
       // Execute query
@@ -636,8 +671,8 @@ export class CollectorService {
 
       this.logger.log(`MongoDB found ${rows.length} documents`);
 
-      // Get total count
-      const totalRows = await collection.countDocuments();
+      // Get total count (with filter for incremental)
+      const totalRows = await collection.countDocuments(query);
 
       const hasMore = rows.length === limit;
       const nextCursor = hasMore && rows.length > 0 ? String(rows[rows.length - 1]._id) : undefined;
@@ -760,6 +795,8 @@ export class CollectorService {
     limit: number,
     offset: number,
     cursor?: string,
+    incrementalColumn?: string,
+    lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
     const s3Client = new S3Client({
       region: connectionConfig.region,
@@ -779,17 +816,25 @@ export class CollectorService {
         Bucket: bucket,
         Prefix: prefix,
         ContinuationToken: cursor,
-        MaxKeys: 1, // Process one file at a time
+        MaxKeys: 100, // Get more objects to filter
       });
 
       const listResponse = await s3Client.send(listCommand);
-      const objects = listResponse.Contents || [];
+      let objects = listResponse.Contents || [];
+
+      // For incremental sync, filter objects by LastModified date
+      if (incrementalColumn === 'LastModified' && lastSyncValue) {
+        const lastModifiedDate = new Date(lastSyncValue);
+        this.logger.log(`S3 incremental sync: filtering objects modified after ${lastModifiedDate.toISOString()}`);
+        objects = objects.filter(obj => obj.LastModified && obj.LastModified > lastModifiedDate);
+        this.logger.log(`S3: ${objects.length} objects after incremental filter`);
+      }
 
       if (objects.length === 0) {
         return { rows: [], totalRows: 0, hasMore: false };
       }
 
-      // Get the first file
+      // Get the first file that passes the filter
       const fileKey = objects[0].Key!;
       const getCommand = new GetObjectCommand({
         Bucket: bucket,
@@ -813,6 +858,14 @@ export class CollectorService {
       } else {
         rows = [{ content: body }];
       }
+      
+      // Add metadata for incremental tracking
+      const fileLastModified = objects[0].LastModified?.toISOString();
+      rows = rows.map(row => ({
+        ...row,
+        _s3_file_key: fileKey,
+        _s3_last_modified: fileLastModified,
+      }));
 
       // Apply pagination
       const paginatedRows = rows.slice(offset, offset + limit);
@@ -905,6 +958,8 @@ export class CollectorService {
     limit: number,
     offset: number,
     cursor?: string,
+    incrementalColumn?: string,
+    lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
     const baseUrl = connectionConfig.base_url;
     const endpoint = sourceSchema.sourceConfig?.endpoint || '';
@@ -917,6 +972,18 @@ export class CollectorService {
     url.searchParams.set('offset', String(offset));
     if (cursor) {
       url.searchParams.set('cursor', cursor);
+    }
+    
+    // Add incremental sync parameter if provided
+    if (incrementalColumn && lastSyncValue) {
+      this.logger.log(`API incremental sync: adding ${incrementalColumn}=${lastSyncValue} to request`);
+      // Common API patterns for incremental sync
+      if (incrementalColumn === 'updated_at' || incrementalColumn === 'modified_at') {
+        url.searchParams.set('since', String(lastSyncValue));
+        url.searchParams.set('updated_since', String(lastSyncValue));
+      } else {
+        url.searchParams.set(incrementalColumn, String(lastSyncValue));
+      }
     }
 
     // Build headers
@@ -1035,6 +1102,8 @@ export class CollectorService {
     connectionConfig: any,
     limit: number,
     offset: number,
+    incrementalColumn?: string,
+    lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
     const bigquery = new BigQuery({
       projectId: connectionConfig.project_id,
@@ -1045,18 +1114,39 @@ export class CollectorService {
     const table = sourceSchema.sourceTable;
 
     let query: string;
-    if (sourceSchema.sourceQuery) {
-      query = `${sourceSchema.sourceQuery} LIMIT ${limit} OFFSET ${offset}`;
-    } else {
-      query = `SELECT * FROM \`${dataset}.${table}\` LIMIT ${limit} OFFSET ${offset}`;
+    let whereClause = '';
+    
+    // Add incremental filter if provided
+    if (incrementalColumn && lastSyncValue) {
+      this.logger.log(`BigQuery incremental sync: ${incrementalColumn} > ${lastSyncValue}`);
+      // Handle timestamp vs other types
+      if (typeof lastSyncValue === 'string' && lastSyncValue.match(/^\d{4}-\d{2}-\d{2}/)) {
+        whereClause = `WHERE \`${incrementalColumn}\` > TIMESTAMP('${lastSyncValue}')`;
+      } else {
+        whereClause = `WHERE \`${incrementalColumn}\` > ${lastSyncValue}`;
+      }
     }
+    
+    if (sourceSchema.sourceQuery) {
+      // Inject WHERE clause into custom query if needed
+      query = sourceSchema.sourceQuery;
+      if (whereClause && !query.toLowerCase().includes('where')) {
+        query = query.replace(/(\s+ORDER\s+BY|\s+LIMIT|\s*$)/i, ` ${whereClause} $1`);
+      }
+      query = `${query} LIMIT ${limit} OFFSET ${offset}`;
+    } else {
+      query = `SELECT * FROM \`${dataset}.${table}\` ${whereClause} LIMIT ${limit} OFFSET ${offset}`;
+    }
+    
+    this.logger.log(`BigQuery query: ${query}`);
 
     const [rows] = await bigquery.query({ query });
 
-    // Get total count
-    const [countResult] = await bigquery.query({
-      query: `SELECT COUNT(*) as count FROM \`${dataset}.${table}\``,
-    });
+    // Get total count (with filter)
+    const countQuery = whereClause 
+      ? `SELECT COUNT(*) as count FROM \`${dataset}.${table}\` ${whereClause}`
+      : `SELECT COUNT(*) as count FROM \`${dataset}.${table}\``;
+    const [countResult] = await bigquery.query({ query: countQuery });
     const totalRows = countResult[0]?.count;
 
     const hasMore = rows.length === limit;
@@ -1110,6 +1200,8 @@ export class CollectorService {
     connectionConfig: any,
     limit: number,
     offset: number,
+    incrementalColumn?: string,
+    lastSyncValue?: any,
   ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
     // Dynamic import for snowflake-sdk
     const snowflake = await import('snowflake-sdk');
@@ -1133,12 +1225,30 @@ export class CollectorService {
         const table = sourceSchema.sourceTable;
         const schema = sourceSchema.sourceSchema || connectionConfig.schema;
 
+        // Build WHERE clause for incremental sync
+        let whereClause = '';
+        if (incrementalColumn && lastSyncValue) {
+          this.logger.log(`Snowflake incremental sync: ${incrementalColumn} > ${lastSyncValue}`);
+          // Handle timestamp vs other types
+          if (typeof lastSyncValue === 'string' && lastSyncValue.match(/^\d{4}-\d{2}-\d{2}/)) {
+            whereClause = `WHERE "${incrementalColumn}" > '${lastSyncValue}'::TIMESTAMP`;
+          } else {
+            whereClause = `WHERE "${incrementalColumn}" > '${lastSyncValue}'`;
+          }
+        }
+
         let query: string;
         if (sourceSchema.sourceQuery) {
-          query = `${sourceSchema.sourceQuery} LIMIT ${limit} OFFSET ${offset}`;
+          query = sourceSchema.sourceQuery;
+          if (whereClause && !query.toLowerCase().includes('where')) {
+            query = query.replace(/(\s+ORDER\s+BY|\s+LIMIT|\s*$)/i, ` ${whereClause} $1`);
+          }
+          query = `${query} LIMIT ${limit} OFFSET ${offset}`;
         } else {
-          query = `SELECT * FROM "${schema}"."${table}" LIMIT ${limit} OFFSET ${offset}`;
+          query = `SELECT * FROM "${schema}"."${table}" ${whereClause} LIMIT ${limit} OFFSET ${offset}`;
         }
+        
+        this.logger.log(`Snowflake query: ${query}`);
 
         conn.execute({
           sqlText: query,
