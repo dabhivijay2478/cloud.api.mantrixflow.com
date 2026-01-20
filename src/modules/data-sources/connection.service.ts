@@ -683,19 +683,61 @@ export class ConnectionService {
     connectionType: string,
     config: Record<string, any>,
   ): Promise<{ success: boolean; message: string; details?: any }> {
+    this.logger.log(`[testConnectionConfig] Testing connection type: ${connectionType}`);
+    
     switch (connectionType) {
+      // SQL Databases
       case 'postgres':
+      case 'pgvector':
         return this.testPostgresConnection(config as PostgresConfig);
+      
       case 'mysql':
         return this.testMySQLConnection(config as MySQLConfig);
+      
       case 'mongodb':
         return this.testMongoDBConnection(config as MongoDBConfig);
+      
       case 's3':
+      case 's3-datalake':
         return this.testS3Connection(config as S3Config);
+      
       case 'api':
         return this.testAPIConnection(config as APIConfig);
+      
+      // SQL databases that use similar connection pattern to postgres
+      case 'redshift':
+        // Redshift is PostgreSQL-compatible
+        return this.testPostgresConnection(config as PostgresConfig);
+      
+      case 'mssql':
+      case 'clickhouse':
+      case 'snowflake':
+      case 'snowflake-cortex':
+      case 'bigquery':
+      case 'databricks':
+      case 'azure-blob-storage':
+      case 'pinecone':
+      case 'milvus':
+      case 'weaviate':
+      case 'customer-io':
+      case 'hubspot':
+      case 'salesforce':
+      case 'google-sheets':
+      case 'excel':
+        // Return placeholder for not-yet-implemented connections
+        return {
+          success: false,
+          message: `Connection test for ${connectionType} is not yet implemented. The connection configuration has been saved but cannot be verified at this time.`,
+          details: {
+            connectionType,
+            status: 'not_implemented',
+            configReceived: Object.keys(config),
+          },
+        };
+      
       default:
-        throw new BadRequestException(`Unsupported connection type: ${connectionType}`);
+        this.logger.warn(`Unsupported connection type: ${connectionType}`);
+        throw new BadRequestException(`Unsupported connection type: ${connectionType}. Supported types: postgres, mysql, mongodb, s3, api, redshift, mssql, clickhouse, snowflake, bigquery, databricks, azure-blob-storage, pinecone, milvus, weaviate`);
     }
   }
 
@@ -763,17 +805,99 @@ export class ConnectionService {
 
   /**
    * Test MongoDB connection
+   * Supports both connection string (Atlas SRV) and individual host/port config
    */
-  private async testMongoDBConnection(_config: MongoDBConfig): Promise<{
+  private async testMongoDBConnection(config: MongoDBConfig): Promise<{
     success: boolean;
     message: string;
     details?: any;
   }> {
-    // TODO: Implement actual MongoDB connection test
-    return {
-      success: true,
-      message: 'MongoDB connection test not yet implemented',
-    };
+    // Import mongodb driver dynamically to avoid issues if not installed
+    let MongoClient: any;
+    try {
+      const mongodb = await import('mongodb');
+      MongoClient = mongodb.MongoClient;
+    } catch {
+      return {
+        success: false,
+        message: 'MongoDB driver not installed. Run: npm install mongodb',
+        details: { error: 'DRIVER_NOT_INSTALLED' },
+      };
+    }
+
+    try {
+      let connectionString: string;
+
+      // Build connection string from config
+      if (config.connection_string) {
+        // Use provided connection string (Atlas SRV format)
+        connectionString = config.connection_string;
+        this.logger.log(`Testing MongoDB connection with connection string`);
+      } else if (config.host) {
+        // Build connection string from individual parts
+        const auth = config.username && config.password 
+          ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
+          : '';
+        const port = config.port || 27017;
+        const authSource = config.auth_source ? `?authSource=${config.auth_source}` : '';
+        connectionString = `mongodb://${auth}${config.host}:${port}/${config.database}${authSource}`;
+        this.logger.log(`Testing MongoDB connection to ${config.host}:${port}`);
+      } else {
+        return {
+          success: false,
+          message: 'Either connection_string or host is required',
+          details: { error: 'INVALID_CONFIG' },
+        };
+      }
+
+      // Connection options
+      const options: any = {
+        serverSelectionTimeoutMS: 10000, // 10 second timeout
+        connectTimeoutMS: 10000,
+      };
+
+      // Add TLS if specified
+      if (config.tls) {
+        options.tls = true;
+      }
+
+      // Create client and connect
+      const client = new MongoClient(connectionString, options);
+      
+      await client.connect();
+      
+      // Try to ping the database to verify connection
+      const adminDb = client.db('admin');
+      const result = await adminDb.command({ ping: 1 });
+      
+      // Get server info
+      const serverInfo = await adminDb.command({ serverStatus: 1 }).catch(() => null);
+      
+      await client.close();
+
+      return {
+        success: true,
+        message: 'MongoDB connection successful',
+        details: {
+          ping: result.ok === 1 ? 'ok' : 'failed',
+          version: serverInfo?.version || 'Unknown',
+          host: serverInfo?.host || 'Connected',
+        },
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`MongoDB connection test failed: ${errorMessage}`);
+      
+      return {
+        success: false,
+        message: `Connection failed: ${errorMessage}`,
+        details: {
+          error: errorMessage,
+          code: (error as any)?.code,
+          name: (error as any)?.name,
+        },
+      };
+    }
   }
 
   /**
@@ -841,7 +965,12 @@ export class ConnectionService {
 
     switch (type) {
       case 'postgres':
+      case 'pgvector':
+      case 'redshift':
         schema = await this.discoverPostgresSchema(decryptedConfig as PostgresConfig);
+        break;
+      case 'mongodb':
+        schema = await this.discoverMongoDBSchema(decryptedConfig as MongoDBConfig);
         break;
       // Add other types here
       default:
@@ -979,6 +1108,179 @@ export class ConnectionService {
       );
     } finally {
       await pool.end();
+    }
+  }
+
+  /**
+   * Discover MongoDB schema (collections and their field structure)
+   * For NoSQL databases, we sample documents to infer the schema
+   */
+  private async discoverMongoDBSchema(config: MongoDBConfig): Promise<any> {
+    // Import mongodb driver dynamically
+    let MongoClient: any;
+    try {
+      const mongodb = await import('mongodb');
+      MongoClient = mongodb.MongoClient;
+    } catch {
+      throw new BadRequestException(
+        'MongoDB driver not installed. Run: npm install mongodb',
+      );
+    }
+
+    let client: any = null;
+
+    try {
+      let connectionString: string;
+      let databaseName: string | undefined;
+
+      // Build connection string from config
+      if (config.connection_string) {
+        connectionString = config.connection_string;
+        // Try to extract database name from connection string
+        const dbMatch = connectionString.match(/\/([^/?]+)(\?|$)/);
+        databaseName = dbMatch?.[1] || config.database;
+        this.logger.log(`Discovering MongoDB schema using connection string`);
+      } else if (config.host) {
+        const auth = config.username && config.password
+          ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
+          : '';
+        const port = config.port || 27017;
+        const authSource = config.auth_source ? `?authSource=${config.auth_source}` : '';
+        databaseName = config.database;
+        connectionString = `mongodb://${auth}${config.host}:${port}/${databaseName}${authSource}`;
+        this.logger.log(`Discovering MongoDB schema for ${config.host}:${port}/${databaseName}`);
+      } else {
+        throw new BadRequestException('Either connection_string or host is required');
+      }
+
+      // Connection options
+      const options: any = {
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000,
+      };
+
+      if (config.tls) {
+        options.tls = true;
+      }
+
+      // Connect
+      client = new MongoClient(connectionString, options);
+      await client.connect();
+
+      // Get database - use specified database or list all
+      const adminDb = client.db('admin');
+      
+      // Get list of databases
+      const dbList = await adminDb.admin().listDatabases();
+      this.logger.log(`Found ${dbList.databases.length} databases`);
+
+      const result = {
+        type: 'mongodb',
+        databases: [] as any[],
+      };
+
+      // If a specific database is specified, only discover that one
+      const databasesToDiscover = databaseName && databaseName !== 'admin'
+        ? [{ name: databaseName }]
+        : dbList.databases.filter((db: any) => !['admin', 'local', 'config'].includes(db.name));
+
+      for (const dbInfo of databasesToDiscover) {
+        const db = client.db(dbInfo.name);
+        
+        // Get collections
+        const collections = await db.listCollections().toArray();
+        this.logger.log(`Database '${dbInfo.name}': Found ${collections.length} collections`);
+
+        const collectionsData: any[] = [];
+
+        for (const coll of collections) {
+          const collection = db.collection(coll.name);
+          
+          // Get sample documents to infer schema
+          const sampleDocs = await collection.find({}).limit(10).toArray();
+          const documentCount = await collection.countDocuments();
+
+          // Infer fields from sample documents
+          const fieldsMap = new Map<string, { types: Set<string>; nullable: boolean }>();
+
+          for (const doc of sampleDocs) {
+            this.inferFieldsFromDocument(doc, '', fieldsMap);
+          }
+
+          // Convert to array
+          const fields = Array.from(fieldsMap.entries()).map(([name, info]) => ({
+            name,
+            type: Array.from(info.types).join(' | '),
+            nullable: info.nullable,
+          }));
+
+          collectionsData.push({
+            name: coll.name,
+            type: 'collection',
+            documentCount,
+            sampleSize: sampleDocs.length,
+            fields,
+          });
+        }
+
+        result.databases.push({
+          name: dbInfo.name,
+          collections: collectionsData,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to discover MongoDB schema: ${errorMessage}`);
+      throw new BadRequestException(`Failed to discover schema: ${errorMessage}`);
+    } finally {
+      if (client) {
+        await client.close();
+      }
+    }
+  }
+
+  /**
+   * Helper to infer field structure from a MongoDB document
+   */
+  private inferFieldsFromDocument(
+    doc: any,
+    prefix: string,
+    fieldsMap: Map<string, { types: Set<string>; nullable: boolean }>,
+  ): void {
+    for (const [key, value] of Object.entries(doc)) {
+      const fieldName = prefix ? `${prefix}.${key}` : key;
+      
+      if (!fieldsMap.has(fieldName)) {
+        fieldsMap.set(fieldName, { types: new Set(), nullable: false });
+      }
+
+      const fieldInfo = fieldsMap.get(fieldName)!;
+      
+      if (value === null || value === undefined) {
+        fieldInfo.nullable = true;
+        fieldInfo.types.add('null');
+      } else if (Array.isArray(value)) {
+        fieldInfo.types.add('array');
+        // Sample first element for array type inference
+        if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
+          // Don't recurse into arrays of objects to avoid explosion
+          fieldInfo.types.add(`array<object>`);
+        } else if (value.length > 0) {
+          fieldInfo.types.add(`array<${typeof value[0]}>`);
+        }
+      } else if (value instanceof Date) {
+        fieldInfo.types.add('date');
+      } else if (typeof value === 'object') {
+        fieldInfo.types.add('object');
+        // Recurse into nested objects (limit depth)
+        if (prefix.split('.').length < 3) {
+          this.inferFieldsFromDocument(value, fieldName, fieldsMap);
+        }
+      } else {
+        fieldInfo.types.add(typeof value);
+      }
     }
   }
 }

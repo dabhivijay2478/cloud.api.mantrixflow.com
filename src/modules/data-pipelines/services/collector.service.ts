@@ -586,8 +586,29 @@ export class CollectorService {
 
     try {
       await client.connect();
-      const db = client.db(connectionConfig.database);
-      const collection = db.collection(sourceSchema.sourceTable || 'documents');
+
+      // For MongoDB: database can be in sourceSchema.sourceSchema (when created from UI)
+      // or in connectionConfig.database (from connection config)
+      // Collection is in sourceSchema.sourceTable
+      const databaseName = sourceSchema.sourceSchema || connectionConfig.database;
+      const collectionName = sourceSchema.sourceTable;
+
+      if (!databaseName) {
+        throw new Error(
+          'MongoDB database name is required. Please specify database in connection config or source schema.',
+        );
+      }
+
+      if (!collectionName) {
+        throw new Error(
+          'MongoDB collection name is required. Please specify collection in source schema.',
+        );
+      }
+
+      this.logger.log(`MongoDB collect: database=${databaseName}, collection=${collectionName}`);
+
+      const db = client.db(databaseName);
+      const collection = db.collection(collectionName);
 
       // Build query options
       const findOptions: any = {
@@ -598,11 +619,22 @@ export class CollectorService {
       // Use cursor-based pagination if available
       let query: any = {};
       if (cursor) {
-        query = { _id: { $gt: cursor } };
+        try {
+          // Import ObjectId for cursor-based pagination
+          const { ObjectId } = await import('mongodb');
+          query = { _id: { $gt: new ObjectId(cursor) } };
+        } catch {
+          // Invalid ObjectId, ignore cursor
+          this.logger.warn(`Invalid cursor format: ${cursor}, ignoring cursor-based pagination`);
+        }
       }
+
+      this.logger.log(`MongoDB query: ${JSON.stringify(query)}, limit=${limit}, skip=${offset}`);
 
       // Execute query
       const rows = await collection.find(query, findOptions).toArray();
+
+      this.logger.log(`MongoDB found ${rows.length} documents`);
 
       // Get total count
       const totalRows = await collection.countDocuments();
@@ -637,8 +669,25 @@ export class CollectorService {
 
     try {
       await client.connect();
-      const db = client.db(connectionConfig.database);
-      const collection = db.collection(sourceSchema.sourceTable || 'documents');
+      
+      // For MongoDB: database can be in sourceSchema.sourceSchema (when created from UI)
+      // or in connectionConfig.database (from connection config)
+      // Collection is in sourceSchema.sourceTable
+      const databaseName = sourceSchema.sourceSchema || connectionConfig.database;
+      const collectionName = sourceSchema.sourceTable;
+      
+      if (!databaseName) {
+        throw new Error('MongoDB database name is required. Please specify database in connection config or source schema.');
+      }
+      
+      if (!collectionName) {
+        throw new Error('MongoDB collection name is required. Please specify collection in source schema.');
+      }
+      
+      this.logger.log(`MongoDB discoverSchema: database=${databaseName}, collection=${collectionName}`);
+      
+      const db = client.db(databaseName);
+      const collection = db.collection(collectionName);
 
       // Sample documents to infer schema
       const sampleDocs = await collection.find().limit(100).toArray();

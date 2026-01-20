@@ -141,7 +141,7 @@ export class DataSourceController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Test connection configuration',
-    description: 'Test a connection configuration without saving',
+    description: 'Test a connection configuration without saving. Supports all database types: postgres, mysql, mongodb, s3, api, bigquery, snowflake',
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiResponse({ status: 200, description: 'Connection test completed' })
@@ -149,9 +149,29 @@ export class DataSourceController {
     @Param('organizationId', ParseUUIDPipe) _organizationId: string,
     @Body() config: any,
   ) {
-    // Determine type from config or default to postgres
-    // The frontend currently sends a flat object for postgres
-    const type = config.type || 'postgres';
+    // Determine type from various possible field names
+    // Frontend might send: type, databaseType, connectionType, or sourceType
+    let type = config.type || config.databaseType || config.connectionType || config.sourceType;
+    
+    // Auto-detect from connection string if not specified
+    if (!type || type === 'other') {
+      if (config.connection_string) {
+        if (config.connection_string.startsWith('mongodb://') || config.connection_string.startsWith('mongodb+srv://')) {
+          type = 'mongodb';
+        } else if (config.connection_string.includes('postgresql://') || config.connection_string.includes('postgres://')) {
+          type = 'postgres';
+        } else if (config.connection_string.includes('mysql://')) {
+          type = 'mysql';
+        }
+      }
+    }
+    
+    // Default to postgres if still not determined
+    type = type || 'postgres';
+    
+    // Log for debugging
+    console.log(`[test-connection] Type: ${type}, Config keys: ${Object.keys(config).join(', ')}`);
+    
     const result = await this.connectionService.testConnectionConfig(type, config);
     return createSuccessResponse(result);
   }

@@ -5,3 +5,4 @@
 
 export * from './common.types';
 export * from './pipeline-lifecycle.types';
+export * from './source-handler.types';

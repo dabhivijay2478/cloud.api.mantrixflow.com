@@ -65,6 +65,13 @@ export class PipelineResponseDto {
 
   @ApiProperty({ description: 'Updated timestamp' })
   updatedAt: Date;
+
+  @ApiPropertyOptional({ 
+    description: 'Applied column mappings',
+    type: [Object],
+    example: [{ sourcePath: 'email', destPath: 'user_email' }]
+  })
+  appliedMappings?: Array<{ sourcePath: string; destPath: string }>;
 }
 
 export class PipelineRunResponseDto {
@@ -146,6 +153,16 @@ export class DryRunResponseDto {
 
   @ApiProperty({ description: 'Any errors encountered' })
   errors: any[];
+
+  @ApiPropertyOptional({ description: 'Sample transformed data' })
+  transformedSample?: any[];
+
+  @ApiPropertyOptional({ 
+    description: 'Applied column mappings',
+    type: [Object],
+    example: [{ sourcePath: 'email', destPath: 'user_email' }]
+  })
+  appliedMappings?: Array<{ sourcePath: string; destPath: string }>;
 }
 
 export class ValidationResultResponseDto {

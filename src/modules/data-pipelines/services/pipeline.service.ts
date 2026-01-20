@@ -37,6 +37,7 @@ import type {
   BatchOptions,
   PipelineError,
 } from '../types/common.types';
+import type { SchemaInfo } from '../types/source-handler.types';
 import { PipelineStatus, PipelineCheckpoint } from '../types/pipeline-lifecycle.types';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
@@ -429,7 +430,7 @@ export class PipelineService {
     const startTime = Date.now();
 
     // Determine sync type
-    const checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
+    let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
     const isFullSync = !checkpoint?.lastSyncValue && pipeline.syncMode !== 'incremental';
     const syncType = isFullSync ? 'full' : 'incremental';
 
@@ -457,6 +458,13 @@ export class PipelineService {
     const allErrors: PipelineError[] = [];
 
     try {
+      // For full sync, clear checkpoint to start fresh
+      if (isFullSync && checkpoint) {
+        this.logger.log('Full sync detected - clearing checkpoint to start from beginning');
+        await this.lifecycleService.clearCheckpoint(pipeline.id, userId);
+        checkpoint = null; // Reset checkpoint reference
+      }
+
       // Set pipeline to RUNNING status
       await this.lifecycleService.startRunning(pipeline.id, userId, isFullSync);
 
@@ -471,19 +479,42 @@ export class PipelineService {
         throw new BadRequestException('Source and destination must have data source IDs');
       }
 
-      // Get column mappings
-      const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
+      // Get column mappings and enhance with auto-detected transformations
+      let columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
+      
+      // Auto-enhance mappings for MongoDB ObjectId -> UUID conversion
+      // This ensures _id fields are automatically converted to UUIDs
+      if (sourceSchema.sourceType === 'mongodb') {
+        columnMappings = this.transformerService.enhanceColumnMappings(columnMappings);
+      }
+      
       const transformations = (pipeline.transformations as any[]) || [];
+
+      // Log applied mappings for visibility
+      if (columnMappings.length > 0) {
+        const mappedFields = this.transformerService.getMappedFieldsList(columnMappings);
+        // Get destination type from data source
+        const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
+        const destType = destDataSource?.sourceType || 'unknown';
+        this.logger.log(
+          `Mapping applied to ${sourceSchema.sourceType}→${destType}: ${mappedFields.length} fields transformed`,
+        );
+        this.logger.log(
+          `Mapped fields: ${mappedFields.map((f) => `${f.sourcePath} → ${f.destPath}`).join(', ')}`,
+        );
+      }
 
       // Collect data with batching
       let hasMore = true;
-      let offset = checkpoint?.offset || 0;
-      let cursor: string | undefined = checkpoint?.cursor;
+      // For full sync, always start from offset 0 (ignore checkpoint offset)
+      // For incremental sync, use checkpoint offset to resume
+      let offset = isFullSync ? 0 : (checkpoint?.offset || 0);
+      let cursor: string | undefined = isFullSync ? undefined : checkpoint?.cursor;
 
-      // Log checkpoint restoration if applicable
-      if (checkpoint?.rowsProcessed) {
+      // Log checkpoint restoration if applicable (only for incremental sync)
+      if (!isFullSync && checkpoint?.rowsProcessed) {
         console.log(
-          `📂 Resuming from checkpoint: ${checkpoint.rowsProcessed.toLocaleString()} rows already processed`,
+          `📂 Resuming from checkpoint: ${checkpoint.rowsProcessed.toLocaleString()} rows already processed (offset: ${offset})`,
         );
         await this.activityLogService.logPipelineAction(
           pipeline.organizationId,
@@ -493,6 +524,8 @@ export class PipelineService {
           pipeline.name,
           { action: 'restored', checkpoint },
         );
+      } else if (isFullSync) {
+        console.log(`🔄 Full sync: Starting from beginning (offset: 0)`);
       }
 
       while (hasMore) {
@@ -902,11 +935,25 @@ export class PipelineService {
     const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
     const transformations = (pipeline.transformations as any[]) || [];
 
+    // Log applied mappings for visibility
+    const mappedFields = this.transformerService.getMappedFieldsList(columnMappings);
+    // Get destination type from data source
+    const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
+    const destType = destDataSource?.sourceType || 'unknown';
+    this.logger.log(
+      `Dry run: Mapping applied to ${sourceSchema.sourceType}→${destType}: ${mappedFields.length} fields`,
+    );
+
     const transformedSample = await this.transformerService.transform(
       sourceData.rows,
       columnMappings,
       transformations,
     );
+
+    // Log sample transformed data
+    if (transformedSample.length > 0) {
+      this.logger.log(`Dry run sample transformed data: ${JSON.stringify(transformedSample[0], null, 2)}`);
+    }
 
     return {
       wouldWrite: transformedSample.length,
@@ -914,6 +961,7 @@ export class PipelineService {
       sampleRows: sourceData.rows,
       transformedSample,
       errors: [],
+      appliedMappings: mappedFields,
     };
   }
 
@@ -984,6 +1032,249 @@ export class PipelineService {
     );
 
     return updated;
+  }
+
+  // ============================================================================
+  // BIDIRECTIONAL PIPELINE EXECUTION (NoSQL ↔ SQL)
+  // ============================================================================
+
+  /**
+   * Execute a pipeline with bidirectional transformation support
+   * Handles complex transformations between NoSQL and SQL sources
+   * 
+   * Use this for:
+   * - MongoDB → PostgreSQL (flattening nested documents)
+   * - PostgreSQL → MongoDB (embedding related data)
+   */
+  async executeBidirectionalPipeline(
+    pipelineId: string,
+    userId: string,
+    options?: {
+      batchSize?: number;
+      upsertKeys?: Record<string, string[]>;
+    },
+  ): Promise<PipelineRun> {
+    const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+    if (!pipelineWithSchemas) {
+      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+    }
+
+    const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
+
+    // Validate source and destination
+    if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
+      throw new BadRequestException('Source and destination must have data source IDs');
+    }
+
+    // Get source and destination data source info
+    const sourceDataSource = await this.dataSourceRepository.findById(sourceSchema.dataSourceId);
+    const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
+
+    if (!sourceDataSource || !destDataSource) {
+      throw new BadRequestException('Source or destination data source not found');
+    }
+
+    // Determine schema types
+    const sourceSchemaInfo: SchemaInfo = {
+      columns: [],
+      primaryKeys: [],
+      isRelational: this.transformerService.isRelationalType(sourceDataSource.sourceType),
+      sourceType: sourceDataSource.sourceType,
+      entityName: sourceSchema.sourceTable || undefined,
+    };
+
+    const destSchemaInfo: SchemaInfo = {
+      columns: [],
+      primaryKeys: [],
+      isRelational: this.transformerService.isRelationalType(destDataSource.sourceType),
+      sourceType: destDataSource.sourceType,
+      entityName: destinationSchema.destinationTable || undefined,
+    };
+
+    this.logger.log(
+      `Bidirectional pipeline: ${sourceDataSource.sourceType} (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'}) → ` +
+      `${destDataSource.sourceType} (${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`
+    );
+
+    // Create run record
+    const run = await this.pipelineRepository.createRun({
+      pipelineId,
+      organizationId: pipeline.organizationId,
+      status: 'pending',
+      jobState: 'pending',
+      triggerType: 'manual',
+      triggeredBy: userId,
+      startedAt: new Date(),
+    });
+
+    // Execute asynchronously
+    this.executeBidirectionalAsync(
+      run.id,
+      pipeline,
+      sourceSchema,
+      destinationSchema,
+      sourceSchemaInfo,
+      destSchemaInfo,
+      userId,
+      options,
+    ).catch((error) => {
+      this.logger.error(
+        `Bidirectional pipeline execution failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+
+    return run;
+  }
+
+  /**
+   * Execute bidirectional pipeline asynchronously
+   */
+  private async executeBidirectionalAsync(
+    runId: string,
+    pipeline: Pipeline,
+    sourceSchema: PipelineSourceSchema,
+    destinationSchema: PipelineDestinationSchema,
+    sourceSchemaInfo: SchemaInfo,
+    destSchemaInfo: SchemaInfo,
+    userId: string,
+    options?: {
+      batchSize?: number;
+      upsertKeys?: Record<string, string[]>;
+    },
+  ): Promise<void> {
+    const startTime = Date.now();
+    const batchSize = options?.batchSize || 1000;
+    let totalRowsRead = 0;
+    let totalRowsWritten = 0;
+
+    try {
+      // Update run to running
+      await this.pipelineRepository.updateRun(runId, {
+        status: 'running',
+        jobState: 'running',
+      });
+
+      // Get column mappings
+      const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
+
+      // Validate mappings for bidirectional transform
+      const validation = this.transformerService.validateBidirectional(
+        columnMappings,
+        sourceSchemaInfo,
+        destSchemaInfo,
+      );
+
+      if (!validation.valid) {
+        throw new BadRequestException(`Mapping validation failed: ${validation.errors.join(', ')}`);
+      }
+
+      if (validation.warnings?.length) {
+        this.logger.warn(`Mapping warnings: ${validation.warnings.join(', ')}`);
+      }
+
+      // Collect all data (for simplicity, batching can be added later)
+      console.log(`\n📦 Collecting data from ${sourceSchemaInfo.sourceType}...`);
+      
+      const sourceData = await this.collectorService.collect({
+        sourceSchema,
+        organizationId: pipeline.organizationId,
+        userId,
+        limit: batchSize * 10, // Collect more for batch processing
+        offset: 0,
+      });
+
+      if (!sourceData || sourceData.rows.length === 0) {
+        console.log(`   ✓ No data to transform`);
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'success',
+          jobState: 'completed',
+          rowsRead: 0,
+          rowsWritten: 0,
+          completedAt: new Date(),
+          durationSeconds: Math.floor((Date.now() - startTime) / 1000),
+        });
+        return;
+      }
+
+      totalRowsRead = sourceData.rows.length;
+      console.log(`   📥 Collected ${totalRowsRead.toLocaleString()} rows`);
+
+      // Transform using bidirectional method
+      console.log(`\n🔄 Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})...`);
+      
+      const transformedData = await this.transformerService.transformBidirectional(
+        sourceData.rows,
+        columnMappings,
+        sourceSchemaInfo,
+        destSchemaInfo,
+      );
+
+      // Log transformation results
+      for (const [entity, rows] of Object.entries(transformedData)) {
+        console.log(`   📋 Entity '${entity}': ${rows.length} rows`);
+      }
+
+      // Emit to destination using multi-entity method
+      console.log(`\n📤 Writing to ${destSchemaInfo.sourceType}...`);
+      
+      const writeResults = await this.emitterService.emitMultiEntity({
+        destinationSchema,
+        organizationId: pipeline.organizationId,
+        userId,
+        entityData: transformedData,
+        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+        upsertKeys: options?.upsertKeys,
+      });
+
+      // Calculate totals
+      for (const [entity, result] of Object.entries(writeResults)) {
+        totalRowsWritten += result.rowsWritten;
+        console.log(`   ✓ ${entity}: ${result.rowsWritten} rows written`);
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`\n✅ Pipeline completed: ${totalRowsWritten.toLocaleString()} rows written in ${(duration / 1000).toFixed(1)}s\n`);
+
+      // Update run as success
+      await this.pipelineRepository.updateRun(runId, {
+        status: 'success',
+        jobState: 'completed',
+        rowsRead: totalRowsRead,
+        rowsWritten: totalRowsWritten,
+        completedAt: new Date(),
+        durationSeconds: Math.floor(duration / 1000),
+      });
+
+      // Update pipeline
+      await this.pipelineRepository.update(pipeline.id, {
+        lastRunStatus: 'success',
+        lastRunAt: new Date(),
+      });
+
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      console.log(`\n❌ Pipeline failed: ${errorMessage}\n`);
+      this.logger.error(`Bidirectional pipeline failed: ${errorMessage}`);
+
+      // Update run as failed
+      await this.pipelineRepository.updateRun(runId, {
+        status: 'failed',
+        jobState: 'failed',
+        rowsRead: totalRowsRead,
+        rowsWritten: totalRowsWritten,
+        completedAt: new Date(),
+        durationSeconds: Math.floor(duration / 1000),
+        errorMessage: errorMessage,
+      });
+
+      // Update pipeline
+      await this.pipelineRepository.update(pipeline.id, {
+        lastRunStatus: 'failed',
+        lastRunAt: new Date(),
+      });
+    }
   }
 
   // ============================================================================

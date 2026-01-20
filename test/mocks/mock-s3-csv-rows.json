@@ -1,0 +1,26 @@
+[
+  {
+    "id": "1",
+    "name": "Product A",
+    "category": "Electronics",
+    "price": "299.99",
+    "stock": "150",
+    "description": "High-quality electronic device"
+  },
+  {
+    "id": "2",
+    "name": "Product B",
+    "category": "Clothing",
+    "price": "49.99",
+    "stock": "200",
+    "description": "Comfortable clothing item"
+  },
+  {
+    "id": "3",
+    "name": "Product C",
+    "category": "Home",
+    "price": "79.99",
+    "stock": "75",
+    "description": "Home improvement product"
+  }
+]

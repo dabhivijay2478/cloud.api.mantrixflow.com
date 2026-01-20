@@ -156,13 +156,28 @@ export class PipelineController {
     @Param('id', RequiredUUIDPipe) id: string,
   ) {
     try {
-      const pipeline = await this.pipelineService.findById(id, organizationId);
+      const pipelineWithSchemas = await this.pipelineService.findByIdWithSchemas(id, organizationId);
 
-      if (!pipeline) {
+      if (!pipelineWithSchemas) {
         throw new NotFoundException(`Pipeline ${id} not found`);
       }
 
-      return createSuccessResponse(pipeline, 'Pipeline retrieved successfully');
+      const { pipeline, destinationSchema } = pipelineWithSchemas;
+      
+      // Get applied mappings for visibility
+      const columnMappings = (destinationSchema.columnMappings as any[]) || [];
+      const appliedMappings = columnMappings.map((m) => ({
+        sourcePath: m.sourcePath || m.sourceColumn,
+        destPath: m.destPath || m.destinationColumn,
+      }));
+
+      // Add appliedMappings to pipeline response
+      const pipelineResponse = {
+        ...pipeline,
+        appliedMappings,
+      };
+
+      return createSuccessResponse(pipelineResponse, 'Pipeline retrieved successfully');
     } catch (error) {
       this.handleError('get pipeline', error);
     }

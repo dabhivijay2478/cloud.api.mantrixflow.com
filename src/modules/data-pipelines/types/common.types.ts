@@ -19,8 +19,10 @@ export enum DataSourceType {
 
 /**
  * Column mapping for data transformation
+ * Enhanced to support NoSQL ↔ SQL bidirectional mapping
  */
 export interface ColumnMapping {
+  // Basic mapping (simple columns)
   sourceColumn: string;
   destinationColumn: string;
   dataType: string;
@@ -28,7 +30,49 @@ export interface ColumnMapping {
   isPrimaryKey?: boolean;
   defaultValue?: string;
   maxLength?: number;
+  
+  // Enhanced mapping for NoSQL ↔ SQL
+  /** Source entity (table/collection name) */
+  sourceEntity?: string;
+  /** Source path using dot notation: 'address.city' or 'orders[].amount' */
+  sourcePath?: string;
+  /** Destination entity (table/collection name) */
+  destEntity?: string;
+  /** Destination path using dot notation for nesting */
+  destPath?: string;
+  /** Built-in transformation to apply */
+  transformation?: ColumnTransformationType;
+  /** Custom transformation expression */
+  transformExpression?: string;
+  /** Flag for unwinding arrays (MongoDB → PostgreSQL) */
+  isArray?: boolean;
+  /** Foreign key column for linking flattened data */
+  foreignKey?: string;
+  /** Whether this mapping is required */
+  required?: boolean;
 }
+
+/**
+ * Built-in transformation types for NoSQL ↔ SQL
+ */
+export type ColumnTransformationType =
+  | 'none'
+  | 'flattenObject'      // Flatten nested object: { a: { b: 1 } } → { a_b: 1 }
+  | 'flattenArray'       // Flatten array into separate rows
+  | 'embedObject'        // Embed into nested object (SQL → NoSQL)
+  | 'embedArray'         // Embed as array element
+  | 'jsonStringify'      // Convert to JSON string
+  | 'jsonParse'          // Parse JSON string to object
+  | 'toISODate'          // Convert to ISO date string
+  | 'toTimestamp'        // Convert to timestamp
+  | 'objectIdToUuid'     // MongoDB ObjectId to UUID string
+  | 'uuidToObjectId'     // UUID to MongoDB ObjectId
+  | 'toNumber'           // Convert to number
+  | 'toString'           // Convert to string
+  | 'toBoolean'          // Convert to boolean
+  | 'trim'               // Trim whitespace
+  | 'lowercase'          // Lowercase string
+  | 'uppercase';         // Uppercase string
 
 /**
  * Data transformation configuration
@@ -141,6 +185,7 @@ export interface DryRunResult {
   sampleRows: any[];
   errors: PipelineError[];
   transformedSample?: any[];
+  appliedMappings?: Array<{ sourcePath: string; destPath: string }>;
 }
 
 /**

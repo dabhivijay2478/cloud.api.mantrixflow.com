@@ -93,10 +93,14 @@ export class EmitterService {
     );
 
     // STEP 1: Transform data during emission (Collector → Emitter with transformation)
-    const effectiveMappings =
+    let effectiveMappings =
       columnMappings.length > 0
         ? columnMappings
         : (destinationSchema.columnMappings as ColumnMapping[]) || [];
+
+    // Auto-enhance mappings for MongoDB ObjectId -> UUID conversion if not already enhanced
+    // This ensures _id fields are automatically converted to UUIDs even if not set in mapping
+    effectiveMappings = this.transformerService.enhanceColumnMappings(effectiveMappings, rows);
 
     const transformedRows = await this.transformerService.transform(
       rows,
@@ -116,6 +120,7 @@ export class EmitterService {
             transformedRows,
             writeMode,
             upsertKey || (destinationSchema.upsertKey as string[]),
+            effectiveMappings, // Pass enhanced mappings to ensure table schema matches
           );
           break;
         case 'mysql':
@@ -262,6 +267,22 @@ export class EmitterService {
       userId,
     );
 
+    // If table exists, check if migration is needed for UUID transformation
+    // This will drop and recreate the table if bigint columns need UUID conversion
+    if (destinationSchema.destinationTableExists && dataSource.sourceType === 'postgres') {
+      const migrationResult = await this.migratePostgresColumns(
+        destinationSchema,
+        connectionConfig,
+        columnMappings,
+        true, // Drop and recreate if bigint needs UUID conversion
+      );
+      if (migrationResult.needsRecreate) {
+        this.logger.log(`Table will be recreated: ${migrationResult.reason}`);
+        // Table was dropped, so update the flag
+        destinationSchema.destinationTableExists = false;
+      }
+    }
+
     switch (dataSource.sourceType) {
       case 'postgres':
         return this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
@@ -335,6 +356,7 @@ export class EmitterService {
     rows: any[],
     writeMode: 'append' | 'upsert' | 'replace',
     upsertKey?: string[],
+    columnMappings?: ColumnMapping[],
   ): Promise<WriteResult> {
     const sslConfig =
       typeof connectionConfig.ssl === 'object'
@@ -362,11 +384,51 @@ export class EmitterService {
 
     try {
       const client = await pool.connect();
-      // ... rest of implementation (unchanged logic) ...
       try {
         const schemaName = destinationSchema.destinationSchema || 'public';
         const tableName = destinationSchema.destinationTable;
         const fullTableName = `"${schemaName}"."${tableName}"`;
+
+        // Check if table exists and validate column types match enhanced mappings
+        // This ensures UUID columns are created if objectIdToUuid transformation is detected
+        if (columnMappings && columnMappings.length > 0) {
+          const tableExists = await this.postgresTableExists(destinationSchema, connectionConfig);
+          if (!tableExists) {
+            // Table doesn't exist, create it with enhanced mappings
+            this.logger.log(`Table ${fullTableName} does not exist, creating with enhanced column mappings`);
+            await this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
+          } else {
+            // Table exists - check if column types match (especially for UUID)
+            const checkQuery = `
+              SELECT column_name, data_type
+              FROM information_schema.columns
+              WHERE table_schema = $1 AND table_name = $2
+            `;
+            const checkResult = await client.query(checkQuery, [schemaName, tableName]);
+            const existingColumns = new Map(
+              checkResult.rows.map((r) => [r.column_name, r.data_type]),
+            );
+
+            // Check if any column needs UUID but has bigint
+            for (const mapping of columnMappings) {
+              if (
+                mapping.transformation === 'objectIdToUuid' &&
+                existingColumns.has(mapping.destinationColumn)
+              ) {
+                const currentType = existingColumns.get(mapping.destinationColumn);
+                if (currentType === 'bigint' || currentType === 'integer' || currentType === 'bigserial') {
+                  // Drop and recreate table with UUID column
+                  this.logger.log(
+                    `Table ${fullTableName} has ${currentType} column ${mapping.destinationColumn} but needs UUID. Dropping and recreating...`,
+                  );
+                  await client.query(`DROP TABLE IF EXISTS ${fullTableName} CASCADE`);
+                  await this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
+                  break; // Table recreated, exit loop
+                }
+              }
+            }
+          }
+        }
 
         // Process in batches
         for (let i = 0; i < rows.length; i += DEFAULT_BATCH_SIZE) {
@@ -566,8 +628,13 @@ export class EmitterService {
         const columnDefs = columnMappings.map((col) => {
           let type = this.mapToPostgresType(col.dataType);
 
-          // Use SERIAL/BIGSERIAL for auto-incrementing primary keys
-          if (col.isPrimaryKey) {
+          // If transformation is objectIdToUuid, use UUID type
+          if (col.transformation === 'objectIdToUuid') {
+            type = 'UUID';
+          }
+
+          // Use SERIAL/BIGSERIAL for auto-incrementing primary keys (but not for UUID)
+          if (col.isPrimaryKey && type !== 'UUID') {
             if (type === 'INTEGER') type = 'SERIAL';
             if (type === 'BIGINT') type = 'BIGSERIAL';
           }
@@ -578,7 +645,22 @@ export class EmitterService {
           return `"${col.destinationColumn}" ${type}${nullable}${pk}${defaultVal}`;
         });
 
-        const createQuery = `CREATE TABLE IF NOT EXISTS ${fullTableName} (${columnDefs.join(', ')})`;
+        // Check if table exists first
+        const existsQuery = `
+          SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = $1 AND table_name = $2
+          )
+        `;
+        const existsResult = await client.query(existsQuery, [schemaName, tableName]);
+        const tableExists = existsResult.rows[0].exists;
+
+        if (tableExists) {
+          this.logger.log(`Table ${fullTableName} already exists, skipping creation`);
+          return { created: false, tableName };
+        }
+
+        const createQuery = `CREATE TABLE ${fullTableName} (${columnDefs.join(', ')})`;
         await client.query(createQuery);
 
         this.logger.log(`Created PostgreSQL table: ${fullTableName}`);
@@ -627,6 +709,87 @@ export class EmitterService {
           destinationSchema.destinationTable,
         ]);
         return result.rows[0].exists;
+      } finally {
+        client.release();
+      }
+    } finally {
+      await pool.end();
+    }
+  }
+
+  /**
+   * Migrate PostgreSQL columns that need UUID transformation
+   * For full sync: Drops and recreates table if bigint column needs UUID conversion
+   * For incremental sync: Warns about manual migration needed
+   */
+  private async migratePostgresColumns(
+    destinationSchema: PipelineDestinationSchema,
+    connectionConfig: any,
+    columnMappings: ColumnMapping[],
+    isFullSync: boolean = false,
+  ): Promise<{ needsRecreate: boolean; reason?: string }> {
+    const sslConfig =
+      typeof connectionConfig.ssl === 'object'
+        ? connectionConfig.ssl.enabled
+          ? { rejectUnauthorized: false }
+          : undefined
+        : connectionConfig.ssl
+          ? { rejectUnauthorized: false }
+          : undefined;
+
+    const pool = new Pool({
+      host: connectionConfig.host,
+      port: connectionConfig.port,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+      ssl: sslConfig,
+    });
+
+    try {
+      const client = await pool.connect();
+
+      try {
+        const schemaName = destinationSchema.destinationSchema || 'public';
+        const tableName = destinationSchema.destinationTable;
+        const fullTableName = `"${schemaName}"."${tableName}"`;
+
+        // Check existing column types
+        const query = `
+          SELECT column_name, data_type
+          FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = $2
+        `;
+        const result = await client.query(query, [schemaName, tableName]);
+        const existingColumns = new Map(
+          result.rows.map((r) => [r.column_name, r.data_type]),
+        );
+
+        // Find columns that need migration (bigint -> UUID with objectIdToUuid transformation)
+        for (const mapping of columnMappings) {
+          if (
+            mapping.transformation === 'objectIdToUuid' &&
+            existingColumns.has(mapping.destinationColumn)
+          ) {
+            const currentType = existingColumns.get(mapping.destinationColumn);
+            if (currentType === 'bigint' || currentType === 'integer' || currentType === 'bigserial') {
+              if (isFullSync) {
+                // For full sync, drop and recreate the table
+                this.logger.log(
+                  `Full sync detected: Dropping table ${fullTableName} to recreate with UUID column (${mapping.destinationColumn})`,
+                );
+                await client.query(`DROP TABLE IF EXISTS ${fullTableName} CASCADE`);
+                return { needsRecreate: true, reason: `Column ${mapping.destinationColumn} needs UUID type (currently ${currentType})` };
+              } else {
+                // For incremental sync, warn but don't drop
+                this.logger.warn(
+                  `Column ${mapping.destinationColumn} is ${currentType} but needs UUID. Manual migration required for incremental sync.`,
+                );
+              }
+            }
+          }
+        }
+        return { needsRecreate: false };
       } finally {
         client.release();
       }
@@ -1367,5 +1530,426 @@ export class EmitterService {
     };
 
     return getTypeGroup(normalizedSource) === getTypeGroup(normalizedDest);
+  }
+
+  // ===========================================================================
+  // MULTI-ENTITY EMIT METHODS (For NoSQL ↔ SQL Bidirectional Transforms)
+  // ===========================================================================
+
+  /**
+   * Emit multi-entity data (from bidirectional transformation)
+   * Handles transactional writes for SQL, bulk writes for NoSQL
+   * 
+   * @param entityData - Record<entityName, rows[]> from transformBidirectional()
+   */
+  async emitMultiEntity(options: {
+    destinationSchema: PipelineDestinationSchema;
+    organizationId: string;
+    userId: string;
+    entityData: Record<string, any[]>;
+    writeMode: 'append' | 'upsert' | 'replace';
+    upsertKeys?: Record<string, string[]>;  // Per-entity upsert keys
+    columnMappings?: ColumnMapping[];
+  }): Promise<Record<string, WriteResult>> {
+    const {
+      destinationSchema,
+      organizationId,
+      userId,
+      entityData,
+      writeMode,
+      upsertKeys = {},
+    } = options;
+
+    if (!destinationSchema.dataSourceId) {
+      throw new BadRequestException('Destination schema must have a data source ID');
+    }
+
+    const dataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
+    if (!dataSource) {
+      throw new BadRequestException(`Data source ${destinationSchema.dataSourceId} not found`);
+    }
+
+    const connectionConfig = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      destinationSchema.dataSourceId,
+      userId,
+    );
+
+    const results: Record<string, WriteResult> = {};
+
+    this.logger.log(
+      `Emitting ${Object.keys(entityData).length} entities to ${dataSource.sourceType}`
+    );
+
+    try {
+      switch (dataSource.sourceType) {
+        case 'postgres':
+          return await this.emitMultiEntityToPostgres(
+            connectionConfig,
+            entityData,
+            writeMode,
+            upsertKeys,
+          );
+
+        case 'mysql':
+          return await this.emitMultiEntityToMySQL(
+            connectionConfig,
+            entityData,
+            writeMode,
+            upsertKeys,
+          );
+
+        case 'mongodb':
+          return await this.emitMultiEntityToMongoDB(
+            connectionConfig,
+            entityData,
+            writeMode,
+            upsertKeys,
+          );
+
+        default:
+          // Fall back to single entity emit for each entity
+          for (const [entity, rows] of Object.entries(entityData)) {
+            if (rows.length === 0) {
+              results[entity] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
+              continue;
+            }
+
+            // Create temporary destination schema for entity
+            const entityDestSchema = {
+              ...destinationSchema,
+              destinationTable: entity,
+            } as PipelineDestinationSchema;
+
+            results[entity] = await this.emit({
+              destinationSchema: entityDestSchema,
+              organizationId,
+              userId,
+              rows,
+              writeMode,
+              upsertKey: upsertKeys[entity],
+            });
+          }
+          return results;
+      }
+    } catch (error) {
+      this.logger.error(`Multi-entity emit failed: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Emit multi-entity data to PostgreSQL with transaction support
+   */
+  private async emitMultiEntityToPostgres(
+    connectionConfig: any,
+    entityData: Record<string, any[]>,
+    writeMode: 'append' | 'upsert' | 'replace',
+    upsertKeys: Record<string, string[]>,
+  ): Promise<Record<string, WriteResult>> {
+    const pool = new Pool({
+      host: connectionConfig.host,
+      port: connectionConfig.port || 5432,
+      database: connectionConfig.database,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+      ssl: connectionConfig.ssl?.enabled ? { rejectUnauthorized: false } : false,
+    });
+
+    const results: Record<string, WriteResult> = {};
+    const client = await pool.connect();
+
+    try {
+      // Start transaction
+      await client.query('BEGIN');
+
+      for (const [tableName, rows] of Object.entries(entityData)) {
+        if (rows.length === 0) {
+          results[tableName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
+          continue;
+        }
+
+        const schemaName = connectionConfig.schema || 'public';
+        const fullTableName = `"${schemaName}"."${tableName}"`;
+        const upsertKey = upsertKeys[tableName] || [];
+
+        let rowsWritten = 0;
+        let rowsFailed = 0;
+
+        // Handle replace mode
+        if (writeMode === 'replace') {
+          await client.query(`DELETE FROM ${fullTableName}`);
+        }
+
+        // Batch insert/upsert
+        const batchSize = DEFAULT_BATCH_SIZE;
+        for (let i = 0; i < rows.length; i += batchSize) {
+          const batch = rows.slice(i, i + batchSize);
+          const columns = Object.keys(batch[0]);
+
+          if (columns.length === 0) continue;
+
+          const columnNames = columns.map(c => `"${c}"`).join(', ');
+          const values: any[] = [];
+          const valuePlaceholders: string[] = [];
+
+          batch.forEach((row, rowIdx) => {
+            const rowPlaceholders: string[] = [];
+            columns.forEach((col, colIdx) => {
+              const paramIdx = rowIdx * columns.length + colIdx + 1;
+              rowPlaceholders.push(`$${paramIdx}`);
+              values.push(this.prepareValueForPostgres(row[col]));
+            });
+            valuePlaceholders.push(`(${rowPlaceholders.join(', ')})`);
+          });
+
+          let query: string;
+          if (writeMode === 'upsert' && upsertKey.length > 0) {
+            const conflictCols = upsertKey.map(k => `"${k}"`).join(', ');
+            const updateCols = columns
+              .filter(c => !upsertKey.includes(c))
+              .map(c => `"${c}" = EXCLUDED."${c}"`)
+              .join(', ');
+
+            query = `
+              INSERT INTO ${fullTableName} (${columnNames})
+              VALUES ${valuePlaceholders.join(', ')}
+              ON CONFLICT (${conflictCols})
+              DO UPDATE SET ${updateCols || `"${columns[0]}" = EXCLUDED."${columns[0]}"`}
+            `;
+          } else {
+            query = `
+              INSERT INTO ${fullTableName} (${columnNames})
+              VALUES ${valuePlaceholders.join(', ')}
+            `;
+          }
+
+          try {
+            const result = await client.query(query, values);
+            rowsWritten += result.rowCount || batch.length;
+          } catch (batchError) {
+            this.logger.warn(`Batch insert to ${tableName} failed: ${batchError}`);
+            rowsFailed += batch.length;
+          }
+        }
+
+        results[tableName] = { rowsWritten, rowsSkipped: 0, rowsFailed };
+        this.logger.log(`Postgres: ${tableName} - ${rowsWritten} rows written`);
+      }
+
+      // Commit transaction
+      await client.query('COMMIT');
+      return results;
+
+    } catch (error) {
+      // Rollback on error
+      await client.query('ROLLBACK');
+      this.logger.error(`Multi-entity Postgres write failed, rolled back: ${error}`);
+      throw error;
+    } finally {
+      client.release();
+      await pool.end();
+    }
+  }
+
+  /**
+   * Prepare value for PostgreSQL insert
+   */
+  private prepareValueForPostgres(value: any): any {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value === 'object') {
+      return JSON.stringify(value);
+    }
+    return value;
+  }
+
+  /**
+   * Emit multi-entity data to MySQL with transaction support
+   */
+  private async emitMultiEntityToMySQL(
+    connectionConfig: any,
+    entityData: Record<string, any[]>,
+    writeMode: 'append' | 'upsert' | 'replace',
+    upsertKeys: Record<string, string[]>,
+  ): Promise<Record<string, WriteResult>> {
+    const connection = await mysql.createConnection({
+      host: connectionConfig.host,
+      port: connectionConfig.port || 3306,
+      user: connectionConfig.username,
+      password: connectionConfig.password,
+      database: connectionConfig.database,
+      ssl: connectionConfig.ssl?.enabled ? { rejectUnauthorized: false } : undefined,
+    });
+
+    const results: Record<string, WriteResult> = {};
+
+    try {
+      await connection.beginTransaction();
+
+      for (const [tableName, rows] of Object.entries(entityData)) {
+        if (rows.length === 0) {
+          results[tableName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
+          continue;
+        }
+
+        let rowsWritten = 0;
+        let rowsFailed = 0;
+
+        // Handle replace mode
+        if (writeMode === 'replace') {
+          await connection.query(`DELETE FROM \`${tableName}\``);
+        }
+
+        const columns = Object.keys(rows[0]);
+        const columnNames = columns.map(c => `\`${c}\``).join(', ');
+
+        // Batch insert
+        const batchSize = DEFAULT_BATCH_SIZE;
+        for (let i = 0; i < rows.length; i += batchSize) {
+          const batch = rows.slice(i, i + batchSize);
+          const values = batch.map(row => 
+            columns.map(col => this.prepareValueForMySQL(row[col]))
+          );
+
+          try {
+            let query: string;
+            if (writeMode === 'upsert') {
+              const updateCols = columns.map(c => `\`${c}\` = VALUES(\`${c}\`)`).join(', ');
+              query = `INSERT INTO \`${tableName}\` (${columnNames}) VALUES ? 
+                       ON DUPLICATE KEY UPDATE ${updateCols}`;
+            } else {
+              query = `INSERT INTO \`${tableName}\` (${columnNames}) VALUES ?`;
+            }
+
+            const [result] = await connection.query(query, [values]) as any;
+            rowsWritten += result.affectedRows || batch.length;
+          } catch (batchError) {
+            this.logger.warn(`Batch insert to ${tableName} failed: ${batchError}`);
+            rowsFailed += batch.length;
+          }
+        }
+
+        results[tableName] = { rowsWritten, rowsSkipped: 0, rowsFailed };
+        this.logger.log(`MySQL: ${tableName} - ${rowsWritten} rows written`);
+      }
+
+      await connection.commit();
+      return results;
+
+    } catch (error) {
+      await connection.rollback();
+      this.logger.error(`Multi-entity MySQL write failed, rolled back: ${error}`);
+      throw error;
+    } finally {
+      await connection.end();
+    }
+  }
+
+  /**
+   * Prepare value for MySQL insert
+   */
+  private prepareValueForMySQL(value: any): any {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value === 'object') {
+      return JSON.stringify(value);
+    }
+    return value;
+  }
+
+  /**
+   * Emit multi-entity data to MongoDB with bulk writes
+   */
+  private async emitMultiEntityToMongoDB(
+    connectionConfig: any,
+    entityData: Record<string, any[]>,
+    writeMode: 'append' | 'upsert' | 'replace',
+    upsertKeys: Record<string, string[]>,
+  ): Promise<Record<string, WriteResult>> {
+    let connectionString = connectionConfig.connection_string;
+    if (!connectionString) {
+      const auth = connectionConfig.username && connectionConfig.password
+        ? `${encodeURIComponent(connectionConfig.username)}:${encodeURIComponent(connectionConfig.password)}@`
+        : '';
+      const port = connectionConfig.port || 27017;
+      connectionString = `mongodb://${auth}${connectionConfig.host}:${port}/${connectionConfig.database}`;
+    }
+
+    const client = new MongoClient(connectionString);
+    const results: Record<string, WriteResult> = {};
+
+    try {
+      await client.connect();
+      const db = client.db(connectionConfig.database);
+
+      for (const [collectionName, rows] of Object.entries(entityData)) {
+        if (rows.length === 0) {
+          results[collectionName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
+          continue;
+        }
+
+        const collection = db.collection(collectionName);
+        const upsertKey = upsertKeys[collectionName] || ['_id'];
+
+        let rowsWritten = 0;
+        let rowsFailed = 0;
+
+        // Handle replace mode
+        if (writeMode === 'replace') {
+          await collection.deleteMany({});
+        }
+
+        // Create bulk operations
+        if (writeMode === 'upsert' && upsertKey.length > 0) {
+          // Bulk upsert
+          const bulkOps = rows.map(row => {
+            const filter: any = {};
+            for (const key of upsertKey) {
+              filter[key] = row[key];
+            }
+            return {
+              updateOne: {
+                filter,
+                update: { $set: row },
+                upsert: true,
+              },
+            };
+          });
+
+          try {
+            const result = await collection.bulkWrite(bulkOps, { ordered: false });
+            rowsWritten = (result.upsertedCount || 0) + (result.modifiedCount || 0);
+          } catch (bulkError: any) {
+            this.logger.warn(`Bulk upsert to ${collectionName} had errors: ${bulkError.message}`);
+            rowsWritten = bulkError.result?.nUpserted || 0;
+            rowsFailed = rows.length - rowsWritten;
+          }
+        } else {
+          // Bulk insert
+          try {
+            const result = await collection.insertMany(rows, { ordered: false });
+            rowsWritten = result.insertedCount;
+          } catch (insertError: any) {
+            this.logger.warn(`Bulk insert to ${collectionName} had errors: ${insertError.message}`);
+            rowsWritten = insertError.result?.insertedCount || 0;
+            rowsFailed = rows.length - rowsWritten;
+          }
+        }
+
+        results[collectionName] = { rowsWritten, rowsSkipped: 0, rowsFailed };
+        this.logger.log(`MongoDB: ${collectionName} - ${rowsWritten} documents written`);
+      }
+
+      return results;
+
+    } catch (error) {
+      this.logger.error(`Multi-entity MongoDB write failed: ${error}`);
+      throw error;
+    } finally {
+      await client.close();
+    }
   }
 }
