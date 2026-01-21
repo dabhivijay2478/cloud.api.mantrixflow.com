@@ -56,8 +56,9 @@ export interface CreatePipelineInput extends CreatePipelineDto {
 
 /**
  * Default batch size for processing
+ * Configurable per-pipeline via options.batchSize
  */
-const DEFAULT_BATCH_SIZE = 1000;
+const DEFAULT_BATCH_SIZE = 500;
 const MAX_BATCH_SIZE = 10000;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
@@ -729,8 +730,11 @@ export class PipelineService {
 
         // Update pagination
         hasMore = sourceData.hasMore || sourceData.rows.length === batchSize;
-        offset += batchSize;
+        offset += sourceData.rows.length; // Use actual rows collected, not batchSize
         cursor = sourceData.nextCursor;
+        
+        // Debug: log pagination state
+        console.log(`   🔄 Pagination: hasMore=${hasMore}, nextOffset=${offset}, cursor=${cursor || 'none'}, rowsThisBatch=${sourceData.rows.length}, batchSize=${batchSize}`);
 
         // Extract the max value of the incremental column from this batch
         // This is needed for BOTH full and incremental modes:

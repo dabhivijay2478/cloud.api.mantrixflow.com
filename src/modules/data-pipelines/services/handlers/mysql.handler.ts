@@ -291,7 +291,7 @@ export class MySQLHandler extends BaseSourceHandler {
     connectionConfig: any,
     params: CollectParams,
   ): AsyncIterable<any[]> {
-    const batchSize = params.batchSize || 1000;
+    const batchSize = params.batchSize || 500; // Default batch size is 500
     let offset = 0;
     let hasMore = true;
 

@@ -596,6 +596,103 @@ export class PipelineController {
   }
 
   /**
+   * Get CDC (Change Data Capture) status and configuration
+   */
+  @Get(':id/cdc-status')
+  @ApiOperation({
+    summary: 'Get CDC status and configuration',
+    description: 'Check if pipeline is properly configured for CDC/incremental sync and its current state.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'CDC status information' })
+  async getCdcStatus(
+    @Param('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+  ) {
+    try {
+      const pipeline = await this.pipelineService.findById(id, organizationId);
+
+      if (!pipeline) {
+        throw new NotFoundException(`Pipeline ${id} not found`);
+      }
+
+      // Check CDC configuration requirements
+      const hasIncrementalMode = pipeline.syncMode === 'incremental';
+      const hasIncrementalColumn = !!pipeline.incrementalColumn;
+      const hasCompletedFullSync = pipeline.lastRunStatus === 'success' && pipeline.lastSyncAt;
+      const isInListingStatus = pipeline.status === 'listing';
+      
+      // Get checkpoint info
+      const checkpoint = pipeline.checkpoint as any;
+      const hasCheckpoint = !!checkpoint?.lastSyncValue;
+      
+      const cdcReadiness = {
+        // Configuration checks
+        isConfiguredForCdc: hasIncrementalMode && hasIncrementalColumn,
+        syncMode: pipeline.syncMode,
+        incrementalColumn: pipeline.incrementalColumn,
+        
+        // State checks
+        hasCompletedFullSync,
+        isInListingStatus,
+        hasCheckpoint,
+        currentStatus: pipeline.status,
+        
+        // Checkpoint details
+        checkpoint: checkpoint ? {
+          lastSyncValue: checkpoint.lastSyncValue,
+          watermarkField: checkpoint.watermarkField || pipeline.incrementalColumn,
+          lastSyncAt: checkpoint.lastSyncAt,
+          rowsProcessed: checkpoint.rowsProcessed,
+        } : null,
+        
+        // CDC readiness summary
+        cdcEnabled: hasIncrementalMode && hasIncrementalColumn && hasCompletedFullSync && isInListingStatus && hasCheckpoint,
+        
+        // Issues if not ready
+        issues: [] as string[],
+        
+        // Recommendations
+        recommendations: [] as string[],
+      };
+      
+      // Add issues and recommendations
+      if (!hasIncrementalMode) {
+        cdcReadiness.issues.push('syncMode is not "incremental"');
+        cdcReadiness.recommendations.push('Update pipeline syncMode to "incremental"');
+      }
+      if (!hasIncrementalColumn) {
+        cdcReadiness.issues.push('incrementalColumn is not set');
+        cdcReadiness.recommendations.push('Set incrementalColumn to a timestamp or auto-incrementing column (e.g., updated_at, id)');
+      }
+      if (!hasCompletedFullSync) {
+        cdcReadiness.issues.push('No successful full sync completed');
+        cdcReadiness.recommendations.push('Run the pipeline at least once to complete initial full sync');
+      }
+      if (!isInListingStatus && hasCompletedFullSync) {
+        cdcReadiness.issues.push(`Pipeline status is "${pipeline.status}" instead of "listing"`);
+        cdcReadiness.recommendations.push('After a successful full sync with incremental mode, status should be "listing" for CDC to work');
+      }
+      if (!hasCheckpoint) {
+        cdcReadiness.issues.push('No checkpoint stored');
+        cdcReadiness.recommendations.push('Complete a full sync to create the initial checkpoint');
+      }
+      
+      // Add pg_cron/PGMQ requirements note
+      if (cdcReadiness.cdcEnabled) {
+        cdcReadiness.recommendations.push('✅ CDC is ready! Ensure pg_cron and PGMQ extensions are installed and the pipeline_polling_function is scheduled.');
+      } else {
+        cdcReadiness.recommendations.push('📌 For automatic CDC polling, ensure pg_cron and PGMQ extensions are installed in your database.');
+      }
+
+      return createSuccessResponse(cdcReadiness, 'CDC status retrieved successfully');
+    } catch (error) {
+      this.handleError('get CDC status', error);
+    }
+  }
+
+  /**
    * Get human-readable schedule description
    */
   private getHumanReadableSchedule(

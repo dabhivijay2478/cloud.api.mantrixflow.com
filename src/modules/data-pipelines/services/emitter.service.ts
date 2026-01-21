@@ -30,8 +30,9 @@ import { firstValueFrom } from 'rxjs';
 
 /**
  * Batch size for bulk operations
+ * Default is 500 for balanced performance/memory
  */
-const DEFAULT_BATCH_SIZE = 1000;
+const DEFAULT_BATCH_SIZE = 500;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1000;
 

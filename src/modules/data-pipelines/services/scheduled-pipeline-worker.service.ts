@@ -48,12 +48,20 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     this.logger.log(`[SCHEDULER] ════════════════════════════════════════════════════════`);
     this.logger.log(`[SCHEDULER] 🔧 Starting scheduled pipeline worker...`);
     this.logger.log(`[SCHEDULER]    Poll Interval: ${POLL_INTERVAL_MS / 1000} seconds`);
+    this.logger.log(`[SCHEDULER]    Default Batch Size: 500 records`);
+    this.logger.log(`[SCHEDULER] ════════════════════════════════════════════════════════`);
+    this.logger.log(`[SCHEDULER] 📌 NOTE: For CDC/incremental sync to work automatically:`);
+    this.logger.log(`[SCHEDULER]    1. Pipeline must have syncMode='incremental'`);
+    this.logger.log(`[SCHEDULER]    2. Pipeline must have incrementalColumn set`);
+    this.logger.log(`[SCHEDULER]    3. Complete at least one full sync (status→'listing')`);
+    this.logger.log(`[SCHEDULER]    4. pg_cron must be installed (polls for changes)`);
+    this.logger.log(`[SCHEDULER]    5. PGMQ must be installed (queues incremental jobs)`);
+    this.logger.log(`[SCHEDULER] ════════════════════════════════════════════════════════`);
     
     // Start the polling loop
     this.startPolling();
     
     this.logger.log(`[SCHEDULER] ✅ Scheduled pipeline worker started`);
-    this.logger.log(`[SCHEDULER] ════════════════════════════════════════════════════════`);
   }
 
   /**
@@ -184,12 +192,12 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
         },
       );
 
-      // Execute the pipeline
+      // Execute the pipeline with default batch size (500)
       const run = await this.pipelineService.runPipeline(
         pipelineId,
         '', // System-triggered run - empty userId
         'scheduled',
-        { batchSize: 1000 },
+        { batchSize: 500 },
       );
 
       // Calculate next run time and update the pipeline

@@ -423,7 +423,7 @@ export class PipelineRepository {
     this.logger.debug(`[findDuePipelines] Checking for pipelines due before: ${nowIso}`);
     
     try {
-      return await this.db
+      const results = await this.db
         .select()
         .from(pipelines)
         .where(
@@ -440,6 +440,44 @@ export class PipelineRepository {
           ),
         )
         .orderBy(pipelines.nextScheduledRunAt);
+      
+      // Log debug info about why pipelines might not be found
+      if (results.length === 0) {
+        // Check if there are any scheduled pipelines at all
+        const allScheduled = await this.db
+          .select({
+            id: pipelines.id,
+            name: pipelines.name,
+            scheduleType: pipelines.scheduleType,
+            nextScheduledRunAt: pipelines.nextScheduledRunAt,
+            status: pipelines.status,
+          })
+          .from(pipelines)
+          .where(
+            and(
+              isNull(pipelines.deletedAt),
+              isNotNull(pipelines.scheduleType),
+              ne(pipelines.scheduleType, 'none'),
+            ),
+          );
+        
+        if (allScheduled.length > 0) {
+          for (const p of allScheduled) {
+            const nextRunAt = p.nextScheduledRunAt ? new Date(p.nextScheduledRunAt).toISOString() : 'NOT SET';
+            const isDue = p.nextScheduledRunAt && new Date(p.nextScheduledRunAt) <= now;
+            const statusOk = ['idle', 'listing', 'completed', 'failed'].includes(p.status || '');
+            this.logger.debug(
+              `[findDuePipelines] Pipeline "${p.name}" (${p.id}): ` +
+              `scheduleType=${p.scheduleType}, nextRunAt=${nextRunAt}, ` +
+              `status=${p.status}, isDue=${isDue}, statusOk=${statusOk}`
+            );
+          }
+        } else {
+          this.logger.debug(`[findDuePipelines] No scheduled pipelines found in the database`);
+        }
+      }
+      
+      return results;
     } catch (error: any) {
       // Extract the actual database error from postgres-js/Drizzle
       // postgres-js errors have a 'cause' property with the actual PostgreSQL error

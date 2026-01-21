@@ -408,7 +408,7 @@ export class MongoDBHandler extends BaseSourceHandler {
       }
       
       this.logger.log(`MongoDB collectStream: database=${databaseName}, collection=${collectionName}`);
-      const batchSize = params.batchSize || 1000;
+      const batchSize = params.batchSize || 500; // Default batch size is 500
 
       const db = client.db(databaseName);
       const collection = db.collection(collectionName);

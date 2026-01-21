@@ -23,8 +23,9 @@ import type { PipelineSourceSchemaWithConfig } from '../types/source-handler.typ
 
 /**
  * Batch size constants
+ * Default is 500 for balanced performance/memory
  */
-const DEFAULT_BATCH_SIZE = 1000;
+const DEFAULT_BATCH_SIZE = 500;
 const MAX_BATCH_SIZE = 10000;
 
 /**

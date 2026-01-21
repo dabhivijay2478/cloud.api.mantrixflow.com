@@ -324,7 +324,7 @@ export class PostgresHandler extends BaseSourceHandler {
     params: CollectParams,
   ): AsyncIterable<any[]> {
     const pool = this.createPool(connectionConfig);
-    const batchSize = params.batchSize || 1000;
+    const batchSize = params.batchSize || 500; // Default batch size is 500
 
     try {
       const client = await pool.connect();
