@@ -655,8 +655,38 @@ export class PipelineController {
    * Handle errors consistently
    */
   private handleError(operation: string, error: unknown): never {
-    const message = error instanceof Error ? error.message : String(error);
-    this.logger.error(`Failed to ${operation}: ${message}`);
+    let message = error instanceof Error ? error.message : String(error);
+    let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+    
+    // Extract more detailed error information if available
+    if (error instanceof Error) {
+      // Log full error details including stack trace
+      this.logger.error(`Failed to ${operation}: ${message}`, error.stack);
+      
+      // Check for common database errors and provide actionable fixes
+      if (message.includes('relation') && message.includes('does not exist')) {
+        message = `Database table does not exist. Please run migrations:\n` +
+          `  cd apps/api && bun run db:migrate\n` +
+          `Error: ${message}`;
+        statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+      } else if (message.includes('column') && message.includes('does not exist')) {
+        const columnMatch = message.match(/column "([^"]+)" does not exist/);
+        const columnName = columnMatch ? columnMatch[1] : 'unknown';
+        message = `Database column "${columnName}" does not exist. This usually means migrations haven't been run.\n` +
+          `\nTo fix this, run:\n` +
+          `  cd apps/api\n` +
+          `  bun run db:migrate\n` +
+          `\nThis will apply all pending migrations including:\n` +
+          `  - 0016_pipeline_incremental_sync_fixes.sql (adds pause_timestamp and other columns)\n` +
+          `  - 0017_add_polling_trigger_type.sql (adds polling to trigger_type enum)\n` +
+          `\nOriginal error: ${message}`;
+        statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+      } else if (message.includes('syntax error')) {
+        message = `Database query error: ${message}`;
+      }
+    } else {
+      this.logger.error(`Failed to ${operation}: ${message}`);
+    }
 
     if (error instanceof HttpException) {
       throw error;
@@ -667,7 +697,7 @@ export class PipelineController {
         success: false,
         error: message,
       },
-      HttpStatus.INTERNAL_SERVER_ERROR,
+      statusCode,
     );
   }
 }

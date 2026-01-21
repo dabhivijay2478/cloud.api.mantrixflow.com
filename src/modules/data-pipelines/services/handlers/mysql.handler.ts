@@ -200,6 +200,90 @@ export class MySQLHandler extends BaseSourceHandler {
   }
 
   /**
+   * Collect incremental data (new/changed records since checkpoint)
+   * Implements strict incremental filtering: WHERE watermarkField > lastValue
+   * 
+   * Root Fix: This ensures only new/changed records are collected, preventing re-writing all data
+   */
+  async collectIncremental(
+    sourceSchema: PipelineSourceSchemaWithConfig,
+    connectionConfig: any,
+    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string },
+    params: Omit<CollectParams, 'incrementalColumn' | 'lastSyncValue'>,
+  ): Promise<CollectResult> {
+    let connection: mysql.Connection | null = null;
+
+    try {
+      connection = await mysql.createConnection(this.getConnectionOptions(connectionConfig));
+      const tableName = sourceSchema.config.table || sourceSchema.config.tableName || sourceSchema.sourceTable;
+
+      // Determine the effective last value (consider pause timestamp)
+      let effectiveLastValue: string | number = checkpoint.lastValue;
+      if (checkpoint.pauseTimestamp) {
+        const pauseDate = new Date(checkpoint.pauseTimestamp);
+        const lastValueDate = typeof checkpoint.lastValue === 'string' || typeof checkpoint.lastValue === 'number'
+          ? new Date(checkpoint.lastValue)
+          : new Date();
+        
+        effectiveLastValue = pauseDate < lastValueDate 
+          ? checkpoint.pauseTimestamp 
+          : (typeof checkpoint.lastValue === 'string' ? checkpoint.lastValue : String(checkpoint.lastValue));
+      }
+
+      // Build strict incremental query: WHERE watermarkField > lastValue
+      let query = `SELECT * FROM \`${tableName}\``;
+      const queryParams: any[] = [];
+
+      // Strict incremental filter - only records newer than checkpoint
+      query += ` WHERE \`${checkpoint.watermarkField}\` > ?`;
+      queryParams.push(effectiveLastValue);
+
+      // Order by watermark field for consistent pagination
+      query += ` ORDER BY \`${checkpoint.watermarkField}\` ASC`;
+
+      // Add pagination
+      query += ` LIMIT ? OFFSET ?`;
+      queryParams.push(params.limit, params.offset);
+
+      this.logger.log(`Incremental query: ${query} with params: ${JSON.stringify(queryParams)}`);
+
+      const [rows] = await connection.query(query, queryParams);
+
+      // Get total count for incremental records
+      let totalRows: number | undefined;
+      try {
+        const countQuery = `SELECT COUNT(*) as count FROM \`${tableName}\` WHERE \`${checkpoint.watermarkField}\` > ?`;
+        const [countResult] = await connection.query(countQuery, [effectiveLastValue]);
+        totalRows = (countResult as any[])[0]?.count;
+      } catch {
+        // Ignore count errors
+      }
+
+      const resultRows = rows as any[];
+      const hasMore = resultRows.length === params.limit;
+      const nextCursor = hasMore ? String(params.offset + params.limit) : undefined;
+
+      this.logger.log(
+        `Incremental sync: Found ${resultRows.length} new records (total available: ${totalRows || 'unknown'})`,
+      );
+
+      return {
+        rows: resultRows,
+        totalRows,
+        nextCursor,
+        hasMore,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to collect incremental data: ${error}`);
+      throw error;
+    } finally {
+      if (connection) {
+        await connection.end();
+      }
+    }
+  }
+
+  /**
    * Stream data using async generator for large datasets
    */
   async *collectStream(

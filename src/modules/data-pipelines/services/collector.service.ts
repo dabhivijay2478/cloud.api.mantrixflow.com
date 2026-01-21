@@ -1,25 +1,25 @@
 /**
  * Collector Service
  * Generic service for collecting data from any data source type
- * Supports: PostgreSQL, MySQL, MongoDB, S3, REST API, BigQuery, Snowflake
+ * Supports: PostgreSQL, MySQL, MongoDB only
  *
  * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
+ * 
+ * Uses handler registry pattern for extensibility
  */
 
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
 import { Pool } from 'pg';
 import * as mysql from 'mysql2/promise';
 import { MongoClient } from 'mongodb';
-import { S3Client, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { BigQuery } from '@google-cloud/bigquery';
 import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DATASOURCE_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import type { ColumnInfo } from '../types/common.types';
 import type { PipelineSourceSchema } from '../../../database/schemas';
-import { firstValueFrom } from 'rxjs';
+import { createHandlerRegistry, getHandler } from './handlers/handler-registry';
+import type { PipelineSourceSchemaWithConfig } from '../types/source-handler.types';
 
 /**
  * Batch size constants
@@ -36,12 +36,12 @@ const RETRY_DELAY_MS = 1000;
 @Injectable()
 export class CollectorService {
   private readonly logger = new Logger(CollectorService.name);
+  private readonly handlerRegistry = createHandlerRegistry();
 
   constructor(
     private readonly connectionService: ConnectionService,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly activityLogService: ActivityLogService,
-    private readonly httpService: HttpService,
   ) {}
 
   /**
@@ -94,89 +94,44 @@ export class CollectorService {
       userId,
     );
 
-    // Route to appropriate collector based on source type
+    // Use handler registry for collection
+    const handler = getHandler(this.handlerRegistry, sourceSchema.sourceType);
+    if (!handler) {
+      throw new BadRequestException(`Unsupported source type: ${sourceSchema.sourceType}`);
+    }
+
+    // Convert PipelineSourceSchema to PipelineSourceSchemaWithConfig
+    const sourceSchemaWithConfig: PipelineSourceSchemaWithConfig = {
+      id: sourceSchema.id,
+      organizationId: sourceSchema.organizationId,
+      sourceType: sourceSchema.sourceType,
+      dataSourceId: sourceSchema.dataSourceId || undefined,
+      sourceSchema: sourceSchema.sourceSchema || undefined,
+      sourceTable: sourceSchema.sourceTable || undefined,
+      sourceQuery: sourceSchema.sourceQuery || undefined,
+      sourceConfig: (sourceSchema.sourceConfig as any) || null,
+      name: sourceSchema.name || undefined,
+      config: {
+        schema: sourceSchema.sourceSchema || undefined,
+        table: sourceSchema.sourceTable || undefined,
+        tableName: sourceSchema.sourceTable || undefined,
+        database: connectionConfig.database || undefined,
+        collection: sourceSchema.sourceTable || undefined,
+        ...((sourceSchema.sourceConfig as any) || {}),
+      },
+    };
+
+    // Route to handler
     let result: { rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean };
 
     try {
-      switch (sourceSchema.sourceType) {
-        case 'postgres':
-          result = await this.collectFromPostgres(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            cursor,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        case 'mysql':
-          result = await this.collectFromMySQL(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            cursor,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        case 'mongodb':
-          result = await this.collectFromMongoDB(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            cursor,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        case 's3':
-          result = await this.collectFromS3(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            cursor,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        case 'api':
-          result = await this.collectFromAPI(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            cursor,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        case 'bigquery':
-          result = await this.collectFromBigQuery(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        case 'snowflake':
-          result = await this.collectFromSnowflake(
-            sourceSchema,
-            connectionConfig,
-            effectiveLimit,
-            offset,
-            incrementalColumn,
-            lastSyncValue,
-          );
-          break;
-        default:
-          throw new BadRequestException(`Unsupported source type: ${sourceSchema.sourceType}`);
-      }
+      result = await handler.collect(sourceSchemaWithConfig, connectionConfig, {
+        limit: effectiveLimit,
+        offset,
+        cursor,
+        incrementalColumn,
+        lastSyncValue,
+      });
 
       // Log successful collection
       this.logger.log(
@@ -221,34 +176,42 @@ export class CollectorService {
       userId,
     );
 
+    // Use handler registry for schema discovery
+    const handler = getHandler(this.handlerRegistry, sourceSchema.sourceType);
+    if (!handler) {
+      throw new BadRequestException(`Unsupported source type: ${sourceSchema.sourceType}`);
+    }
+
+    // Convert PipelineSourceSchema to PipelineSourceSchemaWithConfig
+    const sourceSchemaWithConfig: PipelineSourceSchemaWithConfig = {
+      id: sourceSchema.id,
+      organizationId: sourceSchema.organizationId,
+      sourceType: sourceSchema.sourceType,
+      dataSourceId: sourceSchema.dataSourceId || undefined,
+      sourceSchema: sourceSchema.sourceSchema || undefined,
+      sourceTable: sourceSchema.sourceTable || undefined,
+      sourceQuery: sourceSchema.sourceQuery || undefined,
+      sourceConfig: (sourceSchema.sourceConfig as any) || null,
+      name: sourceSchema.name || undefined,
+      config: {
+        schema: sourceSchema.sourceSchema || undefined,
+        table: sourceSchema.sourceTable || undefined,
+        tableName: sourceSchema.sourceTable || undefined,
+        database: connectionConfig.database || undefined,
+        collection: sourceSchema.sourceTable || undefined,
+        ...((sourceSchema.sourceConfig as any) || {}),
+      },
+    };
+
     let result: { columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number };
 
     try {
-      switch (sourceSchema.sourceType) {
-        case 'postgres':
-          result = await this.discoverPostgresSchema(sourceSchema, connectionConfig);
-          break;
-        case 'mysql':
-          result = await this.discoverMySQLSchema(sourceSchema, connectionConfig);
-          break;
-        case 'mongodb':
-          result = await this.discoverMongoDBSchema(sourceSchema, connectionConfig);
-          break;
-        case 's3':
-          result = await this.discoverS3Schema(sourceSchema, connectionConfig);
-          break;
-        case 'api':
-          result = await this.discoverAPISchema(sourceSchema, connectionConfig);
-          break;
-        case 'bigquery':
-          result = await this.discoverBigQuerySchema(sourceSchema, connectionConfig);
-          break;
-        case 'snowflake':
-          result = await this.discoverSnowflakeSchema(sourceSchema, connectionConfig);
-          break;
-        default:
-          throw new BadRequestException(`Unsupported source type: ${sourceSchema.sourceType}`);
-      }
+      const schemaInfo = await handler.discoverSchema(sourceSchemaWithConfig, connectionConfig);
+      result = {
+        columns: schemaInfo.columns,
+        primaryKeys: schemaInfo.primaryKeys,
+        estimatedRowCount: schemaInfo.estimatedRowCount,
+      };
 
       // Log schema discovery
       await this.activityLogService.logActivity({
@@ -782,550 +745,110 @@ export class CollectorService {
     }
   }
 
-  // ============================================================================
-  // S3 IMPLEMENTATION
-  // ============================================================================
-
   /**
-   * Collect data from S3 (CSV/JSON files)
+   * Collect incremental data using handler's collectIncremental method
+   * ROOT FIX: Uses strict incremental filtering to prevent re-writing all data
    */
-  private async collectFromS3(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    cursor?: string,
-    incrementalColumn?: string,
-    lastSyncValue?: any,
-  ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
-    const s3Client = new S3Client({
-      region: connectionConfig.region,
-      credentials: {
-        accessKeyId: connectionConfig.access_key_id,
-        secretAccessKey: connectionConfig.secret_access_key,
+  async collectIncremental(options: {
+    sourceSchema: PipelineSourceSchema;
+    organizationId: string;
+    userId: string;
+    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string };
+    limit?: number;
+    offset?: number;
+    cursor?: string;
+  }): Promise<{
+    rows: any[];
+    totalRows?: number;
+    nextCursor?: string;
+    hasMore?: boolean;
+  }> {
+    const {
+      sourceSchema,
+      organizationId,
+      userId,
+      checkpoint,
+      limit = DEFAULT_BATCH_SIZE,
+      offset = 0,
+      cursor,
+    } = options;
+
+    // Validate batch size
+    const effectiveLimit = Math.min(limit, MAX_BATCH_SIZE);
+
+    // Get data source
+    if (!sourceSchema.dataSourceId) {
+      throw new BadRequestException('Source schema must have a data source ID');
+    }
+
+    const dataSource = await this.dataSourceRepository.findById(sourceSchema.dataSourceId);
+    if (!dataSource) {
+      throw new BadRequestException(`Data source ${sourceSchema.dataSourceId} not found`);
+    }
+
+    // Get decrypted connection config
+    const connectionConfig = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      sourceSchema.dataSourceId,
+      userId,
+    );
+
+    // Use handler registry for incremental collection
+    const handler = getHandler(this.handlerRegistry, sourceSchema.sourceType);
+    if (!handler) {
+      throw new BadRequestException(`Unsupported source type: ${sourceSchema.sourceType}`);
+    }
+
+    // Convert PipelineSourceSchema to PipelineSourceSchemaWithConfig
+    const sourceSchemaWithConfig: PipelineSourceSchemaWithConfig = {
+      id: sourceSchema.id,
+      organizationId: sourceSchema.organizationId,
+      sourceType: sourceSchema.sourceType,
+      dataSourceId: sourceSchema.dataSourceId || undefined,
+      sourceSchema: sourceSchema.sourceSchema || undefined,
+      sourceTable: sourceSchema.sourceTable || undefined,
+      sourceQuery: sourceSchema.sourceQuery || undefined,
+      sourceConfig: (sourceSchema.sourceConfig as any) || null,
+      name: sourceSchema.name || undefined,
+      config: {
+        schema: sourceSchema.sourceSchema || undefined,
+        table: sourceSchema.sourceTable || undefined,
+        tableName: sourceSchema.sourceTable || undefined,
+        database: connectionConfig.database || undefined,
+        collection: sourceSchema.sourceTable || undefined,
+        ...((sourceSchema.sourceConfig as any) || {}),
       },
-    });
+    };
 
-    const bucket = connectionConfig.bucket;
-    const prefix = sourceSchema.sourceConfig?.prefix || sourceSchema.sourceTable || '';
-    const _filePattern = sourceSchema.sourceConfig?.filePattern || '*.json';
-
+    // Use handler's collectIncremental method for strict incremental filtering
     try {
-      // List objects in bucket
-      const listCommand = new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: prefix,
-        ContinuationToken: cursor,
-        MaxKeys: 100, // Get more objects to filter
-      });
+      const result = await handler.collectIncremental(
+        sourceSchemaWithConfig,
+        connectionConfig,
+        checkpoint,
+        {
+          limit: effectiveLimit,
+          offset,
+          cursor,
+        },
+      );
 
-      const listResponse = await s3Client.send(listCommand);
-      let objects = listResponse.Contents || [];
+      this.logger.log(
+        `Incremental collection: ${result.rows.length} rows from ${sourceSchema.sourceType} source`,
+      );
 
-      // For incremental sync, filter objects by LastModified date
-      if (incrementalColumn === 'LastModified' && lastSyncValue) {
-        const lastModifiedDate = new Date(lastSyncValue);
-        this.logger.log(`S3 incremental sync: filtering objects modified after ${lastModifiedDate.toISOString()}`);
-        objects = objects.filter(obj => obj.LastModified && obj.LastModified > lastModifiedDate);
-        this.logger.log(`S3: ${objects.length} objects after incremental filter`);
-      }
-
-      if (objects.length === 0) {
-        return { rows: [], totalRows: 0, hasMore: false };
-      }
-
-      // Get the first file that passes the filter
-      const fileKey = objects[0].Key!;
-      const getCommand = new GetObjectCommand({
-        Bucket: bucket,
-        Key: fileKey,
-      });
-
-      const getResponse = await s3Client.send(getCommand);
-      const body = await getResponse.Body?.transformToString();
-
-      if (!body) {
-        return { rows: [], totalRows: 0, hasMore: false };
-      }
-
-      // Parse based on file type
-      let rows: any[];
-      if (fileKey.endsWith('.json')) {
-        const parsed = JSON.parse(body);
-        rows = Array.isArray(parsed) ? parsed : [parsed];
-      } else if (fileKey.endsWith('.csv')) {
-        rows = this.parseCSV(body);
-      } else {
-        rows = [{ content: body }];
-      }
-      
-      // Add metadata for incremental tracking
-      const fileLastModified = objects[0].LastModified?.toISOString();
-      rows = rows.map(row => ({
-        ...row,
-        _s3_file_key: fileKey,
-        _s3_last_modified: fileLastModified,
-      }));
-
-      // Apply pagination
-      const paginatedRows = rows.slice(offset, offset + limit);
-      const hasMore =
-        paginatedRows.length === limit || listResponse.IsTruncated || offset + limit < rows.length;
-      const nextCursor = listResponse.NextContinuationToken;
-
-      return {
-        rows: paginatedRows,
-        totalRows: rows.length,
-        nextCursor,
-        hasMore,
-      };
+      return result;
     } catch (error) {
-      this.logger.error(`S3 collection failed: ${error}`);
+      this.logger.error(
+        `Incremental collection failed for ${sourceSchema.sourceType}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       throw error;
     }
   }
 
-  /**
-   * Simple CSV parser
-   */
-  private parseCSV(content: string): any[] {
-    const lines = content.split('\n').filter((line) => line.trim());
-    if (lines.length === 0) return [];
-
-    const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
-    const rows: any[] = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map((v) => v.trim().replace(/^"|"$/g, ''));
-      const row: any = {};
-      headers.forEach((header, index) => {
-        row[header] = values[index];
-      });
-      rows.push(row);
-    }
-
-    return rows;
-  }
-
-  /**
-   * Discover S3 schema by sampling files
-   */
-  private async discoverS3Schema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-  ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
-    // Get sample data first
-    const sample = await this.collectFromS3(sourceSchema, connectionConfig, 10, 0);
-
-    if (sample.rows.length === 0) {
-      return { columns: [], primaryKeys: [], estimatedRowCount: 0 };
-    }
-
-    // Infer schema from sample
-    const fieldSet = new Set<string>();
-    for (const row of sample.rows) {
-      Object.keys(row).forEach((key) => {
-        fieldSet.add(key);
-      });
-    }
-
-    const columns: ColumnInfo[] = Array.from(fieldSet).map((name) => {
-      const sampleValue = sample.rows.find((r) => r[name] !== undefined)?.[name];
-      return {
-        name,
-        dataType: typeof sampleValue || 'string',
-        nullable: true,
-      };
-    });
-
-    return {
-      columns,
-      primaryKeys: [],
-      estimatedRowCount: sample.totalRows,
-    };
-  }
-
   // ============================================================================
-  // REST API IMPLEMENTATION
+  // REMOVED: S3, API, BigQuery, Snowflake implementations
+  // Only PostgreSQL, MySQL, MongoDB are supported
+  // All collection now uses handler registry pattern
   // ============================================================================
-
-  /**
-   * Collect data from REST API with rate limiting
-   */
-  private async collectFromAPI(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    cursor?: string,
-    incrementalColumn?: string,
-    lastSyncValue?: any,
-  ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
-    const baseUrl = connectionConfig.base_url;
-    const endpoint = sourceSchema.sourceConfig?.endpoint || '';
-    const authType = connectionConfig.auth_type;
-    const _rateLimit = sourceSchema.sourceConfig?.rateLimit || 10; // requests per second
-
-    // Build URL with pagination
-    const url = new URL(endpoint, baseUrl);
-    url.searchParams.set('limit', String(limit));
-    url.searchParams.set('offset', String(offset));
-    if (cursor) {
-      url.searchParams.set('cursor', cursor);
-    }
-    
-    // Add incremental sync parameter if provided
-    if (incrementalColumn && lastSyncValue) {
-      this.logger.log(`API incremental sync: adding ${incrementalColumn}=${lastSyncValue} to request`);
-      // Common API patterns for incremental sync
-      if (incrementalColumn === 'updated_at' || incrementalColumn === 'modified_at') {
-        url.searchParams.set('since', String(lastSyncValue));
-        url.searchParams.set('updated_since', String(lastSyncValue));
-      } else {
-        url.searchParams.set(incrementalColumn, String(lastSyncValue));
-      }
-    }
-
-    // Build headers
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(sourceSchema.sourceConfig?.headers || {}),
-    };
-
-    // Add authentication
-    switch (authType) {
-      case 'bearer':
-        headers.Authorization = `Bearer ${connectionConfig.auth_token}`;
-        break;
-      case 'api_key':
-        headers['X-API-Key'] = connectionConfig.api_key;
-        break;
-      case 'basic': {
-        const credentials = Buffer.from(
-          `${connectionConfig.username}:${connectionConfig.password}`,
-        ).toString('base64');
-        headers.Authorization = `Basic ${credentials}`;
-        break;
-      }
-    }
-
-    // Execute request with retry
-    let lastError: Error | undefined;
-    for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-      try {
-        // Simple rate limiting delay
-        if (attempt > 0) {
-          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
-        }
-
-        const response = await firstValueFrom(this.httpService.get(url.toString(), { headers }));
-
-        const data = response.data;
-
-        // Handle different response formats
-        let rows: any[];
-        let totalRows: number | undefined;
-        let nextCursor: string | undefined;
-
-        if (Array.isArray(data)) {
-          rows = data;
-        } else if (data.data && Array.isArray(data.data)) {
-          rows = data.data;
-          totalRows = data.total || data.count;
-          nextCursor = data.next_cursor || data.nextCursor;
-        } else if (data.results && Array.isArray(data.results)) {
-          rows = data.results;
-          totalRows = data.total;
-          nextCursor = data.next;
-        } else {
-          rows = [data];
-        }
-
-        const hasMore = rows.length === limit || !!nextCursor;
-
-        return { rows, totalRows, nextCursor, hasMore };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        this.logger.warn(`API request attempt ${attempt + 1} failed: ${lastError.message}`);
-      }
-    }
-
-    throw lastError || new Error('API request failed after all retry attempts');
-  }
-
-  /**
-   * Discover API schema by making a sample request
-   */
-  private async discoverAPISchema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-  ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
-    const sample = await this.collectFromAPI(sourceSchema, connectionConfig, 10, 0);
-
-    if (sample.rows.length === 0) {
-      return { columns: [], primaryKeys: [] };
-    }
-
-    const fieldSet = new Set<string>();
-    for (const row of sample.rows) {
-      Object.keys(row).forEach((key) => {
-        fieldSet.add(key);
-      });
-    }
-
-    const columns: ColumnInfo[] = Array.from(fieldSet).map((name) => {
-      const sampleValue = sample.rows.find((r) => r[name] !== undefined)?.[name];
-      return {
-        name,
-        dataType: typeof sampleValue || 'string',
-        nullable: true,
-        isPrimaryKey: name === 'id',
-      };
-    });
-
-    return {
-      columns,
-      primaryKeys: columns.filter((c) => c.isPrimaryKey).map((c) => c.name),
-      estimatedRowCount: sample.totalRows,
-    };
-  }
-
-  // ============================================================================
-  // BIGQUERY IMPLEMENTATION
-  // ============================================================================
-
-  /**
-   * Collect data from BigQuery
-   */
-  private async collectFromBigQuery(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    incrementalColumn?: string,
-    lastSyncValue?: any,
-  ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
-    const bigquery = new BigQuery({
-      projectId: connectionConfig.project_id,
-      credentials: connectionConfig.credentials,
-    });
-
-    const dataset = connectionConfig.dataset;
-    const table = sourceSchema.sourceTable;
-
-    let query: string;
-    let whereClause = '';
-    
-    // Add incremental filter if provided
-    if (incrementalColumn && lastSyncValue) {
-      this.logger.log(`BigQuery incremental sync: ${incrementalColumn} > ${lastSyncValue}`);
-      // Handle timestamp vs other types
-      if (typeof lastSyncValue === 'string' && lastSyncValue.match(/^\d{4}-\d{2}-\d{2}/)) {
-        whereClause = `WHERE \`${incrementalColumn}\` > TIMESTAMP('${lastSyncValue}')`;
-      } else {
-        whereClause = `WHERE \`${incrementalColumn}\` > ${lastSyncValue}`;
-      }
-    }
-    
-    if (sourceSchema.sourceQuery) {
-      // Inject WHERE clause into custom query if needed
-      query = sourceSchema.sourceQuery;
-      if (whereClause && !query.toLowerCase().includes('where')) {
-        query = query.replace(/(\s+ORDER\s+BY|\s+LIMIT|\s*$)/i, ` ${whereClause} $1`);
-      }
-      query = `${query} LIMIT ${limit} OFFSET ${offset}`;
-    } else {
-      query = `SELECT * FROM \`${dataset}.${table}\` ${whereClause} LIMIT ${limit} OFFSET ${offset}`;
-    }
-    
-    this.logger.log(`BigQuery query: ${query}`);
-
-    const [rows] = await bigquery.query({ query });
-
-    // Get total count (with filter)
-    const countQuery = whereClause 
-      ? `SELECT COUNT(*) as count FROM \`${dataset}.${table}\` ${whereClause}`
-      : `SELECT COUNT(*) as count FROM \`${dataset}.${table}\``;
-    const [countResult] = await bigquery.query({ query: countQuery });
-    const totalRows = countResult[0]?.count;
-
-    const hasMore = rows.length === limit;
-    const nextCursor = hasMore ? String(offset + limit) : undefined;
-
-    return { rows, totalRows, nextCursor, hasMore };
-  }
-
-  /**
-   * Discover BigQuery schema
-   */
-  private async discoverBigQuerySchema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-  ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
-    const bigquery = new BigQuery({
-      projectId: connectionConfig.project_id,
-      credentials: connectionConfig.credentials,
-    });
-
-    const dataset = connectionConfig.dataset;
-    const table = sourceSchema.sourceTable;
-
-    const [metadata] = await bigquery.dataset(dataset).table(table!).getMetadata();
-
-    const columns: ColumnInfo[] = metadata.schema.fields.map((field: any) => ({
-      name: field.name,
-      dataType: field.type,
-      nullable: field.mode !== 'REQUIRED',
-    }));
-
-    const estimatedRowCount = parseInt(metadata.numRows || '0', 10);
-
-    return {
-      columns,
-      primaryKeys: [],
-      estimatedRowCount,
-    };
-  }
-
-  // ============================================================================
-  // SNOWFLAKE IMPLEMENTATION
-  // ============================================================================
-
-  /**
-   * Collect data from Snowflake
-   * Note: Uses snowflake-sdk which requires callback-based connection
-   */
-  private async collectFromSnowflake(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-    limit: number,
-    offset: number,
-    incrementalColumn?: string,
-    lastSyncValue?: any,
-  ): Promise<{ rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean }> {
-    // Dynamic import for snowflake-sdk
-    const snowflake = await import('snowflake-sdk');
-
-    return new Promise((resolve, reject) => {
-      const connection = snowflake.createConnection({
-        account: connectionConfig.account,
-        username: connectionConfig.username,
-        password: connectionConfig.password,
-        warehouse: connectionConfig.warehouse,
-        database: connectionConfig.database,
-        schema: connectionConfig.schema,
-      });
-
-      connection.connect((err, conn) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        const table = sourceSchema.sourceTable;
-        const schema = sourceSchema.sourceSchema || connectionConfig.schema;
-
-        // Build WHERE clause for incremental sync
-        let whereClause = '';
-        if (incrementalColumn && lastSyncValue) {
-          this.logger.log(`Snowflake incremental sync: ${incrementalColumn} > ${lastSyncValue}`);
-          // Handle timestamp vs other types
-          if (typeof lastSyncValue === 'string' && lastSyncValue.match(/^\d{4}-\d{2}-\d{2}/)) {
-            whereClause = `WHERE "${incrementalColumn}" > '${lastSyncValue}'::TIMESTAMP`;
-          } else {
-            whereClause = `WHERE "${incrementalColumn}" > '${lastSyncValue}'`;
-          }
-        }
-
-        let query: string;
-        if (sourceSchema.sourceQuery) {
-          query = sourceSchema.sourceQuery;
-          if (whereClause && !query.toLowerCase().includes('where')) {
-            query = query.replace(/(\s+ORDER\s+BY|\s+LIMIT|\s*$)/i, ` ${whereClause} $1`);
-          }
-          query = `${query} LIMIT ${limit} OFFSET ${offset}`;
-        } else {
-          query = `SELECT * FROM "${schema}"."${table}" ${whereClause} LIMIT ${limit} OFFSET ${offset}`;
-        }
-        
-        this.logger.log(`Snowflake query: ${query}`);
-
-        conn.execute({
-          sqlText: query,
-          complete: (err, _stmt, rows) => {
-            if (err) {
-              connection.destroy(() => {});
-              reject(err);
-              return;
-            }
-
-            const resultRows = rows || [];
-            const hasMore = resultRows.length === limit;
-            const nextCursor = hasMore ? String(offset + limit) : undefined;
-
-            connection.destroy(() => {});
-            resolve({ rows: resultRows, totalRows: undefined, nextCursor, hasMore });
-          },
-        });
-      });
-    });
-  }
-
-  /**
-   * Discover Snowflake schema
-   */
-  private async discoverSnowflakeSchema(
-    sourceSchema: PipelineSourceSchema,
-    connectionConfig: any,
-  ): Promise<{ columns: ColumnInfo[]; primaryKeys: string[]; estimatedRowCount?: number }> {
-    const snowflake = await import('snowflake-sdk');
-
-    return new Promise((resolve, reject) => {
-      const connection = snowflake.createConnection({
-        account: connectionConfig.account,
-        username: connectionConfig.username,
-        password: connectionConfig.password,
-        warehouse: connectionConfig.warehouse,
-        database: connectionConfig.database,
-        schema: connectionConfig.schema,
-      });
-
-      connection.connect((err, conn) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        const table = sourceSchema.sourceTable;
-        const schema = sourceSchema.sourceSchema || connectionConfig.schema;
-
-        const query = `
-          SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
-          FROM INFORMATION_SCHEMA.COLUMNS
-          WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}'
-          ORDER BY ORDINAL_POSITION
-        `;
-
-        conn.execute({
-          sqlText: query,
-          complete: (err, _stmt, rows) => {
-            if (err) {
-              connection.destroy(() => {});
-              reject(err);
-              return;
-            }
-
-            const columns: ColumnInfo[] = (rows || []).map((row: any) => ({
-              name: row.COLUMN_NAME,
-              dataType: row.DATA_TYPE,
-              nullable: row.IS_NULLABLE === 'YES',
-            }));
-
-            connection.destroy(() => {});
-            resolve({ columns, primaryKeys: [], estimatedRowCount: undefined });
-          },
-        });
-      });
-    });
-  }
 }

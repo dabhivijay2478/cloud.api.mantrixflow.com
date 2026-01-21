@@ -10,6 +10,7 @@ export enum TriggerType {
   MANUAL = 'manual',
   SCHEDULED = 'scheduled',
   API = 'api',
+  POLLING = 'polling',
 }
 
 export class RunPipelineDto {

@@ -2,14 +2,18 @@
  * Data Pipeline Module
  * NestJS module that wires together all data pipeline components
  *
- * Supports all data source types:
- * - PostgreSQL, MySQL (relational databases)
+ * Supports only three data source types:
+ * - PostgreSQL (relational database)
+ * - MySQL (relational database)
  * - MongoDB (document database)
- * - S3 (object storage)
- * - REST API (external APIs with rate limiting)
- * - BigQuery, Snowflake (data warehouses)
  *
  * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
+ * 
+ * Features:
+ * - Incremental sync with checkpoint tracking
+ * - PGMQ for job queuing
+ * - pg_cron for automated polling
+ * - Socket.io for real-time updates
  */
 
 import { Module, forwardRef } from '@nestjs/common';
@@ -35,14 +39,17 @@ import { EmitterService } from './services/emitter.service';
 import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 import { PipelineSchedulerService } from './services/pipeline-scheduler.service';
 import { ScheduledPipelineWorkerService } from './services/scheduled-pipeline-worker.service';
+import { PGMQService } from './services/pgmq.service';
+import { PipelinePollingService } from './services/pipeline-polling.service';
+import { SchemaValidationService } from './services/schema-validation.service';
+
+// Gateways
+import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
 
 // Repositories
 import { PipelineRepository } from './repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
 import { PipelineDestinationSchemaRepository } from './repositories/pipeline-destination-schema.repository';
-
-// Queue module
-import { PgBossModule } from '../queue/pgboss.module';
 
 @Module({
   imports: [
@@ -56,8 +63,8 @@ import { PgBossModule } from '../queue/pgboss.module';
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
 
-    // Import PgBoss module for job scheduling
-    PgBossModule,
+    // Note: PgBoss has been removed - we now use PGMQ (Postgres Message Queue)
+    // PGMQ is integrated directly via PGMQService
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
@@ -89,13 +96,23 @@ import { PgBossModule } from '../queue/pgboss.module';
     SourceSchemaService,
     DestinationSchemaService,
     PipelineLifecycleService,
-    PipelineSchedulerService, // Handles pipeline scheduling with PgBoss
+    PipelineSchedulerService, // Handles pipeline scheduling (uses database polling, not PgBoss)
     ScheduledPipelineWorkerService, // Worker for processing scheduled pipeline jobs
 
-    // Generic Data Services (support all source types)
-    CollectorService, // Collects data from sources (Postgres, MySQL, MongoDB, S3, API, BigQuery, Snowflake)
+    // Generic Data Services (support PostgreSQL, MySQL, MongoDB only)
+    CollectorService, // Collects data from sources (Postgres, MySQL, MongoDB)
     TransformerService, // Transforms data with mappings and transformations
     EmitterService, // Emits data to destinations with transformation
+
+    // PGMQ and Polling Services
+    PGMQService, // PGMQ service for job queuing
+    PipelinePollingService, // Consumes incremental sync jobs from PGMQ
+
+    // Schema Validation
+    SchemaValidationService, // Validates database schema on startup
+
+    // WebSocket Gateway
+    PipelineUpdatesGateway, // Real-time updates via Socket.io
   ],
   exports: [
     // Export services for use in other modules

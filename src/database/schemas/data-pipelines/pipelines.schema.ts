@@ -169,6 +169,9 @@ export const pipelines = pgTable('pipelines', {
   /** Last successful sync timestamp */
   lastSyncAt: timestamp('last_sync_at'),
 
+  /** Timestamp when pipeline was paused (for delta calculation on resume) */
+  pauseTimestamp: timestamp('pause_timestamp'),
+
   // ============================================================================
   // STATISTICS
   // ============================================================================

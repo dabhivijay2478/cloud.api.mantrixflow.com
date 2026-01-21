@@ -26,7 +26,7 @@ export const jobStateEnum = pgEnum('job_state', [
 /**
  * Enum for trigger type
  */
-export const triggerTypeEnum = pgEnum('trigger_type', ['manual', 'scheduled', 'api']);
+export const triggerTypeEnum = pgEnum('trigger_type', ['manual', 'scheduled', 'api', 'polling']);
 
 /**
  * Pipeline Runs Table

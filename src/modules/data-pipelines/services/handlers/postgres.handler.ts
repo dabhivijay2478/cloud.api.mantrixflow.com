@@ -222,6 +222,100 @@ export class PostgresHandler extends BaseSourceHandler {
   }
 
   /**
+   * Collect incremental data (new/changed records since checkpoint)
+   * Implements strict incremental filtering: WHERE watermarkField > lastValue
+   * 
+   * Root Fix: This ensures only new/changed records are collected, preventing re-writing all data
+   */
+  async collectIncremental(
+    sourceSchema: PipelineSourceSchemaWithConfig,
+    connectionConfig: any,
+    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string },
+    params: Omit<CollectParams, 'incrementalColumn' | 'lastSyncValue'>,
+  ): Promise<CollectResult> {
+    const pool = this.createPool(connectionConfig);
+
+    try {
+      const client = await pool.connect();
+      try {
+        const tableName = sourceSchema.config.table || sourceSchema.config.tableName || sourceSchema.sourceTable;
+        const schemaName = sourceSchema.config.schema || sourceSchema.sourceSchema || 'public';
+        const fullTableName = `"${schemaName}"."${tableName}"`;
+
+        // Build strict incremental query: WHERE watermarkField > lastValue
+        // If pauseTimestamp exists, use min(pauseTimestamp, lastValue) to catch changes during pause
+        let query = `SELECT * FROM ${fullTableName}`;
+        const queryParams: any[] = [];
+        let paramIndex = 1;
+
+        // Determine the effective last value (consider pause timestamp)
+        let effectiveLastValue: string | number = checkpoint.lastValue;
+        if (checkpoint.pauseTimestamp) {
+          // Use the earlier of pause timestamp or last sync value
+          // This ensures we catch all changes that happened during pause
+          const pauseDate = new Date(checkpoint.pauseTimestamp);
+          const lastValueDate = typeof checkpoint.lastValue === 'string' || typeof checkpoint.lastValue === 'number'
+            ? new Date(checkpoint.lastValue)
+            : new Date();
+          
+          effectiveLastValue = pauseDate < lastValueDate 
+            ? checkpoint.pauseTimestamp 
+            : (typeof checkpoint.lastValue === 'string' ? checkpoint.lastValue : String(checkpoint.lastValue));
+        }
+
+        // Strict incremental filter - only records newer than checkpoint
+        query += ` WHERE "${checkpoint.watermarkField}" > $${paramIndex}`;
+        queryParams.push(effectiveLastValue);
+        paramIndex++;
+
+        // Order by watermark field for consistent pagination
+        query += ` ORDER BY "${checkpoint.watermarkField}" ASC`;
+
+        // Add pagination
+        query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+        queryParams.push(params.limit, params.offset);
+
+        this.logger.log(
+          `Incremental query: ${query} with params: ${JSON.stringify(queryParams)}`,
+        );
+
+        const result = await client.query(query, queryParams);
+
+        // Get total count for incremental records
+        let totalRows: number | undefined;
+        try {
+          const countQuery = `SELECT COUNT(*) FROM ${fullTableName} WHERE "${checkpoint.watermarkField}" > $1`;
+          const countResult = await client.query(countQuery, [effectiveLastValue]);
+          totalRows = parseInt(countResult.rows[0].count, 10);
+        } catch {
+          // Ignore count errors
+        }
+
+        const hasMore = result.rows.length === params.limit;
+        const nextCursor = hasMore ? String(params.offset + params.limit) : undefined;
+
+        this.logger.log(
+          `Incremental sync: Found ${result.rows.length} new records (total available: ${totalRows || 'unknown'})`,
+        );
+
+        return {
+          rows: result.rows,
+          totalRows,
+          nextCursor,
+          hasMore,
+        };
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      this.logger.error(`Failed to collect incremental data: ${error}`);
+      throw error;
+    } finally {
+      await pool.end();
+    }
+  }
+
+  /**
    * Stream data using async generator for large datasets
    */
   async *collectStream(

@@ -118,7 +118,36 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
         await this.runScheduledPipeline(pipeline as DuePipeline);
       }
     } catch (error) {
-      this.logger.error(`[SCHEDULER] Error during polling: ${error}`);
+      // Extract detailed error information
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      // Check for common database errors and provide actionable fixes
+      if (errorMessage.includes('relation') && errorMessage.includes('does not exist')) {
+        this.logger.error(
+          `[SCHEDULER] Database table does not exist. Please run migrations:\n` +
+          `  cd apps/api && bun run db:migrate\n` +
+          `Error: ${errorMessage}`,
+        );
+      } else if (errorMessage.includes('column') && errorMessage.includes('does not exist')) {
+        const columnMatch = errorMessage.match(/column "([^"]+)" does not exist/);
+        const columnName = columnMatch ? columnMatch[1] : 'unknown';
+        this.logger.error(
+          `[SCHEDULER] ════════════════════════════════════════════════════════\n` +
+          `❌ Database column "${columnName}" does not exist\n` +
+          `This usually means migrations haven't been run.\n` +
+          `\nTo fix this, run:\n` +
+          `  cd apps/api\n` +
+          `  bun run db:migrate\n` +
+          `\nThis will apply all pending migrations including:\n` +
+          `  - 0016_pipeline_incremental_sync_fixes.sql (adds pause_timestamp and other columns)\n` +
+          `  - 0017_add_polling_trigger_type.sql (adds polling to trigger_type enum)\n` +
+          `\nOriginal error: ${errorMessage}\n` +
+          `════════════════════════════════════════════════════════\n`,
+        );
+      } else {
+        this.logger.error(`[SCHEDULER] Error during polling: ${errorMessage}`, errorStack);
+      }
     } finally {
       this.isProcessing = false;
     }

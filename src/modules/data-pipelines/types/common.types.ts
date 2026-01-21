@@ -5,16 +5,18 @@
 
 /**
  * Supported data source types
+ * Only PostgreSQL, MySQL, and MongoDB are supported
+ * 
+ * Guide: To add a new source:
+ * 1. Add enum value here
+ * 2. Create handler file: {source-name}.handler.ts
+ * 3. Implement ISourceHandler interface with collectIncremental method
+ * 4. Register in handler-registry.ts
  */
 export enum DataSourceType {
   POSTGRES = 'postgres',
   MYSQL = 'mysql',
   MONGODB = 'mongodb',
-  S3 = 's3',
-  API = 'api',
-  BIGQUERY = 'bigquery',
-  SNOWFLAKE = 'snowflake',
-  CSV = 'csv',
 }
 
 /**

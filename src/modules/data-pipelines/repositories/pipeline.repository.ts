@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type {
   NewPipeline,
@@ -93,27 +93,67 @@ export class PipelineRepository {
       destinationSchema?: PipelineDestinationSchema | null;
     })[]
   > {
-    const result = await this.db
-      .select({
-        pipeline: pipelines,
-        sourceSchema: pipelineSourceSchemas,
-        destinationSchema: pipelineDestinationSchemas,
-      })
-      .from(pipelines)
-      .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
-      .leftJoin(
-        pipelineDestinationSchemas,
-        eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
-      )
-      .where(and(eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)))
-      .orderBy(desc(pipelines.createdAt));
+    try {
+      const result = await this.db
+        .select({
+          pipeline: pipelines,
+          sourceSchema: pipelineSourceSchemas,
+          destinationSchema: pipelineDestinationSchemas,
+        })
+        .from(pipelines)
+        .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+        .leftJoin(
+          pipelineDestinationSchemas,
+          eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+        )
+        .where(and(eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)))
+        .orderBy(desc(pipelines.createdAt));
 
-    // Flatten the result to include schemas as properties on the pipeline
-    return result.map((row) => ({
-      ...row.pipeline,
-      sourceSchema: row.sourceSchema,
-      destinationSchema: row.destinationSchema,
-    }));
+      // Flatten the result to include schemas as properties on the pipeline
+      return result.map((row) => ({
+        ...row.pipeline,
+        sourceSchema: row.sourceSchema,
+        destinationSchema: row.destinationSchema,
+      }));
+    } catch (error: any) {
+      // Extract the actual database error from postgres-js/Drizzle
+      let actualError: string = error?.message || String(error);
+      let postgresError: any = null;
+      
+      // Try to extract the underlying PostgreSQL error
+      if (error?.cause) {
+        postgresError = error.cause;
+        actualError = postgresError?.message || postgresError?.detail || actualError;
+      } else if (error?.originalError) {
+        postgresError = error.originalError;
+        actualError = postgresError?.message || postgresError?.detail || actualError;
+      }
+      
+      // Log the full error structure for debugging
+      this.logger.error(
+        `[findByOrganization] Database error details:`,
+        JSON.stringify({
+          message: error?.message,
+          cause: error?.cause,
+          code: postgresError?.code,
+          detail: postgresError?.detail,
+          hint: postgresError?.hint,
+          table: postgresError?.table,
+          column: postgresError?.column,
+        }, null, 2),
+      );
+      
+      // Create enhanced error with actual database error
+      const enhancedError = new Error(
+        `Failed to query pipelines for organization ${organizationId}: ${actualError}${postgresError?.code ? ` [PostgreSQL Error Code: ${postgresError.code}]` : ''}`,
+      );
+      
+      if (error instanceof Error && error.stack) {
+        enhancedError.stack = error.stack;
+      }
+      
+      throw enhancedError;
+    }
   }
 
   /**
@@ -382,23 +422,74 @@ export class PipelineRepository {
     
     this.logger.debug(`[findDuePipelines] Checking for pipelines due before: ${nowIso}`);
     
-    return await this.db
-      .select()
-      .from(pipelines)
-      .where(
-        and(
-          isNull(pipelines.deletedAt),
-          // Has a schedule configured
-          sql`${pipelines.scheduleType} IS NOT NULL`,
-          sql`${pipelines.scheduleType} != 'none'`,
-          // Is due to run
-          sql`${pipelines.nextScheduledRunAt} IS NOT NULL`,
-          sql`${pipelines.nextScheduledRunAt} <= ${nowIso}::timestamp`,
-          // Not currently running - include idle, listing (incremental waiting), completed, and failed
-          sql`${pipelines.status} IN ('idle', 'listing', 'completed', 'failed')`,
-        ),
-      )
-      .orderBy(pipelines.nextScheduledRunAt);
+    try {
+      return await this.db
+        .select()
+        .from(pipelines)
+        .where(
+          and(
+            isNull(pipelines.deletedAt),
+            // Has a schedule configured
+            isNotNull(pipelines.scheduleType),
+            ne(pipelines.scheduleType, 'none'),
+            // Is due to run
+            isNotNull(pipelines.nextScheduledRunAt),
+            lte(pipelines.nextScheduledRunAt, now),
+            // Not currently running - include idle, listing (incremental waiting), completed, and failed
+            inArray(pipelines.status, ['idle', 'listing', 'completed', 'failed']),
+          ),
+        )
+        .orderBy(pipelines.nextScheduledRunAt);
+    } catch (error: any) {
+      // Extract the actual database error from postgres-js/Drizzle
+      // postgres-js errors have a 'cause' property with the actual PostgreSQL error
+      let actualError: string = error?.message || String(error);
+      let postgresError: any = null;
+      
+      // Try to extract the underlying PostgreSQL error
+      if (error?.cause) {
+        postgresError = error.cause;
+        actualError = postgresError?.message || postgresError?.detail || actualError;
+      } else if (error?.originalError) {
+        postgresError = error.originalError;
+        actualError = postgresError?.message || postgresError?.detail || actualError;
+      }
+      
+      // Log the full error structure for debugging
+      this.logger.error(
+        `[findDuePipelines] Database error details:`,
+        JSON.stringify({
+          message: error?.message,
+          cause: error?.cause,
+          code: postgresError?.code,
+          detail: postgresError?.detail,
+          hint: postgresError?.hint,
+          position: postgresError?.position,
+          internalPosition: postgresError?.internalPosition,
+          internalQuery: postgresError?.internalQuery,
+          where: postgresError?.where,
+          schema: postgresError?.schema,
+          table: postgresError?.table,
+          column: postgresError?.column,
+          dataType: postgresError?.dataType,
+          constraint: postgresError?.constraint,
+          file: postgresError?.file,
+          line: postgresError?.line,
+          routine: postgresError?.routine,
+        }, null, 2),
+      );
+      
+      // Create enhanced error with actual database error
+      const enhancedError = new Error(
+        `Failed to query due pipelines (checking for pipelines due before ${nowIso}): ${actualError}${postgresError?.code ? ` [PostgreSQL Error Code: ${postgresError.code}]` : ''}`,
+      );
+      
+      if (error instanceof Error && error.stack) {
+        enhancedError.stack = error.stack;
+      }
+      
+      throw enhancedError;
+    }
   }
 
   /**

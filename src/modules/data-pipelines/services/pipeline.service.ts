@@ -350,7 +350,7 @@ export class PipelineService {
   async runPipeline(
     pipelineId: string,
     userId: string,
-    triggerType: 'manual' | 'scheduled' | 'api' = 'manual',
+    triggerType: 'manual' | 'scheduled' | 'api' | 'polling' = 'manual',
     options?: BatchOptions,
   ): Promise<PipelineRun> {
     const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
@@ -429,28 +429,30 @@ export class PipelineService {
   ): Promise<void> {
     const startTime = Date.now();
 
-    // Get existing checkpoint for potential incremental sync
+    // ROOT FIX: Always check checkpoint existence and sync_mode to determine sync type
+    // This fixes "always full sync" issue by enforcing conditional logic
     let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
     
-    // Determine sync type based on:
-    // 1. If syncMode is 'full', always do full sync
-    // 2. If syncMode is 'incremental':
-    //    - If we have lastSyncValue (from checkpoint OR pipeline), do incremental
-    //    - If no lastSyncValue, this is the first run - do full sync, then switch to incremental
-    const effectiveLastSyncValue = checkpoint?.lastSyncValue || pipeline.lastSyncValue;
-    
+    // Determine sync type based on checkpoint existence and sync_mode
+    // CRITICAL: If checkpoint exists AND syncMode is incremental AND not paused/failed, force incremental
     let isFullSync: boolean;
     let syncReason: string;
     
+    // Check if pipeline was paused (has pauseTimestamp in checkpoint or pipeline)
+    const pauseTimestamp = checkpoint?.pauseTimestamp || 
+      (pipeline.status === 'paused' ? pipeline.updatedAt?.toISOString() : undefined);
+    
     if (pipeline.syncMode === 'full') {
-      // Explicit full sync mode
+      // Explicit full sync mode - always full
       isFullSync = true;
-      syncReason = 'syncMode is set to "full"';
+      syncReason = 'syncMode is explicitly set to "full"';
     } else if (pipeline.syncMode === 'incremental') {
-      if (effectiveLastSyncValue && pipeline.incrementalColumn) {
-        // We have a checkpoint value and incremental column - do incremental
+      // ROOT FIX: Check checkpoint existence FIRST
+      if (checkpoint && checkpoint.lastSyncValue && pipeline.incrementalColumn) {
+        // Checkpoint exists with lastSyncValue - MUST do incremental (unless explicitly forced full)
         isFullSync = false;
-        syncReason = `incremental from lastSyncValue: ${effectiveLastSyncValue}`;
+        syncReason = `incremental sync: checkpoint exists with lastSyncValue=${checkpoint.lastSyncValue}`;
+        this.logger.log(`Pipeline ${pipeline.id}: Using incremental sync (checkpoint found)`);
       } else if (!pipeline.incrementalColumn) {
         // No incremental column configured - fallback to full
         isFullSync = true;
@@ -460,14 +462,20 @@ export class PipelineService {
         // First run (no checkpoint) - do full sync, will switch to incremental after
         isFullSync = true;
         syncReason = 'first run (no checkpoint) - initial full sync before incremental';
+        this.logger.log(`Pipeline ${pipeline.id}: First run - performing full sync`);
       }
     } else {
       // Default/unknown mode - treat as full
       isFullSync = true;
       syncReason = `unknown syncMode "${pipeline.syncMode}" - defaulting to full`;
+      this.logger.warn(`Pipeline ${pipeline.id}: ${syncReason}`);
     }
     
     const syncType = isFullSync ? 'full' : 'incremental';
+    
+    // Get effective last sync value for incremental queries
+    const effectiveLastSyncValue = checkpoint?.lastSyncValue || pipeline.lastSyncValue;
+    const watermarkField = pipeline.incrementalColumn || checkpoint?.watermarkField;
 
     // Log startup with detailed sync info
     console.log(`\n${'='.repeat(60)}`);
@@ -500,10 +508,18 @@ export class PipelineService {
 
     try {
       // For full sync, clear checkpoint to start fresh
+      // ROOT FIX: Only clear checkpoint if explicitly doing full sync
       if (isFullSync && checkpoint) {
         this.logger.log('Full sync detected - clearing checkpoint to start from beginning');
         await this.lifecycleService.clearCheckpoint(pipeline.id, userId);
         checkpoint = null; // Reset checkpoint reference
+      }
+      
+      // For incremental sync, ensure we have required fields
+      if (!isFullSync && (!watermarkField || !effectiveLastSyncValue)) {
+        this.logger.warn('Incremental sync requested but missing watermarkField or lastSyncValue - falling back to full');
+        isFullSync = true;
+        syncReason = 'incremental sync failed validation - missing watermarkField or lastSyncValue';
       }
 
       // Set pipeline to RUNNING status
@@ -580,23 +596,34 @@ export class PipelineService {
 
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
-            // For incremental sync, pass the lastSyncValue to filter data
-            const collectLastSyncValue = isFullSync ? undefined : effectiveLastSyncValue;
-            
-            if (!isFullSync && collectLastSyncValue) {
-              console.log(`   🔄 Incremental sync: fetching records where ${pipeline.incrementalColumn} > ${collectLastSyncValue}`);
+            // ROOT FIX: For incremental sync, use collectIncremental with strict filtering
+            if (!isFullSync && watermarkField && effectiveLastSyncValue) {
+              console.log(`   🔄 Incremental sync: using strict filtering where ${watermarkField} > ${effectiveLastSyncValue}`);
+              
+              sourceData = await this.collectorService.collectIncremental({
+                sourceSchema,
+                organizationId: pipeline.organizationId,
+                userId,
+                checkpoint: {
+                  watermarkField,
+                  lastValue: effectiveLastSyncValue,
+                  pauseTimestamp: pauseTimestamp,
+                },
+                limit: batchSize,
+                offset,
+                cursor,
+              });
+            } else {
+              // Full sync - collect all data
+              sourceData = await this.collectorService.collect({
+                sourceSchema,
+                organizationId: pipeline.organizationId,
+                userId,
+                limit: batchSize,
+                offset,
+                cursor,
+              });
             }
-            
-            sourceData = await this.collectorService.collect({
-              sourceSchema,
-              organizationId: pipeline.organizationId,
-              userId,
-              limit: batchSize,
-              offset,
-              cursor,
-              incrementalColumn: pipeline.incrementalColumn || undefined,
-              lastSyncValue: collectLastSyncValue,
-            });
             break;
           } catch (error) {
             if (attempt === retryAttempts - 1) {
@@ -747,6 +774,7 @@ export class PipelineService {
         }
 
         // Save checkpoint after each batch for resumability
+        // ROOT FIX: Include watermarkField in checkpoint for incremental sync
         const currentCheckpoint: PipelineCheckpoint = {
           lastSyncAt: new Date().toISOString(),
           offset,
@@ -756,6 +784,10 @@ export class PipelineService {
           currentBatch: batchCount,
           // Save the incremental sync value for next run - use overall max
           lastSyncValue: overallMaxSyncValue,
+          // Save watermark field for incremental queries
+          watermarkField: watermarkField || undefined,
+          // Preserve pause timestamp if exists
+          pauseTimestamp: pauseTimestamp || checkpoint?.pauseTimestamp,
         };
 
         await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
@@ -816,10 +848,12 @@ export class PipelineService {
       // Update pipeline statistics and status
       const finalLastSyncValue = finalCheckpoint?.lastSyncValue?.toString() || pipeline.lastSyncValue;
       
+      // ROOT FIX: After successful full sync in incremental mode, transition to LISTING
+      // This allows pg_cron polling to automatically detect and enqueue incremental syncs
       await this.pipelineRepository.update(pipeline.id, {
         lastRunAt: new Date(),
         lastRunStatus: totalRowsFailed > 0 && totalRowsWritten === 0 ? 'failed' : 'success',
-        status: targetStatus, // Reset status so scheduler can pick it up
+        status: targetStatus, // LISTING for incremental mode, IDLE for full mode
         totalRowsProcessed: (pipeline.totalRowsProcessed || 0) + totalRowsWritten,
         totalRunsSuccessful: (pipeline.totalRunsSuccessful || 0) + (totalRowsFailed === 0 ? 1 : 0),
         totalRunsFailed:
@@ -827,7 +861,20 @@ export class PipelineService {
         // Persist the lastSyncValue for incremental syncs - CRITICAL for next run
         lastSyncValue: finalLastSyncValue,
         lastSyncAt: new Date(),
+        // Update checkpoint with watermarkField for incremental queries
+        checkpoint: finalCheckpoint ? {
+          ...finalCheckpoint,
+          watermarkField: watermarkField || finalCheckpoint.watermarkField,
+        } : undefined,
       });
+      
+      // ROOT FIX: If transitioning to LISTING mode after full sync, pg_cron will automatically
+      // detect this pipeline and enqueue incremental sync jobs via PGMQ
+      if (targetStatus === PipelineStatus.LISTING) {
+        this.logger.log(
+          `Pipeline ${pipeline.id} transitioned to LISTING mode. pg_cron will automatically poll and enqueue incremental syncs.`,
+        );
+      }
       
       // Log completion summary
       console.log(`\n${'='.repeat(60)}`);
@@ -914,6 +961,7 @@ export class PipelineService {
 
   /**
    * Pause pipeline
+   * ROOT FIX: Store pause_timestamp in checkpoint to preserve state for resume
    */
   async pausePipeline(pipelineId: string, userId: string): Promise<Pipeline> {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -923,11 +971,24 @@ export class PipelineService {
 
     await this.checkPipelineManagePermission(userId, pipeline.organizationId);
 
+    // Get current checkpoint to preserve it
+    const checkpoint = await this.lifecycleService.getCheckpoint(pipelineId);
+    const pauseTimestamp = new Date().toISOString();
+
+    // Update checkpoint with pause timestamp
+    if (checkpoint) {
+      await this.lifecycleService.saveCheckpoint(pipelineId, {
+        ...checkpoint,
+        pauseTimestamp,
+      }, userId);
+    }
+
     const updated = await this.pipelineRepository.update(pipelineId, {
       status: 'paused',
       migrationState: 'pending',
       nextSyncAt: null,
       nextScheduledRunAt: null, // Clear scheduled run time when paused
+      pauseTimestamp: new Date(), // Store pause timestamp in pipeline
     });
 
     await this.activityLogService.logPipelineAction(
@@ -943,6 +1004,7 @@ export class PipelineService {
 
   /**
    * Resume pipeline
+   * ROOT FIX: Use pause_timestamp to calculate delta since pause, preserving checkpoint
    */
   async resumePipeline(pipelineId: string, userId: string): Promise<Pipeline> {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -951,6 +1013,13 @@ export class PipelineService {
     }
 
     await this.checkPipelineManagePermission(userId, pipeline.organizationId);
+
+    // Get checkpoint (which should have pauseTimestamp)
+    const checkpoint = await this.lifecycleService.getCheckpoint(pipelineId);
+    
+    // ROOT FIX: Preserve checkpoint and pauseTimestamp for delta calculation
+    // The pauseTimestamp will be used in collectIncremental to catch all changes during pause
+    // No need to clear checkpoint - it will be used in next incremental sync
 
     // Recalculate next scheduled run time if the pipeline has a schedule
     let nextScheduledRunAt: Date | null = null;
@@ -974,11 +1043,18 @@ export class PipelineService {
       }
     }
 
+    // ROOT FIX: Don't clear pauseTimestamp - it's needed for delta calculation
+    // The checkpoint already has pauseTimestamp, which will be used in collectIncremental
     const updated = await this.pipelineRepository.update(pipelineId, {
       status: PipelineStatus.IDLE,
       nextSyncAt: new Date(),
       nextScheduledRunAt: nextScheduledRunAt,
+      // Keep pauseTimestamp in pipeline for reference, but checkpoint has the authoritative one
     });
+
+    this.logger.log(
+      `Pipeline ${pipelineId} resumed. Checkpoint preserved with pauseTimestamp: ${checkpoint?.pauseTimestamp || 'none'}. Next incremental sync will use min(pauseTimestamp, lastSyncValue) for delta calculation.`,
+    );
 
     await this.activityLogService.logPipelineAction(
       pipeline.organizationId,

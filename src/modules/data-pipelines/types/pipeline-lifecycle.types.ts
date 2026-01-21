@@ -58,6 +58,12 @@ export interface PipelineCheckpoint {
   /** Last synced value (for incremental column) */
   lastSyncValue?: string | number;
 
+  /** Watermark field name (incremental column) */
+  watermarkField?: string;
+
+  /** Timestamp when pipeline was paused (for delta calculation on resume) */
+  pauseTimestamp?: string;
+
   /** For cursor-based pagination */
   cursor?: string;
 

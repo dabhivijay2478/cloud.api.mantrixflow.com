@@ -1,10 +1,13 @@
 /**
  * Pipeline Scheduler Service
- * Handles scheduling and unscheduling of automated pipeline runs using PgBoss
+ * Handles scheduling and unscheduling of automated pipeline runs
+ * 
+ * Note: This service stores schedule config in the database.
+ * The ScheduledPipelineWorkerService polls for due pipelines and executes them.
+ * We no longer use PgBoss - scheduling is handled via database polling.
  */
 
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { PgBossService } from '../../queue/pgboss.service';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { PIPELINE_ACTIONS } from '../../activity-logs/constants/activity-log-types';
@@ -33,7 +36,6 @@ export class PipelineSchedulerService {
   private readonly logger = new Logger(PipelineSchedulerService.name);
 
   constructor(
-    private readonly pgBossService: PgBossService,
     private readonly activityLogService: ActivityLogService,
   ) {}
 

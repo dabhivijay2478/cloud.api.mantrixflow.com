@@ -263,6 +263,108 @@ export class MongoDBHandler extends BaseSourceHandler {
   }
 
   /**
+   * Collect incremental data (new/changed records since checkpoint)
+   * Implements strict incremental filtering: { watermarkField: { $gt: lastValue } }
+   * 
+   * Root Fix: This ensures only new/changed records are collected, preventing re-writing all data
+   */
+  async collectIncremental(
+    sourceSchema: PipelineSourceSchemaWithConfig,
+    connectionConfig: any,
+    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string },
+    params: Omit<CollectParams, 'incrementalColumn' | 'lastSyncValue'>,
+  ): Promise<CollectResult> {
+    let MongoClient: any;
+    let client: any = null;
+
+    try {
+      const mongodb = await import('mongodb');
+      MongoClient = mongodb.MongoClient;
+
+      const connectionString = this.buildConnectionString(connectionConfig);
+      const options = this.getConnectionOptions(connectionConfig);
+
+      client = new MongoClient(connectionString, options);
+      await client.connect();
+
+      const databaseName = 
+        connectionConfig.database || 
+        sourceSchema.config?.database || 
+        sourceSchema.sourceSchema;
+      
+      const collectionName = 
+        sourceSchema.config?.collection || 
+        sourceSchema.config?.table || 
+        sourceSchema.sourceTable;
+      
+      if (!databaseName) {
+        throw new Error('MongoDB database name is required.');
+      }
+      
+      if (!collectionName) {
+        throw new Error('MongoDB collection name is required.');
+      }
+
+      this.logger.log(`MongoDB incremental collect: database=${databaseName}, collection=${collectionName}`);
+
+      const db = client.db(databaseName);
+      const collection = db.collection(collectionName);
+
+      // Determine the effective last value (consider pause timestamp)
+      let effectiveLastValue: any = checkpoint.lastValue;
+      if (checkpoint.pauseTimestamp) {
+        const pauseDate = new Date(checkpoint.pauseTimestamp);
+        const lastValueDate = typeof checkpoint.lastValue === 'string' || typeof checkpoint.lastValue === 'number'
+          ? new Date(checkpoint.lastValue)
+          : new Date();
+        
+        effectiveLastValue = pauseDate < lastValueDate ? pauseDate : lastValueDate;
+      }
+
+      // Build strict incremental query: { watermarkField: { $gt: lastValue } }
+      const query: any = {
+        [checkpoint.watermarkField]: { $gt: effectiveLastValue },
+      };
+
+      this.logger.log(`Incremental query: ${JSON.stringify(query)}`);
+
+      // Execute query with skip/limit
+      const rows = await collection
+        .find(query)
+        .sort({ [checkpoint.watermarkField]: 1 }) // Sort by watermark field
+        .skip(params.offset)
+        .limit(params.limit)
+        .toArray();
+
+      // Get total count for incremental records
+      const totalRows = await collection.countDocuments(query);
+
+      // Determine next cursor (use last document's _id)
+      const lastRow = rows[rows.length - 1];
+      const nextCursor = lastRow?._id?.toString();
+      const hasMore = rows.length === params.limit;
+
+      this.logger.log(
+        `Incremental sync: Found ${rows.length} new records (total available: ${totalRows})`,
+      );
+
+      return {
+        rows,
+        totalRows,
+        nextCursor,
+        hasMore,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to collect incremental data: ${error}`);
+      throw error;
+    } finally {
+      if (client) {
+        await client.close();
+      }
+    }
+  }
+
+  /**
    * Stream data using async generator for large datasets
    */
   async *collectStream(

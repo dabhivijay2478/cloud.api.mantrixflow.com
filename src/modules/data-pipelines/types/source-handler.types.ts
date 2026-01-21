@@ -155,6 +155,22 @@ export interface ISourceHandler {
   ): Promise<CollectResult>;
 
   /**
+   * Collect incremental data (new/changed records since last checkpoint)
+   * This method MUST implement strict incremental filtering:
+   * - PostgreSQL/MySQL: WHERE watermarkField > lastValue
+   * - MongoDB: { watermarkField: { $gt: lastValue } }
+   * 
+   * @param checkpoint - Checkpoint containing lastSyncValue and watermarkField
+   * @returns Only new/changed records since checkpoint
+   */
+  collectIncremental(
+    sourceSchema: PipelineSourceSchemaWithConfig,
+    connectionConfig: any,
+    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string },
+    params: Omit<CollectParams, 'incrementalColumn' | 'lastSyncValue'>,
+  ): Promise<CollectResult>;
+
+  /**
    * Optional: Stream data using async iterable for very large datasets
    */
   collectStream?(
@@ -203,6 +219,13 @@ export abstract class BaseSourceHandler implements ISourceHandler {
     sourceSchema: PipelineSourceSchemaWithConfig,
     connectionConfig: any,
     params: CollectParams,
+  ): Promise<CollectResult>;
+
+  abstract collectIncremental(
+    sourceSchema: PipelineSourceSchemaWithConfig,
+    connectionConfig: any,
+    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string },
+    params: Omit<CollectParams, 'incrementalColumn' | 'lastSyncValue'>,
   ): Promise<CollectResult>;
 
   /**
