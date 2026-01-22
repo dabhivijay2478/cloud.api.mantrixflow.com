@@ -8,12 +8,17 @@
  * - MongoDB (document database)
  *
  * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
- * 
+ *
  * Features:
  * - Incremental sync with checkpoint tracking
- * - PGMQ for job queuing
- * - pg_cron for automated polling
+ * - PgBoss for job queuing (exactly-once delivery, cron scheduling, retries)
  * - Socket.io for real-time updates
+ *
+ * Guide: To add a new data source type:
+ * 1. Create handler in services/handlers/
+ * 2. Register in handler-registry.ts
+ * 3. Add type to DataSourceType enum
+ * 4. Add emitter/collector methods for the new type
  */
 
 import { Module, forwardRef } from '@nestjs/common';
@@ -39,9 +44,11 @@ import { EmitterService } from './services/emitter.service';
 import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 import { PipelineSchedulerService } from './services/pipeline-scheduler.service';
 import { ScheduledPipelineWorkerService } from './services/scheduled-pipeline-worker.service';
-import { PGMQService } from './services/pgmq.service';
-import { PipelinePollingService } from './services/pipeline-polling.service';
 import { SchemaValidationService } from './services/schema-validation.service';
+
+// PgBoss Services (replaces PGMQ and pg_cron)
+import { PgBossService } from './services/pgboss.service';
+import { PgBossJobHandlerService } from './services/pgboss-job-handler.service';
 
 // Gateways
 import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
@@ -62,9 +69,6 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
-
-    // Note: PgBoss has been removed - we now use PGMQ (Postgres Message Queue)
-    // PGMQ is integrated directly via PGMQService
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
@@ -96,7 +100,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     SourceSchemaService,
     DestinationSchemaService,
     PipelineLifecycleService,
-    PipelineSchedulerService, // Handles pipeline scheduling (uses database polling, not PgBoss)
+    PipelineSchedulerService, // Handles pipeline scheduling configuration
     ScheduledPipelineWorkerService, // Worker for processing scheduled pipeline jobs
 
     // Generic Data Services (support PostgreSQL, MySQL, MongoDB only)
@@ -104,9 +108,11 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     TransformerService, // Transforms data with mappings and transformations
     EmitterService, // Emits data to destinations with transformation
 
-    // PGMQ and Polling Services
-    PGMQService, // PGMQ service for job queuing
-    PipelinePollingService, // Consumes incremental sync jobs from PGMQ
+    // PgBoss Services - Job queue and handlers
+    // PgBoss provides: exactly-once delivery, cron scheduling, priority queues,
+    // automatic retries with exponential backoff, dead letter queues, pub/sub
+    PgBossService, // Core PgBoss service for job management
+    PgBossJobHandlerService, // Job handlers for sync operations
 
     // Schema Validation
     SchemaValidationService, // Validates database schema on startup
@@ -124,6 +130,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     CollectorService,
     TransformerService,
     EmitterService,
+    PgBossService,
 
     // Export repositories for advanced use cases
     PipelineRepository,

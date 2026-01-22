@@ -45,6 +45,7 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
+import { PgBossService } from './pgboss.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -79,6 +80,7 @@ export class PipelineService {
     private readonly roleService: OrganizationRoleService,
     private readonly lifecycleService: PipelineLifecycleService,
     private readonly schedulerService: PipelineSchedulerService,
+    private readonly pgBossService: PgBossService,
   ) {}
 
   /**
@@ -361,8 +363,11 @@ export class PipelineService {
 
     const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
-    // AUTHORIZATION
-    await this.checkPipelineManagePermission(userId, pipeline.organizationId);
+    // AUTHORIZATION - Skip for scheduled/polling triggers (system-initiated)
+    // These are internal operations and the pipeline creator has already been authorized
+    if (triggerType === 'manual' || triggerType === 'api') {
+      await this.checkPipelineManagePermission(userId, pipeline.organizationId);
+    }
 
     // Check pipeline status
     if (pipeline.status === 'paused') {
@@ -430,53 +435,38 @@ export class PipelineService {
   ): Promise<void> {
     const startTime = Date.now();
 
-    // ROOT FIX: Always check checkpoint existence and sync_mode to determine sync type
-    // This fixes "always full sync" issue by enforcing conditional logic
+    // ROOT FIX: Status-based sync type determination with WAL CDC (user requirement)
+    // Logic: 
+    // 1. If status is 'listing' → ALWAYS incremental using WAL CDC (no column checks)
+    // 2. If no checkpoint → FULL sync (first time only)
+    // 3. After full sync → transition to 'listing' → then always WAL-based incremental
     let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
     
-    // Determine sync type based on checkpoint existence and sync_mode
-    // CRITICAL: If checkpoint exists AND syncMode is incremental AND not paused/failed, force incremental
     let isFullSync: boolean;
     let syncReason: string;
     
-    // Check if pipeline was paused (has pauseTimestamp in checkpoint or pipeline)
-    const pauseTimestamp = checkpoint?.pauseTimestamp || 
-      (pipeline.status === 'paused' ? pipeline.updatedAt?.toISOString() : undefined);
-    
-    if (pipeline.syncMode === 'full') {
-      // Explicit full sync mode - always full
+    // USER REQUIREMENT: If status is 'listing', ALWAYS do incremental sync using WAL
+    if (pipeline.status === 'listing') {
+      // Pipeline is in CDC mode - always incremental using WAL (no column needed)
+      isFullSync = false;
+      syncReason = `WAL CDC mode (status=listing) - reading changes from transaction logs`;
+      this.logger.log(`Pipeline ${pipeline.id}: WAL-based CDC incremental sync (status=listing)`);
+    } else if (!checkpoint || (!checkpoint.walPosition && !checkpoint.lsn && !checkpoint.lastSyncValue && !checkpoint.offset)) {
+      // No checkpoint exists - first run, do full sync
       isFullSync = true;
-      syncReason = 'syncMode is explicitly set to "full"';
-    } else if (pipeline.syncMode === 'incremental') {
-      // ROOT FIX: Check checkpoint existence FIRST
-      if (checkpoint && checkpoint.lastSyncValue && pipeline.incrementalColumn) {
-        // Checkpoint exists with lastSyncValue - MUST do incremental (unless explicitly forced full)
-        isFullSync = false;
-        syncReason = `incremental sync: checkpoint exists with lastSyncValue=${checkpoint.lastSyncValue}`;
-        this.logger.log(`Pipeline ${pipeline.id}: Using incremental sync (checkpoint found)`);
-      } else if (!pipeline.incrementalColumn) {
-        // No incremental column configured - fallback to full
-        isFullSync = true;
-        syncReason = 'incremental mode but no incrementalColumn configured - falling back to full';
-        this.logger.warn(`Pipeline ${pipeline.id}: ${syncReason}`);
-      } else {
-        // First run (no checkpoint) - do full sync, will switch to incremental after
-        isFullSync = true;
-        syncReason = 'first run (no checkpoint) - initial full sync before incremental';
-        this.logger.log(`Pipeline ${pipeline.id}: First run - performing full sync`);
-      }
+      syncReason = 'first run - initial full sync (will transition to listing/WAL CDC mode after)';
+      this.logger.log(`Pipeline ${pipeline.id}: First run - performing full sync, will use WAL CDC after`);
     } else {
-      // Default/unknown mode - treat as full
-      isFullSync = true;
-      syncReason = `unknown syncMode "${pipeline.syncMode}" - defaulting to full`;
-      this.logger.warn(`Pipeline ${pipeline.id}: ${syncReason}`);
+      // Checkpoint exists but status is not 'listing' - use WAL CDC for incremental
+      isFullSync = false;
+      syncReason = `checkpoint exists (LSN=${checkpoint.walPosition || checkpoint.lsn || 'none'}) - WAL CDC incremental`;
+      this.logger.log(`Pipeline ${pipeline.id}: WAL-based incremental sync from checkpoint`);
     }
     
     const syncType = isFullSync ? 'full' : 'incremental';
     
-    // Get effective last sync value for incremental queries
-    const effectiveLastSyncValue = checkpoint?.lastSyncValue || pipeline.lastSyncValue;
-    const watermarkField = pipeline.incrementalColumn || checkpoint?.watermarkField;
+    // For WAL CDC, we use LSN position, not column values
+    const effectiveLSN = checkpoint?.walPosition || checkpoint?.lsn;
 
     // Log startup with detailed sync info
     console.log(`\n${'='.repeat(60)}`);
@@ -488,13 +478,21 @@ export class PipelineService {
     console.log(`   Sync Reason:     ${syncReason}`);
     console.log(`   Batch Size:      ${options?.batchSize || DEFAULT_BATCH_SIZE}`);
     console.log(`   Source:          ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`);
-    if (pipeline.incrementalColumn) {
-      console.log(`   Incremental Col: ${pipeline.incrementalColumn}`);
-    }
-    if (effectiveLastSyncValue && !isFullSync) {
-      console.log(`   Last Sync Value: ${effectiveLastSyncValue}`);
+    if (effectiveLSN && !isFullSync) {
+      console.log(`   WAL LSN:        ${effectiveLSN}`);
     }
     console.log(`${'='.repeat(60)}\n`);
+
+    // ROOT FIX: Publish starting status via Socket.io for real-time UI update
+    if (this.pgBossService.isReady()) {
+      await this.pgBossService.publishStatusUpdate({
+        pipelineId: pipeline.id,
+        organizationId: pipeline.organizationId,
+        status: 'running',
+        rowsProcessed: 0,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     const batchSize = Math.min(options?.batchSize || DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE);
     const retryAttempts = options?.retryAttempts || RETRY_ATTEMPTS;
@@ -516,11 +514,11 @@ export class PipelineService {
         checkpoint = null; // Reset checkpoint reference
       }
       
-      // For incremental sync, ensure we have required fields
-      if (!isFullSync && (!watermarkField || !effectiveLastSyncValue)) {
-        this.logger.warn('Incremental sync requested but missing watermarkField or lastSyncValue - falling back to full');
+      // For WAL-based incremental sync, ensure we have LSN position
+      if (!isFullSync && !effectiveLSN) {
+        this.logger.warn('WAL CDC incremental sync requested but missing LSN - falling back to full');
         isFullSync = true;
-        syncReason = 'incremental sync failed validation - missing watermarkField or lastSyncValue';
+        syncReason = 'WAL CDC incremental sync failed validation - missing LSN position';
       }
 
       // Set pipeline to RUNNING status
@@ -597,23 +595,37 @@ export class PipelineService {
 
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
-            // ROOT FIX: For incremental sync, use collectIncremental with strict filtering
-            if (!isFullSync && watermarkField && effectiveLastSyncValue) {
-              console.log(`   🔄 Incremental sync: using strict filtering where ${watermarkField} > ${effectiveLastSyncValue}`);
+            // ROOT FIX: For incremental sync, use WAL-based CDC (no column checks)
+            if (!isFullSync) {
+              // WAL-based CDC: Use LSN position from checkpoint
+              console.log(`   🔄 WAL CDC: Reading changes from transaction logs (LSN: ${effectiveLSN || 'start'})`);
               
               sourceData = await this.collectorService.collectIncremental({
                 sourceSchema,
                 organizationId: pipeline.organizationId,
                 userId,
                 checkpoint: {
-                  watermarkField,
-                  lastValue: effectiveLastSyncValue,
-                  pauseTimestamp: pauseTimestamp,
-                },
+                  walPosition: effectiveLSN,
+                  lsn: effectiveLSN,
+                  slotName: checkpoint?.slotName,
+                  publicationName: checkpoint?.publicationName,
+                } as any, // Type assertion for WAL checkpoint
                 limit: batchSize,
                 offset,
                 cursor,
               });
+              
+              // Update checkpoint with LSN from WAL CDC result
+              const resultMetadata = (sourceData as any).metadata;
+              if (resultMetadata?.lastLSN) {
+                checkpoint = {
+                  ...(checkpoint || {}),
+                  walPosition: resultMetadata.lastLSN,
+                  lsn: resultMetadata.lastLSN,
+                  slotName: resultMetadata.slotName || checkpoint?.slotName,
+                  publicationName: resultMetadata.publicationName || checkpoint?.publicationName,
+                } as PipelineCheckpoint;
+              }
             } else {
               // Full sync - collect all data
               sourceData = await this.collectorService.collect({
@@ -664,20 +676,38 @@ export class PipelineService {
           .filter((m) => m.isPrimaryKey)
           .map((m) => m.destinationColumn);
 
-        // Determine write mode based on usage intent
-        let effectiveWriteMode =
-          (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
-        let effectiveUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
+        // ROOT FIX: Determine write mode for CDC-friendly data preservation
+        // Priority: 
+        // 1. If explicit upsertKey configured in destination, use UPSERT
+        // 2. If primary keys mapped, use UPSERT (prevents duplicates on re-runs)
+        // 3. Use destination schema writeMode (append/upsert/replace)
+        // 4. Default to APPEND (never truncate by default)
+        const configuredWriteMode = destinationSchema.writeMode as 'append' | 'upsert' | 'replace' | undefined;
+        const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
+        
+        let effectiveWriteMode: 'append' | 'upsert' | 'replace' = 'append';
+        let effectiveUpsertKey: string[] | undefined = configuredUpsertKey;
 
-        // Force UPSERT if incremental and we have keys (prevents duplicates)
-        if (pipeline.syncMode === 'incremental' && primaryKeys.length > 0) {
+        // CDC FIX: Always prefer UPSERT when we have keys to prevent duplicates
+        if (configuredUpsertKey && configuredUpsertKey.length > 0) {
+          // Explicit upsert key configured - use UPSERT
+          effectiveWriteMode = 'upsert';
+          this.logger.log(`Using UPSERT mode with configured key: ${configuredUpsertKey.join(', ')}`);
+        } else if (primaryKeys.length > 0) {
+          // Primary keys from column mappings - use UPSERT for data integrity
           effectiveWriteMode = 'upsert';
           effectiveUpsertKey = primaryKeys;
+          this.logger.log(`Using UPSERT mode with primary keys: ${primaryKeys.join(', ')}`);
+        } else if (configuredWriteMode) {
+          // Use configured write mode (only REPLACE if explicitly set by user)
+          effectiveWriteMode = configuredWriteMode;
+          // WARN: replace mode truncates table - should only be explicit choice
+          if (configuredWriteMode === 'replace' && batchCount > 1) {
+            // Don't truncate on subsequent batches
+            effectiveWriteMode = 'append';
+          }
         }
-        // Force REPLACE if full sync (fresh start) - only on first batch
-        else if (pipeline.syncMode === 'full' && batchCount === 1) {
-          effectiveWriteMode = 'replace';
-        }
+        // else: default remains 'append' - safest default for data preservation
 
         console.log(
           `   📤 Writing ${sourceData.rows.length.toLocaleString()} rows (mode: ${effectiveWriteMode})...`,
@@ -711,6 +741,18 @@ export class PipelineService {
             );
             console.log(`   📈 PROGRESS: ${totalRowsWritten.toLocaleString()} rows written so far`);
 
+            // ROOT FIX: Publish real-time progress update via Socket.io
+            if (this.pgBossService.isReady()) {
+              await this.pgBossService.publishStatusUpdate({
+                pipelineId: pipeline.id,
+                organizationId: pipeline.organizationId,
+                status: 'running',
+                rowsProcessed: totalRowsWritten,
+                newRowsCount: writeResult.rowsWritten,
+                timestamp: new Date().toISOString(),
+              });
+            }
+
             if (writeResult.errors && writeResult.errors.length > 0) {
               console.log(`   ⚠️  ${writeResult.errors.length} errors in batch`);
               allErrors.push(...writeResult.errors);
@@ -729,56 +771,34 @@ export class PipelineService {
         }
 
         // Update pagination
-        hasMore = sourceData.hasMore || sourceData.rows.length === batchSize;
+        // ROOT FIX: Correct pagination logic - ensure all records are processed
+        // hasMore = true if collector says there's more OR we got a full batch (might be more)
+        // hasMore = false if we got partial batch (< batchSize) AND collector says no more
+        hasMore = sourceData.hasMore === true || sourceData.rows.length === batchSize;
         offset += sourceData.rows.length; // Use actual rows collected, not batchSize
         cursor = sourceData.nextCursor;
         
         // Debug: log pagination state
-        console.log(`   🔄 Pagination: hasMore=${hasMore}, nextOffset=${offset}, cursor=${cursor || 'none'}, rowsThisBatch=${sourceData.rows.length}, batchSize=${batchSize}`);
+        console.log(`   🔄 Pagination: hasMore=${hasMore}, nextOffset=${offset}, cursor=${cursor || 'none'}, rowsThisBatch=${sourceData.rows.length}, batchSize=${batchSize}, sourceHasMore=${sourceData.hasMore}`);
+        
+        // Safety check: If we got fewer rows than batchSize, we've likely reached the end
+        // But trust the collector's hasMore flag if it's explicitly set
+        if (sourceData.rows.length < batchSize && sourceData.hasMore !== true) {
+          hasMore = false;
+          console.log(`   ✓ End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`);
+        }
 
-        // Extract the max value of the incremental column from this batch
-        // This is needed for BOTH full and incremental modes:
-        // - Full mode: will become the starting point for next incremental run
-        // - Incremental mode: updates the checkpoint for subsequent runs
-        let batchMaxSyncValue: string | number | undefined;
-        if (pipeline.incrementalColumn && sourceData.rows.length > 0) {
-          const incrementalValues = sourceData.rows
-            .map((row: any) => row[pipeline.incrementalColumn!])
-            .filter((val: any) => val !== null && val !== undefined);
-          if (incrementalValues.length > 0) {
-            // Get the max value - works for both dates and numbers
-            batchMaxSyncValue = incrementalValues.reduce((max: any, val: any) => {
-              // Handle date strings, timestamps, and numbers
-              if (val && typeof val === 'object' && val.constructor === Date) {
-                return max && typeof max === 'object' && max.constructor === Date 
-                  ? (val > max ? val : max) 
-                  : val;
-              }
-              return val > max ? val : max;
-            });
-            // Convert Date to ISO string for storage
-            if (batchMaxSyncValue && typeof batchMaxSyncValue === 'object' && (batchMaxSyncValue as any).constructor === Date) {
-              batchMaxSyncValue = (batchMaxSyncValue as Date).toISOString();
-            }
-          }
-        }
+        // ROOT FIX: For WAL-based CDC, track LSN position instead of column values
+        // Extract LSN from WAL CDC result (if available)
+        const resultMetadata = (sourceData as any).metadata;
+        const batchLSN = resultMetadata?.lastLSN || sourceData.nextCursor;
         
-        // Track the overall max sync value across all batches
-        // Compare with existing checkpoint value to ensure we always have the highest
-        let overallMaxSyncValue: string | number | undefined = batchMaxSyncValue;
-        if (checkpoint?.lastSyncValue && batchMaxSyncValue) {
-          // Keep the higher value
-          if (String(checkpoint.lastSyncValue) > String(batchMaxSyncValue)) {
-            overallMaxSyncValue = checkpoint.lastSyncValue;
-          }
-        }
-        
-        if (batchMaxSyncValue) {
-          console.log(`   📌 Batch max ${pipeline.incrementalColumn}: ${batchMaxSyncValue}`);
+        if (batchLSN && !isFullSync) {
+          console.log(`   📌 WAL CDC: Processed up to LSN ${batchLSN}`);
         }
 
         // Save checkpoint after each batch for resumability
-        // ROOT FIX: Include watermarkField in checkpoint for incremental sync
+        // ROOT FIX: For WAL CDC, store LSN position instead of column values
         const currentCheckpoint: PipelineCheckpoint = {
           lastSyncAt: new Date().toISOString(),
           offset,
@@ -786,12 +806,12 @@ export class PipelineService {
           rowsProcessed: totalRowsWritten,
           totalRows: estimatedTotalRows,
           currentBatch: batchCount,
-          // Save the incremental sync value for next run - use overall max
-          lastSyncValue: overallMaxSyncValue,
-          // Save watermark field for incremental queries
-          watermarkField: watermarkField || undefined,
-          // Preserve pause timestamp if exists
-          pauseTimestamp: pauseTimestamp || checkpoint?.pauseTimestamp,
+          // WAL-based CDC: Store LSN position (not column values)
+          walPosition: batchLSN || checkpoint?.walPosition || checkpoint?.lsn,
+          lsn: batchLSN || checkpoint?.walPosition || checkpoint?.lsn,
+          // Store slot and publication names for WAL CDC
+          slotName: resultMetadata?.slotName || checkpoint?.slotName,
+          publicationName: resultMetadata?.publicationName || checkpoint?.publicationName,
         };
 
         await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
@@ -839,37 +859,46 @@ export class PipelineService {
         durationSeconds,
       });
 
-      // Get the final lastSyncValue from checkpoint
+      // Get the final checkpoint
       const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
       
-      // Determine target status after completion
-      // For incremental sync mode, transition to LISTING mode (polling)
-      // For full sync mode, go to IDLE (ready for manual run or scheduling)
-      const targetStatus = pipeline.syncMode === 'incremental' 
-        ? PipelineStatus.LISTING 
-        : PipelineStatus.IDLE;
-
-      // Update pipeline statistics and status
-      const finalLastSyncValue = finalCheckpoint?.lastSyncValue?.toString() || pipeline.lastSyncValue;
+      // ROOT FIX: User requirement - After FIRST full sync, ALWAYS transition to LISTING
+      // Once in LISTING mode, all subsequent runs use WAL-based incremental CDC
+      // No column configuration needed - uses PostgreSQL transaction logs
+      const targetStatus = isFullSync 
+        ? PipelineStatus.LISTING  // After full sync → listing mode → always WAL CDC
+        : PipelineStatus.LISTING;  // Keep in listing mode for WAL CDC
       
-      // ROOT FIX: After successful full sync in incremental mode, transition to LISTING
-      // This allows pg_cron polling to automatically detect and enqueue incremental syncs
+      // ROOT FIX: Update totalRowsProcessed - cumulative across all runs
+      const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;
+      
+      // Get final LSN from checkpoint (WAL-based CDC)
+      const finalLSN = finalCheckpoint?.walPosition || finalCheckpoint?.lsn || checkpoint?.walPosition || checkpoint?.lsn;
+      
+      // ROOT FIX: After successful sync, transition to LISTING for WAL CDC
       await this.pipelineRepository.update(pipeline.id, {
         lastRunAt: new Date(),
         lastRunStatus: totalRowsFailed > 0 && totalRowsWritten === 0 ? 'failed' : 'success',
-        status: targetStatus, // LISTING for incremental mode, IDLE for full mode
-        totalRowsProcessed: (pipeline.totalRowsProcessed || 0) + totalRowsWritten,
+        status: targetStatus, // LISTING for WAL CDC
+        totalRowsProcessed: newTotalRowsProcessed,
         totalRunsSuccessful: (pipeline.totalRunsSuccessful || 0) + (totalRowsFailed === 0 ? 1 : 0),
         totalRunsFailed:
           (pipeline.totalRunsFailed || 0) + (totalRowsFailed > 0 && totalRowsWritten === 0 ? 1 : 0),
-        // Persist the lastSyncValue for incremental syncs - CRITICAL for next run
-        lastSyncValue: finalLastSyncValue,
         lastSyncAt: new Date(),
-        // Update checkpoint with watermarkField for incremental queries
+        // ROOT FIX: Store WAL LSN position in checkpoint (not column values)
         checkpoint: finalCheckpoint ? {
           ...finalCheckpoint,
-          watermarkField: watermarkField || finalCheckpoint.watermarkField,
-        } : undefined,
+          walPosition: finalLSN || finalCheckpoint.walPosition,
+          lsn: finalLSN || finalCheckpoint.lsn,
+          slotName: finalCheckpoint.slotName || checkpoint?.slotName,
+          publicationName: finalCheckpoint.publicationName || checkpoint?.publicationName,
+        } : (finalLSN ? {
+          walPosition: finalLSN,
+          lsn: finalLSN,
+          offset: 0,
+          slotName: checkpoint?.slotName,
+          publicationName: checkpoint?.publicationName,
+        } : undefined),
       });
       
       // ROOT FIX: If transitioning to LISTING mode after full sync, pg_cron will automatically
@@ -891,9 +920,9 @@ export class PipelineService {
       console.log(`   Rows Failed:     ${totalRowsFailed.toLocaleString()}`);
       console.log(`   Duration:        ${durationSeconds}s`);
       console.log(`   Final Status:    ${targetStatus}`);
-      if (finalLastSyncValue && pipeline.incrementalColumn) {
-        console.log(`   Last Sync Value: ${finalLastSyncValue} (${pipeline.incrementalColumn})`);
-        console.log(`   ➡️  Next incremental run will sync records where ${pipeline.incrementalColumn} > ${finalLastSyncValue}`);
+      if (finalLSN) {
+        console.log(`   WAL LSN Position: ${finalLSN}`);
+        console.log(`   ➡️  Next incremental run will read changes from WAL starting at LSN ${finalLSN}`);
       }
       console.log(`${'='.repeat(60)}\n`);
       
@@ -915,13 +944,26 @@ export class PipelineService {
           rowsFailed: totalRowsFailed,
           durationSeconds,
           finalStatus: targetStatus,
-          lastSyncValue: finalLastSyncValue,
+          walLSN: finalLSN,
         },
       );
 
       this.logger.log(
         `Pipeline ${pipeline.id} run ${runId} completed: ${totalRowsWritten} rows written in ${durationSeconds}s`,
       );
+
+      // ROOT FIX: Publish completion status via Socket.io for real-time UI update
+      // Use newTotalRowsProcessed to show cumulative total in UI
+      if (this.pgBossService.isReady()) {
+        await this.pgBossService.publishStatusUpdate({
+          pipelineId: pipeline.id,
+          organizationId: pipeline.organizationId,
+          status: targetStatus,
+          rowsProcessed: newTotalRowsProcessed, // Cumulative total, not just this run
+          newRowsCount: totalRowsWritten, // New rows in this run
+          timestamp: new Date().toISOString(),
+        });
+      }
     } catch (error) {
       const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -959,6 +1001,19 @@ export class PipelineService {
       );
 
       this.logger.error(`Pipeline ${pipeline.id} run ${runId} failed: ${errorMessage}`);
+
+      // ROOT FIX: Publish failure status via Socket.io for real-time UI update
+      if (this.pgBossService.isReady()) {
+        await this.pgBossService.publishStatusUpdate({
+          pipelineId: pipeline.id,
+          organizationId: pipeline.organizationId,
+          status: 'failed',
+          rowsProcessed: totalRowsWritten,
+          error: errorMessage,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       throw error;
     }
   }
@@ -1532,4 +1587,5 @@ export class PipelineService {
       throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can manage pipelines');
     }
   }
+
 }

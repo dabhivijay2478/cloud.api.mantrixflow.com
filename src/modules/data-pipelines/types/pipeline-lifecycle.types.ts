@@ -72,6 +72,15 @@ export interface PipelineCheckpoint {
 
   /** For PostgreSQL WAL-based CDC */
   walPosition?: string;
+  
+  /** LSN (Log Sequence Number) - alias for walPosition */
+  lsn?: string;
+  
+  /** Replication slot name for WAL CDC */
+  slotName?: string;
+  
+  /** Publication name for WAL CDC */
+  publicationName?: string;
 
   /** For MongoDB change streams */
   changeStreamToken?: string;

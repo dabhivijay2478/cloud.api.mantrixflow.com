@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type {
   NewPipeline,
@@ -436,7 +436,15 @@ export class PipelineRepository {
             isNotNull(pipelines.nextScheduledRunAt),
             lte(pipelines.nextScheduledRunAt, now),
             // Not currently running - include idle, listing (incremental waiting), completed, and failed
-            inArray(pipelines.status, ['idle', 'listing', 'completed', 'failed']),
+            // ROOT FIX: Also allow 'running' status if it's been running for more than 1 hour (stuck pipeline recovery)
+            or(
+              inArray(pipelines.status, ['idle', 'listing', 'completed', 'failed']),
+              // Allow stuck 'running' pipelines that haven't updated in 1 hour
+              and(
+                eq(pipelines.status, 'running'),
+                sql`${pipelines.updatedAt} < NOW() - INTERVAL '1 hour'`,
+              ),
+            ),
           ),
         )
         .orderBy(pipelines.nextScheduledRunAt);
@@ -552,5 +560,194 @@ export class PipelineRepository {
       .where(eq(pipelineRuns.pipelineId, pipelineId));
 
     return Number(result[0]?.count || 0);
+  }
+
+  // ============================================================================
+  // POLLING/CDC SUPPORT METHODS (PgBoss Integration)
+  // ============================================================================
+
+  /**
+   * Find all pipelines that are eligible for polling (CDC)
+   * Returns pipelines with:
+   * - status = 'listing' (waiting for incremental sync)
+   * - syncMode = 'incremental'
+   * - Has an incremental column configured
+   * - Not soft deleted
+   */
+  /**
+   * Find pipelines stuck in 'running' status for more than 1 hour
+   * ROOT FIX: Automatically recover stuck pipelines
+   */
+  async findStuckPipelines(): Promise<Pipeline[]> {
+    try {
+      const result = await this.db
+        .select()
+        .from(pipelines)
+        .where(
+          and(
+            isNull(pipelines.deletedAt),
+            eq(pipelines.status, 'running'),
+            // Stuck if updated more than 1 hour ago
+            sql`${pipelines.updatedAt} < NOW() - INTERVAL '1 hour'`,
+          ),
+        );
+
+      this.logger.debug(`[findStuckPipelines] Found ${result.length} stuck pipeline(s)`);
+      return result;
+    } catch (error) {
+      this.logger.error(`[findStuckPipelines] Error: ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * Find active pipelines for CDC polling
+   * ROOT FIX: User requirement - only poll pipelines in 'listing' status
+   * After first full sync, pipeline transitions to 'listing' → then always incremental
+   * No need to check incrementalColumn - status-based detection only
+   */
+  async findActivePipelinesForPolling(): Promise<Pipeline[]> {
+    try {
+      const result = await this.db
+        .select()
+        .from(pipelines)
+        .where(
+          and(
+            isNull(pipelines.deletedAt),
+            // USER REQUIREMENT: Only poll pipelines in 'listing' status (CDC mode)
+            eq(pipelines.status, 'listing'),
+          ),
+        );
+
+      this.logger.debug(`[findActivePipelinesForPolling] Found ${result.length} active pipeline(s) for polling`);
+      return result;
+    } catch (error) {
+      this.logger.error(`[findActivePipelinesForPolling] Error: ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * Find pipeline by ID with source and destination schemas for CDC operations
+   * Used for delta checks and incremental sync operations
+   * NOTE: Different from findByIdWithSchemas which returns structured object
+   */
+  async findByIdForCDC(
+    id: string,
+  ): Promise<
+    | (Pipeline & {
+        sourceSchema: PipelineSourceSchema | null;
+        destinationSchema: PipelineDestinationSchema | null;
+      })
+    | null
+  > {
+    try {
+      const result = await this.db
+        .select({
+          pipeline: pipelines,
+          sourceSchema: pipelineSourceSchemas,
+          destinationSchema: pipelineDestinationSchemas,
+        })
+        .from(pipelines)
+        .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+        .leftJoin(
+          pipelineDestinationSchemas,
+          eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+        )
+        .where(and(eq(pipelines.id, id), isNull(pipelines.deletedAt)))
+        .limit(1);
+
+      if (result.length === 0) {
+        return null;
+      }
+
+      const row = result[0];
+      return {
+        ...row.pipeline,
+        sourceSchema: row.sourceSchema,
+        destinationSchema: row.destinationSchema,
+      };
+    } catch (error) {
+      this.logger.error(`[findByIdForCDC] Error finding pipeline ${id}: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Update pipeline checkpoint atomically
+   * ROOT FIX: Ensures checkpoint is always updated in a transaction
+   */
+  async updateCheckpointAtomic(
+    pipelineId: string,
+    checkpoint: {
+      watermarkField: string;
+      lastSyncValue: string | number;
+      lastSyncAt: string;
+      rowsProcessed: number;
+    },
+  ): Promise<void> {
+    try {
+      await this.db
+        .update(pipelines)
+        .set({
+          checkpoint: checkpoint,
+          lastSyncValue: String(checkpoint.lastSyncValue),
+          lastSyncAt: new Date(checkpoint.lastSyncAt),
+          updatedAt: new Date(),
+        })
+        .where(eq(pipelines.id, pipelineId));
+
+      this.logger.debug(
+        `[updateCheckpointAtomic] Updated checkpoint for pipeline ${pipelineId}: ${checkpoint.watermarkField} = ${checkpoint.lastSyncValue}`,
+      );
+    } catch (error) {
+      this.logger.error(`[updateCheckpointAtomic] Error updating checkpoint: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Update pipeline status atomically with validation
+   * ROOT FIX: Ensures status transitions are valid and atomic
+   */
+  async updateStatusAtomic(
+    pipelineId: string,
+    newStatus: 'idle' | 'initializing' | 'running' | 'listing' | 'listening' | 'paused' | 'failed' | 'completed',
+    allowedFromStatuses: ('idle' | 'initializing' | 'running' | 'listing' | 'listening' | 'paused' | 'failed' | 'completed')[],
+  ): Promise<boolean> {
+    try {
+      await this.db
+        .update(pipelines)
+        .set({
+          status: newStatus,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(pipelines.id, pipelineId),
+            inArray(pipelines.status, allowedFromStatuses),
+          ),
+        );
+
+      // Drizzle doesn't directly return rowCount, check if update was successful
+      // by verifying the new status
+      const updated = await this.findById(pipelineId);
+      const success = updated?.status === newStatus;
+
+      if (success) {
+        this.logger.debug(
+          `[updateStatusAtomic] Pipeline ${pipelineId} status changed to ${newStatus}`,
+        );
+      } else {
+        this.logger.warn(
+          `[updateStatusAtomic] Pipeline ${pipelineId} status update failed - not in allowed state`,
+        );
+      }
+
+      return success;
+    } catch (error) {
+      this.logger.error(`[updateStatusAtomic] Error updating status: ${error}`);
+      throw error;
+    }
   }
 }

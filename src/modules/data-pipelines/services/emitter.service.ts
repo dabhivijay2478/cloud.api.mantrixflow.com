@@ -1,19 +1,25 @@
 /**
  * Emitter Service
  * Generic service for emitting/writing data to any destination type
- * Supports: PostgreSQL, MySQL, MongoDB, S3, REST API, BigQuery, Snowflake
+ * Supports: PostgreSQL, MySQL, MongoDB ONLY
  *
  * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
  * Transformation happens during emission for efficiency
+ *
+ * ROOT FIX: Uses UPSERT mode by default to prevent data loss on re-sync
+ *
+ * Guide: To add a new destination type:
+ * 1. Add emitTo{Type} method
+ * 2. Add validate{Type}Schema method (optional)
+ * 3. Add create{Type}Table method (optional)
+ * 4. Add {type}TableExists method
+ * 5. Update switch cases in emit(), validateSchema(), createTable(), tableExists()
  */
 
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
 import { Pool } from 'pg';
 import * as mysql from 'mysql2/promise';
 import { MongoClient } from 'mongodb';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { BigQuery } from '@google-cloud/bigquery';
 import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { TransformerService } from './transformer.service';
@@ -26,15 +32,12 @@ import type {
   PipelineError,
 } from '../types/common.types';
 import type { PipelineDestinationSchema } from '../../../database/schemas';
-import { firstValueFrom } from 'rxjs';
 
 /**
  * Batch size for bulk operations
  * Default is 500 for balanced performance/memory
  */
 const DEFAULT_BATCH_SIZE = 500;
-const RETRY_ATTEMPTS = 3;
-const RETRY_DELAY_MS = 1000;
 
 @Injectable()
 export class EmitterService {
@@ -44,14 +47,14 @@ export class EmitterService {
     private readonly connectionService: ConnectionService,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly transformerService: TransformerService,
-
-    private readonly httpService: HttpService,
   ) {}
 
   /**
    * Write data to destination
    * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
    * Transformation happens during emission
+   *
+   * ROOT FIX: Defaults to 'upsert' mode when upsertKey is available to prevent data loss
    */
   async emit(options: {
     destinationSchema: PipelineDestinationSchema;
@@ -87,6 +90,13 @@ export class EmitterService {
       throw new BadRequestException(`Data source ${destinationSchema.dataSourceId} not found`);
     }
 
+    // Validate data source type (only PostgreSQL, MySQL, MongoDB supported)
+    if (!['postgres', 'mysql', 'mongodb'].includes(dataSource.sourceType)) {
+      throw new BadRequestException(
+        `Unsupported destination type: ${dataSource.sourceType}. Only postgres, mysql, mongodb are supported.`,
+      );
+    }
+
     const connectionConfig = await this.connectionService.getDecryptedConnection(
       organizationId,
       destinationSchema.dataSourceId,
@@ -100,7 +110,6 @@ export class EmitterService {
         : (destinationSchema.columnMappings as ColumnMapping[]) || [];
 
     // Auto-enhance mappings for MongoDB ObjectId -> UUID conversion if not already enhanced
-    // This ensures _id fields are automatically converted to UUIDs even if not set in mapping
     effectiveMappings = this.transformerService.enhanceColumnMappings(effectiveMappings, rows);
 
     const transformedRows = await this.transformerService.transform(
@@ -108,6 +117,16 @@ export class EmitterService {
       effectiveMappings,
       transformations.length > 0 ? transformations : undefined,
     );
+
+    // ROOT FIX: Prefer upsert mode to prevent data loss
+    // If upsertKey is provided, always use upsert mode unless explicitly replace
+    let effectiveWriteMode = writeMode;
+    const effectiveUpsertKey = upsertKey || (destinationSchema.upsertKey as string[]);
+
+    if (effectiveUpsertKey?.length > 0 && writeMode === 'append') {
+      effectiveWriteMode = 'upsert';
+      this.logger.log(`Using UPSERT mode (upsertKey provided: ${effectiveUpsertKey.join(', ')})`);
+    }
 
     // STEP 2: Emit transformed data to destination in batches
     let writeResult: WriteResult;
@@ -119,9 +138,9 @@ export class EmitterService {
             destinationSchema,
             connectionConfig,
             transformedRows,
-            writeMode,
-            upsertKey || (destinationSchema.upsertKey as string[]),
-            effectiveMappings, // Pass enhanced mappings to ensure table schema matches
+            effectiveWriteMode,
+            effectiveUpsertKey,
+            effectiveMappings,
           );
           break;
         case 'mysql':
@@ -129,8 +148,8 @@ export class EmitterService {
             destinationSchema,
             connectionConfig,
             transformedRows,
-            writeMode,
-            upsertKey || (destinationSchema.upsertKey as string[]),
+            effectiveWriteMode,
+            effectiveUpsertKey,
           );
           break;
         case 'mongodb':
@@ -138,44 +157,16 @@ export class EmitterService {
             destinationSchema,
             connectionConfig,
             transformedRows,
-            writeMode,
-            upsertKey || (destinationSchema.upsertKey as string[]),
-          );
-          break;
-        case 's3':
-          writeResult = await this.emitToS3(
-            destinationSchema,
-            connectionConfig,
-            transformedRows,
-            writeMode,
-          );
-          break;
-        case 'api':
-          writeResult = await this.emitToAPI(destinationSchema, connectionConfig, transformedRows);
-          break;
-        case 'bigquery':
-          writeResult = await this.emitToBigQuery(
-            destinationSchema,
-            connectionConfig,
-            transformedRows,
-            writeMode,
-          );
-          break;
-        case 'snowflake':
-          writeResult = await this.emitToSnowflake(
-            destinationSchema,
-            connectionConfig,
-            transformedRows,
-            writeMode,
+            effectiveWriteMode,
+            effectiveUpsertKey,
           );
           break;
         default:
           throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
       }
 
-      // Log successful emission
       this.logger.log(
-        `Emitted ${writeResult.rowsWritten} rows to ${dataSource.sourceType} destination`,
+        `Emitted ${writeResult.rowsWritten} rows to ${dataSource.sourceType} destination (mode: ${effectiveWriteMode})`,
       );
 
       return writeResult;
@@ -226,14 +217,6 @@ export class EmitterService {
         return this.validateMySQLSchema(destinationSchema, connectionConfig, columnMappings);
       case 'mongodb':
         return { valid: true, errors: [], warnings: ['MongoDB schema validation not required'] };
-      case 's3':
-        return { valid: true, errors: [], warnings: ['S3 schema validation not required'] };
-      case 'api':
-        return { valid: true, errors: [], warnings: ['API schema validation not required'] };
-      case 'bigquery':
-        return this.validateBigQuerySchema(destinationSchema, connectionConfig, columnMappings);
-      case 'snowflake':
-        return this.validateSnowflakeSchema(destinationSchema, connectionConfig, columnMappings);
       default:
         return {
           valid: false,
@@ -268,36 +251,13 @@ export class EmitterService {
       userId,
     );
 
-    // If table exists, check if migration is needed for UUID transformation
-    // This will drop and recreate the table if bigint columns need UUID conversion
-    if (destinationSchema.destinationTableExists && dataSource.sourceType === 'postgres') {
-      const migrationResult = await this.migratePostgresColumns(
-        destinationSchema,
-        connectionConfig,
-        columnMappings,
-        true, // Drop and recreate if bigint needs UUID conversion
-      );
-      if (migrationResult.needsRecreate) {
-        this.logger.log(`Table will be recreated: ${migrationResult.reason}`);
-        // Table was dropped, so update the flag
-        destinationSchema.destinationTableExists = false;
-      }
-    }
-
     switch (dataSource.sourceType) {
       case 'postgres':
         return this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
       case 'mysql':
         return this.createMySQLTable(destinationSchema, connectionConfig, columnMappings);
-      case 'bigquery':
-        return this.createBigQueryTable(destinationSchema, connectionConfig, columnMappings);
-      case 'snowflake':
-        return this.createSnowflakeTable(destinationSchema, connectionConfig, columnMappings);
       case 'mongodb':
         // MongoDB doesn't need table creation
-        return { created: false, tableName: destinationSchema.destinationTable };
-      case 's3':
-      case 'api':
         return { created: false, tableName: destinationSchema.destinationTable };
       default:
         throw new BadRequestException(`Unsupported destination type: ${dataSource.sourceType}`);
@@ -334,14 +294,8 @@ export class EmitterService {
         return this.postgresTableExists(destinationSchema, connectionConfig);
       case 'mysql':
         return this.mysqlTableExists(destinationSchema, connectionConfig);
-      case 'bigquery':
-        return this.bigQueryTableExists(destinationSchema, connectionConfig);
-      case 'snowflake':
-        return this.snowflakeTableExists(destinationSchema, connectionConfig);
       case 'mongodb':
-      case 's3':
-      case 'api':
-        return true; // These don't require table existence checks
+        return true; // MongoDB doesn't require table existence checks
       default:
         return false;
     }
@@ -390,45 +344,11 @@ export class EmitterService {
         const tableName = destinationSchema.destinationTable;
         const fullTableName = `"${schemaName}"."${tableName}"`;
 
-        // Check if table exists and validate column types match enhanced mappings
-        // This ensures UUID columns are created if objectIdToUuid transformation is detected
-        if (columnMappings && columnMappings.length > 0) {
-          const tableExists = await this.postgresTableExists(destinationSchema, connectionConfig);
-          if (!tableExists) {
-            // Table doesn't exist, create it with enhanced mappings
-            this.logger.log(`Table ${fullTableName} does not exist, creating with enhanced column mappings`);
-            await this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
-          } else {
-            // Table exists - check if column types match (especially for UUID)
-            const checkQuery = `
-              SELECT column_name, data_type
-              FROM information_schema.columns
-              WHERE table_schema = $1 AND table_name = $2
-            `;
-            const checkResult = await client.query(checkQuery, [schemaName, tableName]);
-            const existingColumns = new Map(
-              checkResult.rows.map((r) => [r.column_name, r.data_type]),
-            );
-
-            // Check if any column needs UUID but has bigint
-            for (const mapping of columnMappings) {
-              if (
-                mapping.transformation === 'objectIdToUuid' &&
-                existingColumns.has(mapping.destinationColumn)
-              ) {
-                const currentType = existingColumns.get(mapping.destinationColumn);
-                if (currentType === 'bigint' || currentType === 'integer' || currentType === 'bigserial') {
-                  // Drop and recreate table with UUID column
-                  this.logger.log(
-                    `Table ${fullTableName} has ${currentType} column ${mapping.destinationColumn} but needs UUID. Dropping and recreating...`,
-                  );
-                  await client.query(`DROP TABLE IF EXISTS ${fullTableName} CASCADE`);
-                  await this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
-                  break; // Table recreated, exit loop
-                }
-              }
-            }
-          }
+        // Check if table exists and create if needed
+        const tableExists = await this.postgresTableExists(destinationSchema, connectionConfig);
+        if (!tableExists && columnMappings && columnMappings.length > 0) {
+          this.logger.log(`Table ${fullTableName} does not exist, creating...`);
+          await this.createPostgresTable(destinationSchema, connectionConfig, columnMappings);
         }
 
         // Process in batches
@@ -438,8 +358,10 @@ export class EmitterService {
           try {
             await client.query('BEGIN');
 
+            // Handle replace mode - truncate on first batch only
             if (writeMode === 'replace' && i === 0) {
               await client.query(`TRUNCATE ${fullTableName}`);
+              this.logger.log(`Truncated table ${fullTableName} for replace mode`);
             }
 
             for (const row of batch) {
@@ -459,18 +381,25 @@ export class EmitterService {
               const columnList = columns.map((c) => `"${c}"`).join(', ');
 
               if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
-                // UPSERT using ON CONFLICT
+                // UPSERT using ON CONFLICT - ROOT FIX for data preservation
                 const conflictTarget = upsertKey.map((k) => `"${k}"`).join(', ');
                 const updateSet = columns
                   .filter((c) => !upsertKey.includes(c))
                   .map((c) => `"${c}" = EXCLUDED."${c}"`)
                   .join(', ');
 
-                const query = `
-                  INSERT INTO ${fullTableName} (${columnList})
-                  VALUES (${placeholders})
-                  ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}
-                `;
+                const query =
+                  updateSet.length > 0
+                    ? `
+                    INSERT INTO ${fullTableName} (${columnList})
+                    VALUES (${placeholders})
+                    ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}
+                  `
+                    : `
+                    INSERT INTO ${fullTableName} (${columnList})
+                    VALUES (${placeholders})
+                    ON CONFLICT (${conflictTarget}) DO NOTHING
+                  `;
 
                 await client.query(query, values);
               } else {
@@ -538,7 +467,6 @@ export class EmitterService {
         const schemaName = destinationSchema.destinationSchema || 'public';
         const tableName = destinationSchema.destinationTable;
 
-        // Get existing columns
         const query = `
           SELECT column_name, data_type, is_nullable
           FROM information_schema.columns
@@ -562,7 +490,6 @@ export class EmitterService {
           if (!existing) {
             missingColumns.push(mapping.destinationColumn);
           } else {
-            // Check type compatibility
             const compatible = this.areTypesCompatible(mapping.dataType, existing.type);
             if (!compatible) {
               typeMismatches.push({
@@ -625,16 +552,28 @@ export class EmitterService {
         const tableName = destinationSchema.destinationTable;
         const fullTableName = `"${schemaName}"."${tableName}"`;
 
+        // Check if table exists
+        const existsQuery = `
+          SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = $1 AND table_name = $2
+          )
+        `;
+        const existsResult = await client.query(existsQuery, [schemaName, tableName]);
+
+        if (existsResult.rows[0].exists) {
+          this.logger.log(`Table ${fullTableName} already exists`);
+          return { created: false, tableName };
+        }
+
         // Build column definitions
         const columnDefs = columnMappings.map((col) => {
           let type = this.mapToPostgresType(col.dataType);
 
-          // If transformation is objectIdToUuid, use UUID type
           if (col.transformation === 'objectIdToUuid') {
             type = 'UUID';
           }
 
-          // Use SERIAL/BIGSERIAL for auto-incrementing primary keys (but not for UUID)
           if (col.isPrimaryKey && type !== 'UUID') {
             if (type === 'INTEGER') type = 'SERIAL';
             if (type === 'BIGINT') type = 'BIGSERIAL';
@@ -645,21 +584,6 @@ export class EmitterService {
           const defaultVal = col.defaultValue ? ` DEFAULT ${col.defaultValue}` : '';
           return `"${col.destinationColumn}" ${type}${nullable}${pk}${defaultVal}`;
         });
-
-        // Check if table exists first
-        const existsQuery = `
-          SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_schema = $1 AND table_name = $2
-          )
-        `;
-        const existsResult = await client.query(existsQuery, [schemaName, tableName]);
-        const tableExists = existsResult.rows[0].exists;
-
-        if (tableExists) {
-          this.logger.log(`Table ${fullTableName} already exists, skipping creation`);
-          return { created: false, tableName };
-        }
 
         const createQuery = `CREATE TABLE ${fullTableName} (${columnDefs.join(', ')})`;
         await client.query(createQuery);
@@ -710,87 +634,6 @@ export class EmitterService {
           destinationSchema.destinationTable,
         ]);
         return result.rows[0].exists;
-      } finally {
-        client.release();
-      }
-    } finally {
-      await pool.end();
-    }
-  }
-
-  /**
-   * Migrate PostgreSQL columns that need UUID transformation
-   * For full sync: Drops and recreates table if bigint column needs UUID conversion
-   * For incremental sync: Warns about manual migration needed
-   */
-  private async migratePostgresColumns(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
-    isFullSync: boolean = false,
-  ): Promise<{ needsRecreate: boolean; reason?: string }> {
-    const sslConfig =
-      typeof connectionConfig.ssl === 'object'
-        ? connectionConfig.ssl.enabled
-          ? { rejectUnauthorized: false }
-          : undefined
-        : connectionConfig.ssl
-          ? { rejectUnauthorized: false }
-          : undefined;
-
-    const pool = new Pool({
-      host: connectionConfig.host,
-      port: connectionConfig.port,
-      database: connectionConfig.database,
-      user: connectionConfig.username,
-      password: connectionConfig.password,
-      ssl: sslConfig,
-    });
-
-    try {
-      const client = await pool.connect();
-
-      try {
-        const schemaName = destinationSchema.destinationSchema || 'public';
-        const tableName = destinationSchema.destinationTable;
-        const fullTableName = `"${schemaName}"."${tableName}"`;
-
-        // Check existing column types
-        const query = `
-          SELECT column_name, data_type
-          FROM information_schema.columns
-          WHERE table_schema = $1 AND table_name = $2
-        `;
-        const result = await client.query(query, [schemaName, tableName]);
-        const existingColumns = new Map(
-          result.rows.map((r) => [r.column_name, r.data_type]),
-        );
-
-        // Find columns that need migration (bigint -> UUID with objectIdToUuid transformation)
-        for (const mapping of columnMappings) {
-          if (
-            mapping.transformation === 'objectIdToUuid' &&
-            existingColumns.has(mapping.destinationColumn)
-          ) {
-            const currentType = existingColumns.get(mapping.destinationColumn);
-            if (currentType === 'bigint' || currentType === 'integer' || currentType === 'bigserial') {
-              if (isFullSync) {
-                // For full sync, drop and recreate the table
-                this.logger.log(
-                  `Full sync detected: Dropping table ${fullTableName} to recreate with UUID column (${mapping.destinationColumn})`,
-                );
-                await client.query(`DROP TABLE IF EXISTS ${fullTableName} CASCADE`);
-                return { needsRecreate: true, reason: `Column ${mapping.destinationColumn} needs UUID type (currently ${currentType})` };
-              } else {
-                // For incremental sync, warn but don't drop
-                this.logger.warn(
-                  `Column ${mapping.destinationColumn} is ${currentType} but needs UUID. Manual migration required for incremental sync.`,
-                );
-              }
-            }
-          }
-        }
-        return { needsRecreate: false };
       } finally {
         client.release();
       }
@@ -867,16 +710,24 @@ export class EmitterService {
             const columnList = columns.map((c) => `\`${c}\``).join(', ');
 
             if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
+              // ROOT FIX: Use ON DUPLICATE KEY UPDATE for upsert
               const updateSet = columns
                 .filter((c) => !upsertKey.includes(c))
                 .map((c) => `\`${c}\` = VALUES(\`${c}\`)`)
                 .join(', ');
 
-              const query = `
-                INSERT INTO ${fullTableName} (${columnList})
-                VALUES (${placeholders})
-                ON DUPLICATE KEY UPDATE ${updateSet}
-              `;
+              const query =
+                updateSet.length > 0
+                  ? `
+                  INSERT INTO ${fullTableName} (${columnList})
+                  VALUES (${placeholders})
+                  ON DUPLICATE KEY UPDATE ${updateSet}
+                `
+                  : `
+                  INSERT INTO ${fullTableName} (${columnList})
+                  VALUES (${placeholders})
+                  ON DUPLICATE KEY UPDATE ${columns[0]} = VALUES(${columns[0]})
+                `;
 
               await connection.execute(query, values);
             } else {
@@ -1066,437 +917,51 @@ export class EmitterService {
 
       if (writeMode === 'replace') {
         await collection.deleteMany({});
+        this.logger.log(`Cleared collection ${destinationSchema.destinationTable} for replace mode`);
       }
 
       if (writeMode === 'upsert' && upsertKey && upsertKey.length > 0) {
-        // Upsert each document
-        for (const row of rows) {
-          try {
-            const filter: any = {};
-            upsertKey.forEach((key) => {
-              filter[key] = row[key];
-            });
+        // ROOT FIX: Use bulkWrite with upsert for efficient data preservation
+        const bulkOps = rows.map((row) => {
+          const filter: any = {};
+          upsertKey.forEach((key) => {
+            filter[key] = row[key];
+          });
 
-            await collection.updateOne(filter, { $set: row }, { upsert: true });
-            rowsWritten++;
-          } catch (_error) {
-            rowsFailed++;
-          }
+          return {
+            updateOne: {
+              filter,
+              update: { $set: row },
+              upsert: true,
+            },
+          };
+        });
+
+        try {
+          const result = await collection.bulkWrite(bulkOps, { ordered: false });
+          rowsWritten = (result.upsertedCount || 0) + (result.modifiedCount || 0);
+        } catch (bulkError: any) {
+          // Partial success
+          rowsWritten = bulkError.result?.nUpserted || 0;
+          rowsFailed = rows.length - rowsWritten;
+          this.logger.warn(`MongoDB bulk upsert partial failure: ${bulkError.message}`);
         }
       } else {
         // Bulk insert
-        const result = await collection.insertMany(rows, { ordered: false });
-        rowsWritten = result.insertedCount;
+        try {
+          const result = await collection.insertMany(rows, { ordered: false });
+          rowsWritten = result.insertedCount;
+        } catch (insertError: any) {
+          rowsWritten = insertError.result?.insertedCount || 0;
+          rowsFailed = rows.length - rowsWritten;
+          this.logger.warn(`MongoDB bulk insert partial failure: ${insertError.message}`);
+        }
       }
 
       return { rowsWritten, rowsSkipped, rowsFailed };
     } finally {
       await client.close();
     }
-  }
-
-  // ============================================================================
-  // S3 IMPLEMENTATION
-  // ============================================================================
-
-  private async emitToS3(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    rows: any[],
-    _writeMode: 'append' | 'upsert' | 'replace',
-  ): Promise<WriteResult> {
-    const s3Client = new S3Client({
-      region: connectionConfig.region,
-      credentials: {
-        accessKeyId: connectionConfig.access_key_id,
-        secretAccessKey: connectionConfig.secret_access_key,
-      },
-    });
-
-    const bucket = connectionConfig.bucket;
-    const prefix = destinationSchema.destinationTable;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const key = `${prefix}/${timestamp}.json`;
-
-    try {
-      const content = JSON.stringify(rows, null, 2);
-
-      const command = new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: content,
-        ContentType: 'application/json',
-      });
-
-      await s3Client.send(command);
-
-      this.logger.log(`Uploaded ${rows.length} rows to s3://${bucket}/${key}`);
-
-      return { rowsWritten: rows.length, rowsSkipped: 0, rowsFailed: 0 };
-    } catch (error) {
-      this.logger.error(`S3 upload failed: ${error}`);
-      throw error;
-    }
-  }
-
-  // ============================================================================
-  // REST API IMPLEMENTATION
-  // ============================================================================
-
-  private async emitToAPI(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    rows: any[],
-  ): Promise<WriteResult> {
-    const baseUrl = connectionConfig.base_url;
-    const endpoint = destinationSchema.destinationTable; // Use table name as endpoint
-    const url = new URL(endpoint, baseUrl);
-
-    let rowsWritten = 0;
-    let rowsFailed = 0;
-    const errors: PipelineError[] = [];
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    // Add authentication
-    switch (connectionConfig.auth_type) {
-      case 'bearer':
-        headers.Authorization = `Bearer ${connectionConfig.auth_token}`;
-        break;
-      case 'api_key':
-        headers['X-API-Key'] = connectionConfig.api_key;
-        break;
-    }
-
-    // Send data in batches
-    for (let i = 0; i < rows.length; i += 100) {
-      const batch = rows.slice(i, i + 100);
-
-      for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-        try {
-          await firstValueFrom(this.httpService.post(url.toString(), batch, { headers }));
-          rowsWritten += batch.length;
-          break;
-        } catch (error) {
-          if (attempt === RETRY_ATTEMPTS - 1) {
-            rowsFailed += batch.length;
-            errors.push({
-              message: error instanceof Error ? error.message : String(error),
-              row: i,
-            });
-          } else {
-            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
-          }
-        }
-      }
-    }
-
-    return {
-      rowsWritten,
-      rowsSkipped: 0,
-      rowsFailed,
-      errors: errors.length > 0 ? errors : undefined,
-    };
-  }
-
-  // ============================================================================
-  // BIGQUERY IMPLEMENTATION
-  // ============================================================================
-
-  private async emitToBigQuery(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    rows: any[],
-    writeMode: 'append' | 'upsert' | 'replace',
-  ): Promise<WriteResult> {
-    const bigquery = new BigQuery({
-      projectId: connectionConfig.project_id,
-      credentials: connectionConfig.credentials,
-    });
-
-    const dataset = connectionConfig.dataset;
-    const tableName = destinationSchema.destinationTable;
-
-    try {
-      const table = bigquery.dataset(dataset).table(tableName);
-
-      // Configure write disposition
-      const _writeDisposition = writeMode === 'replace' ? 'WRITE_TRUNCATE' : 'WRITE_APPEND';
-
-      await table.insert(rows, {
-        skipInvalidRows: true,
-        ignoreUnknownValues: true,
-      });
-
-      return { rowsWritten: rows.length, rowsSkipped: 0, rowsFailed: 0 };
-    } catch (error) {
-      this.logger.error(`BigQuery insert failed: ${error}`);
-      throw error;
-    }
-  }
-
-  private async validateBigQuerySchema(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
-  ): Promise<SchemaValidationResult> {
-    const bigquery = new BigQuery({
-      projectId: connectionConfig.project_id,
-      credentials: connectionConfig.credentials,
-    });
-
-    try {
-      const [metadata] = await bigquery
-        .dataset(connectionConfig.dataset)
-        .table(destinationSchema.destinationTable)
-        .getMetadata();
-
-      const existingFields = new Set(metadata.schema.fields.map((f: any) => f.name));
-      const missingColumns = columnMappings
-        .filter((m) => !existingFields.has(m.destinationColumn))
-        .map((m) => m.destinationColumn);
-
-      return {
-        valid: missingColumns.length === 0,
-        errors: missingColumns.length > 0 ? [`Missing columns: ${missingColumns.join(', ')}`] : [],
-        missingColumns,
-      };
-    } catch (error) {
-      return { valid: false, errors: [String(error)] };
-    }
-  }
-
-  private async createBigQueryTable(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
-  ): Promise<{ created: boolean; tableName: string }> {
-    const bigquery = new BigQuery({
-      projectId: connectionConfig.project_id,
-      credentials: connectionConfig.credentials,
-    });
-
-    const schema = columnMappings.map((col) => ({
-      name: col.destinationColumn,
-      type: this.mapToBigQueryType(col.dataType),
-      mode: col.nullable ? 'NULLABLE' : 'REQUIRED',
-    }));
-
-    await bigquery
-      .dataset(connectionConfig.dataset)
-      .createTable(destinationSchema.destinationTable, {
-        schema,
-      });
-
-    return { created: true, tableName: destinationSchema.destinationTable };
-  }
-
-  private async bigQueryTableExists(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-  ): Promise<boolean> {
-    const bigquery = new BigQuery({
-      projectId: connectionConfig.project_id,
-      credentials: connectionConfig.credentials,
-    });
-
-    try {
-      const [exists] = await bigquery
-        .dataset(connectionConfig.dataset)
-        .table(destinationSchema.destinationTable)
-        .exists();
-      return exists;
-    } catch {
-      return false;
-    }
-  }
-
-  private mapToBigQueryType(type: string): string {
-    const typeMap: Record<string, string> = {
-      string: 'STRING',
-      text: 'STRING',
-      number: 'FLOAT64',
-      integer: 'INT64',
-      bigint: 'INT64',
-      float: 'FLOAT64',
-      double: 'FLOAT64',
-      boolean: 'BOOL',
-      date: 'DATE',
-      timestamp: 'TIMESTAMP',
-      datetime: 'DATETIME',
-      json: 'JSON',
-      object: 'JSON',
-      array: 'ARRAY',
-    };
-    return typeMap[type.toLowerCase()] || 'STRING';
-  }
-
-  // ============================================================================
-  // SNOWFLAKE IMPLEMENTATION
-  // ============================================================================
-
-  private async emitToSnowflake(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    rows: any[],
-    writeMode: 'append' | 'upsert' | 'replace',
-  ): Promise<WriteResult> {
-    const snowflake = await import('snowflake-sdk');
-
-    return new Promise((resolve, reject) => {
-      const connection = snowflake.createConnection({
-        account: connectionConfig.account,
-        username: connectionConfig.username,
-        password: connectionConfig.password,
-        warehouse: connectionConfig.warehouse,
-        database: connectionConfig.database,
-        schema: connectionConfig.schema,
-      });
-
-      connection.connect((err, conn) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        const schema = destinationSchema.destinationSchema || connectionConfig.schema;
-        const tableName = destinationSchema.destinationTable;
-
-        const insertRows = async () => {
-          let rowsWritten = 0;
-
-          if (writeMode === 'replace') {
-            await new Promise<void>((res, rej) => {
-              conn.execute({
-                sqlText: `TRUNCATE TABLE "${schema}"."${tableName}"`,
-                complete: (err) => (err ? rej(err) : res()),
-              });
-            });
-          }
-
-          for (const row of rows) {
-            const columns = Object.keys(row);
-            const values = Object.values(row).map((v) =>
-              typeof v === 'string' ? `'${v.replace(/'/g, "''")}'` : v,
-            );
-
-            await new Promise<void>((res, rej) => {
-              conn.execute({
-                sqlText: `INSERT INTO "${schema}"."${tableName}" (${columns.join(', ')}) VALUES (${values.join(', ')})`,
-                complete: (err) => {
-                  if (err) {
-                    rej(err);
-                  } else {
-                    rowsWritten++;
-                    res();
-                  }
-                },
-              });
-            });
-          }
-
-          return rowsWritten;
-        };
-
-        insertRows()
-          .then((rowsWritten) => {
-            connection.destroy(() => {});
-            resolve({ rowsWritten, rowsSkipped: 0, rowsFailed: 0 });
-          })
-          .catch((error) => {
-            connection.destroy(() => {});
-            reject(error);
-          });
-      });
-    });
-  }
-
-  private async validateSnowflakeSchema(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-    _columnMappings: ColumnMapping[],
-  ): Promise<SchemaValidationResult> {
-    // Simplified validation - return success for now
-    return {
-      valid: true,
-      errors: [],
-      warnings: ['Full Snowflake schema validation not implemented'],
-    };
-  }
-
-  private async createSnowflakeTable(
-    destinationSchema: PipelineDestinationSchema,
-    connectionConfig: any,
-    columnMappings: ColumnMapping[],
-  ): Promise<{ created: boolean; tableName: string }> {
-    const snowflake = await import('snowflake-sdk');
-
-    return new Promise((resolve, reject) => {
-      const connection = snowflake.createConnection({
-        account: connectionConfig.account,
-        username: connectionConfig.username,
-        password: connectionConfig.password,
-        warehouse: connectionConfig.warehouse,
-        database: connectionConfig.database,
-        schema: connectionConfig.schema,
-      });
-
-      connection.connect((err, conn) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        const schema = destinationSchema.destinationSchema || connectionConfig.schema;
-        const tableName = destinationSchema.destinationTable;
-
-        const columnDefs = columnMappings
-          .map((col) => `"${col.destinationColumn}" ${this.mapToSnowflakeType(col.dataType)}`)
-          .join(', ');
-
-        conn.execute({
-          sqlText: `CREATE TABLE IF NOT EXISTS "${schema}"."${tableName}" (${columnDefs})`,
-          complete: (err) => {
-            connection.destroy(() => {});
-            if (err) {
-              reject(err);
-            } else {
-              resolve({ created: true, tableName });
-            }
-          },
-        });
-      });
-    });
-  }
-
-  private async snowflakeTableExists(
-    _destinationSchema: PipelineDestinationSchema,
-    _connectionConfig: any,
-  ): Promise<boolean> {
-    // Simplified check
-    return false;
-  }
-
-  private mapToSnowflakeType(type: string): string {
-    const typeMap: Record<string, string> = {
-      string: 'VARCHAR',
-      text: 'VARCHAR',
-      number: 'NUMBER',
-      integer: 'INTEGER',
-      bigint: 'BIGINT',
-      float: 'FLOAT',
-      double: 'DOUBLE',
-      boolean: 'BOOLEAN',
-      date: 'DATE',
-      timestamp: 'TIMESTAMP_NTZ',
-      datetime: 'TIMESTAMP_NTZ',
-      json: 'VARIANT',
-      object: 'VARIANT',
-      array: 'ARRAY',
-    };
-    return typeMap[type.toLowerCase()] || 'VARCHAR';
   }
 
   // ============================================================================
@@ -1507,7 +972,6 @@ export class EmitterService {
     const normalizedSource = sourceType.toLowerCase();
     const normalizedDest = destType.toLowerCase();
 
-    // Basic type compatibility check
     const stringTypes = ['string', 'text', 'varchar', 'char', 'character varying'];
     const numericTypes = [
       'number',
@@ -1533,424 +997,65 @@ export class EmitterService {
     return getTypeGroup(normalizedSource) === getTypeGroup(normalizedDest);
   }
 
-  // ===========================================================================
-  // MULTI-ENTITY EMIT METHODS (For NoSQL ↔ SQL Bidirectional Transforms)
-  // ===========================================================================
-
   /**
-   * Emit multi-entity data (from bidirectional transformation)
-   * Handles transactional writes for SQL, bulk writes for NoSQL
-   * 
-   * @param entityData - Record<entityName, rows[]> from transformBidirectional()
+   * Emit data to multiple entities (for bidirectional transformations)
+   * This method handles writing transformed data to multiple destination tables/collections
    */
   async emitMultiEntity(options: {
     destinationSchema: PipelineDestinationSchema;
     organizationId: string;
     userId: string;
     entityData: Record<string, any[]>;
-    writeMode: 'append' | 'upsert' | 'replace';
-    upsertKeys?: Record<string, string[]>;  // Per-entity upsert keys
-    columnMappings?: ColumnMapping[];
+    writeMode?: 'append' | 'upsert' | 'replace';
+    upsertKeys?: Record<string, string[]>;
   }): Promise<Record<string, WriteResult>> {
-    const {
-      destinationSchema,
-      organizationId,
-      userId,
-      entityData,
-      writeMode,
-      upsertKeys = {},
-    } = options;
-
-    if (!destinationSchema.dataSourceId) {
-      throw new BadRequestException('Destination schema must have a data source ID');
-    }
-
-    const dataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
-    if (!dataSource) {
-      throw new BadRequestException(`Data source ${destinationSchema.dataSourceId} not found`);
-    }
-
-    const connectionConfig = await this.connectionService.getDecryptedConnection(
-      organizationId,
-      destinationSchema.dataSourceId,
-      userId,
-    );
+    const { destinationSchema, organizationId, userId, entityData, writeMode, upsertKeys } = options;
 
     const results: Record<string, WriteResult> = {};
 
-    this.logger.log(
-      `Emitting ${Object.keys(entityData).length} entities to ${dataSource.sourceType}`
-    );
-
-    try {
-      switch (dataSource.sourceType) {
-        case 'postgres':
-          return await this.emitMultiEntityToPostgres(
-            connectionConfig,
-            entityData,
-            writeMode,
-            upsertKeys,
-          );
-
-        case 'mysql':
-          return await this.emitMultiEntityToMySQL(
-            connectionConfig,
-            entityData,
-            writeMode,
-            upsertKeys,
-          );
-
-        case 'mongodb':
-          return await this.emitMultiEntityToMongoDB(
-            connectionConfig,
-            entityData,
-            writeMode,
-            upsertKeys,
-          );
-
-        default:
-          // Fall back to single entity emit for each entity
-          for (const [entity, rows] of Object.entries(entityData)) {
-            if (rows.length === 0) {
-              results[entity] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
-              continue;
-            }
-
-            // Create temporary destination schema for entity
-            const entityDestSchema = {
-              ...destinationSchema,
-              destinationTable: entity,
-            } as PipelineDestinationSchema;
-
-            results[entity] = await this.emit({
-              destinationSchema: entityDestSchema,
-              organizationId,
-              userId,
-              rows,
-              writeMode,
-              upsertKey: upsertKeys[entity],
-            });
-          }
-          return results;
-      }
-    } catch (error) {
-      this.logger.error(`Multi-entity emit failed: ${error}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Emit multi-entity data to PostgreSQL with transaction support
-   */
-  private async emitMultiEntityToPostgres(
-    connectionConfig: any,
-    entityData: Record<string, any[]>,
-    writeMode: 'append' | 'upsert' | 'replace',
-    upsertKeys: Record<string, string[]>,
-  ): Promise<Record<string, WriteResult>> {
-    const pool = new Pool({
-      host: connectionConfig.host,
-      port: connectionConfig.port || 5432,
-      database: connectionConfig.database,
-      user: connectionConfig.username,
-      password: connectionConfig.password,
-      ssl: connectionConfig.ssl?.enabled ? { rejectUnauthorized: false } : false,
-    });
-
-    const results: Record<string, WriteResult> = {};
-    const client = await pool.connect();
-
-    try {
-      // Start transaction
-      await client.query('BEGIN');
-
-      for (const [tableName, rows] of Object.entries(entityData)) {
-        if (rows.length === 0) {
-          results[tableName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
-          continue;
-        }
-
-        const schemaName = connectionConfig.schema || 'public';
-        const fullTableName = `"${schemaName}"."${tableName}"`;
-        const upsertKey = upsertKeys[tableName] || [];
-
-        let rowsWritten = 0;
-        let rowsFailed = 0;
-
-        // Handle replace mode
-        if (writeMode === 'replace') {
-          await client.query(`DELETE FROM ${fullTableName}`);
-        }
-
-        // Batch insert/upsert
-        const batchSize = DEFAULT_BATCH_SIZE;
-        for (let i = 0; i < rows.length; i += batchSize) {
-          const batch = rows.slice(i, i + batchSize);
-          const columns = Object.keys(batch[0]);
-
-          if (columns.length === 0) continue;
-
-          const columnNames = columns.map(c => `"${c}"`).join(', ');
-          const values: any[] = [];
-          const valuePlaceholders: string[] = [];
-
-          batch.forEach((row, rowIdx) => {
-            const rowPlaceholders: string[] = [];
-            columns.forEach((col, colIdx) => {
-              const paramIdx = rowIdx * columns.length + colIdx + 1;
-              rowPlaceholders.push(`$${paramIdx}`);
-              values.push(this.prepareValueForPostgres(row[col]));
-            });
-            valuePlaceholders.push(`(${rowPlaceholders.join(', ')})`);
-          });
-
-          let query: string;
-          if (writeMode === 'upsert' && upsertKey.length > 0) {
-            const conflictCols = upsertKey.map(k => `"${k}"`).join(', ');
-            const updateCols = columns
-              .filter(c => !upsertKey.includes(c))
-              .map(c => `"${c}" = EXCLUDED."${c}"`)
-              .join(', ');
-
-            query = `
-              INSERT INTO ${fullTableName} (${columnNames})
-              VALUES ${valuePlaceholders.join(', ')}
-              ON CONFLICT (${conflictCols})
-              DO UPDATE SET ${updateCols || `"${columns[0]}" = EXCLUDED."${columns[0]}"`}
-            `;
-          } else {
-            query = `
-              INSERT INTO ${fullTableName} (${columnNames})
-              VALUES ${valuePlaceholders.join(', ')}
-            `;
-          }
-
-          try {
-            const result = await client.query(query, values);
-            rowsWritten += result.rowCount || batch.length;
-          } catch (batchError) {
-            this.logger.warn(`Batch insert to ${tableName} failed: ${batchError}`);
-            rowsFailed += batch.length;
-          }
-        }
-
-        results[tableName] = { rowsWritten, rowsSkipped: 0, rowsFailed };
-        this.logger.log(`Postgres: ${tableName} - ${rowsWritten} rows written`);
+    // Process each entity's data
+    for (const [entityName, rows] of Object.entries(entityData)) {
+      if (rows.length === 0) {
+        results[entityName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
+        continue;
       }
 
-      // Commit transaction
-      await client.query('COMMIT');
-      return results;
+      // Create a copy of the destination schema with the entity name as the table
+      const entitySchema = {
+        ...destinationSchema,
+        destTable: entityName,
+        destCollection: entityName,
+      };
 
-    } catch (error) {
-      // Rollback on error
-      await client.query('ROLLBACK');
-      this.logger.error(`Multi-entity Postgres write failed, rolled back: ${error}`);
-      throw error;
-    } finally {
-      client.release();
-      await pool.end();
-    }
-  }
+      // Get upsert key for this entity if specified
+      const entityUpsertKey = upsertKeys?.[entityName] || (destinationSchema.upsertKey as string[]);
 
-  /**
-   * Prepare value for PostgreSQL insert
-   */
-  private prepareValueForPostgres(value: any): any {
-    if (value === null || value === undefined) {
-      return null;
-    }
-    if (typeof value === 'object') {
-      return JSON.stringify(value);
-    }
-    return value;
-  }
+      try {
+        const result = await this.emit({
+          destinationSchema: entitySchema,
+          organizationId,
+          userId,
+          rows,
+          writeMode: writeMode || 'append',
+          upsertKey: entityUpsertKey,
+        });
 
-  /**
-   * Emit multi-entity data to MySQL with transaction support
-   */
-  private async emitMultiEntityToMySQL(
-    connectionConfig: any,
-    entityData: Record<string, any[]>,
-    writeMode: 'append' | 'upsert' | 'replace',
-    upsertKeys: Record<string, string[]>,
-  ): Promise<Record<string, WriteResult>> {
-    const connection = await mysql.createConnection({
-      host: connectionConfig.host,
-      port: connectionConfig.port || 3306,
-      user: connectionConfig.username,
-      password: connectionConfig.password,
-      database: connectionConfig.database,
-      ssl: connectionConfig.ssl?.enabled ? { rejectUnauthorized: false } : undefined,
-    });
-
-    const results: Record<string, WriteResult> = {};
-
-    try {
-      await connection.beginTransaction();
-
-      for (const [tableName, rows] of Object.entries(entityData)) {
-        if (rows.length === 0) {
-          results[tableName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
-          continue;
-        }
-
-        let rowsWritten = 0;
-        let rowsFailed = 0;
-
-        // Handle replace mode
-        if (writeMode === 'replace') {
-          await connection.query(`DELETE FROM \`${tableName}\``);
-        }
-
-        const columns = Object.keys(rows[0]);
-        const columnNames = columns.map(c => `\`${c}\``).join(', ');
-
-        // Batch insert
-        const batchSize = DEFAULT_BATCH_SIZE;
-        for (let i = 0; i < rows.length; i += batchSize) {
-          const batch = rows.slice(i, i + batchSize);
-          const values = batch.map(row => 
-            columns.map(col => this.prepareValueForMySQL(row[col]))
-          );
-
-          try {
-            let query: string;
-            if (writeMode === 'upsert') {
-              const updateCols = columns.map(c => `\`${c}\` = VALUES(\`${c}\`)`).join(', ');
-              query = `INSERT INTO \`${tableName}\` (${columnNames}) VALUES ? 
-                       ON DUPLICATE KEY UPDATE ${updateCols}`;
-            } else {
-              query = `INSERT INTO \`${tableName}\` (${columnNames}) VALUES ?`;
-            }
-
-            const [result] = await connection.query(query, [values]) as any;
-            rowsWritten += result.affectedRows || batch.length;
-          } catch (batchError) {
-            this.logger.warn(`Batch insert to ${tableName} failed: ${batchError}`);
-            rowsFailed += batch.length;
-          }
-        }
-
-        results[tableName] = { rowsWritten, rowsSkipped: 0, rowsFailed };
-        this.logger.log(`MySQL: ${tableName} - ${rowsWritten} rows written`);
+        results[entityName] = result;
+      } catch (error) {
+        this.logger.error(`Failed to emit to entity ${entityName}: ${error}`);
+        results[entityName] = {
+          rowsWritten: 0,
+          rowsSkipped: 0,
+          rowsFailed: rows.length,
+          errors: [
+            {
+              message: error instanceof Error ? error.message : String(error),
+            },
+          ],
+        };
       }
-
-      await connection.commit();
-      return results;
-
-    } catch (error) {
-      await connection.rollback();
-      this.logger.error(`Multi-entity MySQL write failed, rolled back: ${error}`);
-      throw error;
-    } finally {
-      await connection.end();
-    }
-  }
-
-  /**
-   * Prepare value for MySQL insert
-   */
-  private prepareValueForMySQL(value: any): any {
-    if (value === null || value === undefined) {
-      return null;
-    }
-    if (typeof value === 'object') {
-      return JSON.stringify(value);
-    }
-    return value;
-  }
-
-  /**
-   * Emit multi-entity data to MongoDB with bulk writes
-   */
-  private async emitMultiEntityToMongoDB(
-    connectionConfig: any,
-    entityData: Record<string, any[]>,
-    writeMode: 'append' | 'upsert' | 'replace',
-    upsertKeys: Record<string, string[]>,
-  ): Promise<Record<string, WriteResult>> {
-    let connectionString = connectionConfig.connection_string;
-    if (!connectionString) {
-      const auth = connectionConfig.username && connectionConfig.password
-        ? `${encodeURIComponent(connectionConfig.username)}:${encodeURIComponent(connectionConfig.password)}@`
-        : '';
-      const port = connectionConfig.port || 27017;
-      connectionString = `mongodb://${auth}${connectionConfig.host}:${port}/${connectionConfig.database}`;
     }
 
-    const client = new MongoClient(connectionString);
-    const results: Record<string, WriteResult> = {};
-
-    try {
-      await client.connect();
-      const db = client.db(connectionConfig.database);
-
-      for (const [collectionName, rows] of Object.entries(entityData)) {
-        if (rows.length === 0) {
-          results[collectionName] = { rowsWritten: 0, rowsSkipped: 0, rowsFailed: 0 };
-          continue;
-        }
-
-        const collection = db.collection(collectionName);
-        const upsertKey = upsertKeys[collectionName] || ['_id'];
-
-        let rowsWritten = 0;
-        let rowsFailed = 0;
-
-        // Handle replace mode
-        if (writeMode === 'replace') {
-          await collection.deleteMany({});
-        }
-
-        // Create bulk operations
-        if (writeMode === 'upsert' && upsertKey.length > 0) {
-          // Bulk upsert
-          const bulkOps = rows.map(row => {
-            const filter: any = {};
-            for (const key of upsertKey) {
-              filter[key] = row[key];
-            }
-            return {
-              updateOne: {
-                filter,
-                update: { $set: row },
-                upsert: true,
-              },
-            };
-          });
-
-          try {
-            const result = await collection.bulkWrite(bulkOps, { ordered: false });
-            rowsWritten = (result.upsertedCount || 0) + (result.modifiedCount || 0);
-          } catch (bulkError: any) {
-            this.logger.warn(`Bulk upsert to ${collectionName} had errors: ${bulkError.message}`);
-            rowsWritten = bulkError.result?.nUpserted || 0;
-            rowsFailed = rows.length - rowsWritten;
-          }
-        } else {
-          // Bulk insert
-          try {
-            const result = await collection.insertMany(rows, { ordered: false });
-            rowsWritten = result.insertedCount;
-          } catch (insertError: any) {
-            this.logger.warn(`Bulk insert to ${collectionName} had errors: ${insertError.message}`);
-            rowsWritten = insertError.result?.insertedCount || 0;
-            rowsFailed = rows.length - rowsWritten;
-          }
-        }
-
-        results[collectionName] = { rowsWritten, rowsSkipped: 0, rowsFailed };
-        this.logger.log(`MongoDB: ${collectionName} - ${rowsWritten} documents written`);
-      }
-
-      return results;
-
-    } catch (error) {
-      this.logger.error(`Multi-entity MongoDB write failed: ${error}`);
-      throw error;
-    } finally {
-      await client.close();
-    }
+    return results;
   }
 }

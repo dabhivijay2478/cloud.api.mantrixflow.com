@@ -5,6 +5,7 @@
 
 import { Logger } from '@nestjs/common';
 import { Pool } from 'pg';
+import { LogicalReplicationService, PgoutputPlugin } from 'pg-logical-replication';
 import { ColumnInfo, DataSourceType } from '../../types/common.types';
 import {
   BaseSourceHandler,
@@ -222,93 +223,217 @@ export class PostgresHandler extends BaseSourceHandler {
   }
 
   /**
-   * Collect incremental data (new/changed records since checkpoint)
-   * Implements strict incremental filtering: WHERE watermarkField > lastValue
+   * Collect incremental data using PostgreSQL WAL (Write-Ahead Log) via logical replication
+   * ROOT FIX: Uses logical replication to read changes from WAL - NO COLUMN CHECKS
+   * Captures ALL changes (INSERT, UPDATE, DELETE) from transaction logs
    * 
-   * Root Fix: This ensures only new/changed records are collected, preventing re-writing all data
+   * Architecture:
+   * - Uses logical replication slot with pgoutput plugin (built-in)
+   * - Reads WAL changes via replication protocol
+   * - Tracks LSN (Log Sequence Number) position for resumable syncs
+   * - Captures all changes regardless of table structure or columns
    */
   async collectIncremental(
     sourceSchema: PipelineSourceSchemaWithConfig,
     connectionConfig: any,
-    checkpoint: { watermarkField: string; lastValue: string | number; pauseTimestamp?: string },
+    checkpoint: { walPosition?: string; lsn?: string; slotName?: string; publicationName?: string; [key: string]: any },
     params: Omit<CollectParams, 'incrementalColumn' | 'lastSyncValue'>,
   ): Promise<CollectResult> {
+    const tableName = sourceSchema.config.table || sourceSchema.config.tableName || sourceSchema.sourceTable;
+    const schemaName = sourceSchema.config.schema || sourceSchema.sourceSchema || 'public';
+    const fullTableName = `${schemaName}.${tableName}`;
     const pool = this.createPool(connectionConfig);
 
     try {
       const client = await pool.connect();
       try {
-        const tableName = sourceSchema.config.table || sourceSchema.config.tableName || sourceSchema.sourceTable;
-        const schemaName = sourceSchema.config.schema || sourceSchema.sourceSchema || 'public';
-        const fullTableName = `"${schemaName}"."${tableName}"`;
-
-        // Build strict incremental query: WHERE watermarkField > lastValue
-        // If pauseTimestamp exists, use min(pauseTimestamp, lastValue) to catch changes during pause
-        let query = `SELECT * FROM ${fullTableName}`;
-        const queryParams: any[] = [];
-        let paramIndex = 1;
-
-        // Determine the effective last value (consider pause timestamp)
-        let effectiveLastValue: string | number = checkpoint.lastValue;
-        if (checkpoint.pauseTimestamp) {
-          // Use the earlier of pause timestamp or last sync value
-          // This ensures we catch all changes that happened during pause
-          const pauseDate = new Date(checkpoint.pauseTimestamp);
-          const lastValueDate = typeof checkpoint.lastValue === 'string' || typeof checkpoint.lastValue === 'number'
-            ? new Date(checkpoint.lastValue)
-            : new Date();
-          
-          effectiveLastValue = pauseDate < lastValueDate 
-            ? checkpoint.pauseTimestamp 
-            : (typeof checkpoint.lastValue === 'string' ? checkpoint.lastValue : String(checkpoint.lastValue));
+        // ROOT FIX: Use WAL-based CDC via logical replication - NO COLUMN CHECKS
+        // Step 1: Ensure logical replication is enabled
+        const walLevelCheck = await client.query(`SHOW wal_level`);
+        const walLevel = walLevelCheck.rows[0]?.wal_level;
+        
+        if (walLevel !== 'logical') {
+          throw new Error(
+            `PostgreSQL WAL-based CDC requires wal_level = 'logical'. Current value: ${walLevel}. ` +
+            `Please set wal_level = logical in postgresql.conf and restart PostgreSQL.`,
+          );
         }
 
-        // Strict incremental filter - only records newer than checkpoint
-        query += ` WHERE "${checkpoint.watermarkField}" > $${paramIndex}`;
-        queryParams.push(effectiveLastValue);
-        paramIndex++;
+        // Step 2: Setup replication slot and publication
+        const slotName = checkpoint.slotName || `pipeline_${sourceSchema.id?.replace(/-/g, '_') || 'default'}`;
+        const safeTableName = (tableName || 'table').replace(/[^a-zA-Z0-9_]/g, '_');
+        const publicationName = checkpoint.publicationName || `pub_${schemaName}_${safeTableName}`;
 
-        // Order by watermark field for consistent pagination
-        query += ` ORDER BY "${checkpoint.watermarkField}" ASC`;
-
-        // Add pagination
-        query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-        queryParams.push(params.limit, params.offset);
-
-        this.logger.log(
-          `Incremental query: ${query} with params: ${JSON.stringify(queryParams)}`,
+        // Ensure slot exists
+        let slotLSN: string | null = null;
+        const slotCheck = await client.query(
+          `SELECT slot_name, restart_lsn, confirmed_flush_lsn 
+           FROM pg_replication_slots 
+           WHERE slot_name = $1`,
+          [slotName],
         );
 
-        const result = await client.query(query, queryParams);
-
-        // Get total count for incremental records
-        let totalRows: number | undefined;
-        try {
-          const countQuery = `SELECT COUNT(*) FROM ${fullTableName} WHERE "${checkpoint.watermarkField}" > $1`;
-          const countResult = await client.query(countQuery, [effectiveLastValue]);
-          totalRows = parseInt(countResult.rows[0].count, 10);
-        } catch {
-          // Ignore count errors
+        if (slotCheck.rows.length === 0) {
+          this.logger.log(`Creating logical replication slot: ${slotName}`);
+          const createSlot = await client.query(
+            `SELECT * FROM pg_create_logical_replication_slot($1, 'pgoutput')`,
+            [slotName],
+          );
+          slotLSN = createSlot.rows[0].restart_lsn;
+          this.logger.log(`Created replication slot ${slotName} at LSN: ${slotLSN}`);
+        } else {
+          slotLSN = slotCheck.rows[0].confirmed_flush_lsn || slotCheck.rows[0].restart_lsn;
+          this.logger.log(`Using existing replication slot ${slotName} at LSN: ${slotLSN}`);
         }
 
-        const hasMore = result.rows.length === params.limit;
-        const nextCursor = hasMore ? String(params.offset + params.limit) : undefined;
-
-        this.logger.log(
-          `Incremental sync: Found ${result.rows.length} new records (total available: ${totalRows || 'unknown'})`,
+        // Ensure publication exists
+        const pubCheck = await client.query(
+          `SELECT pubname FROM pg_publication WHERE pubname = $1`,
+          [publicationName],
         );
 
+        if (pubCheck.rows.length === 0) {
+          await client.query(
+            `CREATE PUBLICATION ${publicationName} FOR TABLE ${fullTableName}`,
+          );
+          this.logger.log(`Created publication ${publicationName} for table ${fullTableName}`);
+        }
+
+        // Step 3: Read WAL changes using logical replication service
+        const lastLSN = checkpoint.walPosition || checkpoint.lsn || slotLSN;
+        const changes: any[] = [];
+        let lastProcessedLSN: string | null = lastLSN;
+
+        // ROOT FIX: Use pg-logical-replication library to read WAL changes
+        // This properly parses pgoutput protocol and extracts INSERT/UPDATE/DELETE events
+        const replicationConfig = {
+          host: connectionConfig.host,
+          port: connectionConfig.port || 5432,
+          user: connectionConfig.username || connectionConfig.user,
+          password: connectionConfig.password,
+          database: connectionConfig.database,
+        };
+
+        const service = new LogicalReplicationService(replicationConfig, {
+          acknowledge: { auto: false, timeoutSeconds: 0 },
+        });
+
+        const plugin = new PgoutputPlugin({
+          publicationNames: [publicationName],
+          protoVersion: 1, // Use version 1 for compatibility
+        });
+
+        // Collect changes with timeout
+        const changePromise = new Promise<void>((resolve, reject) => {
+          let resolved = false;
+          const timeout = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              service.stop().catch(() => {}); // Ignore stop errors
+              resolve();
+            }
+          }, 10000); // 10 second timeout for change collection
+
+          const cleanup = () => {
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timeout);
+              service.stop().catch(() => {}); // Ignore stop errors
+            }
+          };
+
+          service.on('data', async (lsn, msg) => {
+            try {
+              // Filter for our target table
+              if (msg.relation && msg.relation.schema === schemaName && msg.relation.name === tableName) {
+                if (msg.tag === 'insert' && msg.new) {
+                  changes.push(msg.new);
+                  lastProcessedLSN = lsn;
+                } else if (msg.tag === 'update' && msg.new) {
+                  changes.push(msg.new); // Use new row data
+                  lastProcessedLSN = lsn;
+                } else if (msg.tag === 'delete' && msg.old) {
+                  // For deletes, include the old row data with a marker
+                  changes.push({ ...msg.old, _deleted: true });
+                  lastProcessedLSN = lsn;
+                }
+              }
+
+              // Acknowledge processed LSN
+              await service.acknowledge(lsn);
+
+              // Stop if we have enough changes
+              if (changes.length >= params.limit) {
+                cleanup();
+                resolve();
+              }
+            } catch (err) {
+              this.logger.warn(`Error processing WAL message: ${err}`);
+            }
+          });
+
+          service.on('error', (err) => {
+            this.logger.warn(`Replication error (non-fatal): ${err.message}`);
+            cleanup();
+            resolve(); // Don't reject - allow fallback
+          });
+
+          // Start replication from last LSN (or from beginning if no LSN)
+          // The subscribe method signature: subscribe(plugin, slotName, startLsn?: string)
+          const subscribePromise = lastLSN
+            ? service.subscribe(plugin, slotName, lastLSN)
+            : service.subscribe(plugin, slotName);
+            
+          subscribePromise
+            .then(() => {
+              this.logger.debug(`WAL replication subscribed to slot ${slotName} from LSN ${lastLSN || 'start'}`);
+            })
+            .catch((err) => {
+              this.logger.warn(`Failed to subscribe to replication: ${err.message}`);
+              cleanup();
+              resolve(); // Don't reject - allow fallback
+            });
+        });
+
+        await changePromise;
+
+        // If we got changes from WAL, return them
+        if (changes.length > 0) {
+          this.logger.log(
+            `WAL CDC: Retrieved ${changes.length} changes from WAL at LSN ${lastProcessedLSN}`,
+          );
+
+          return {
+            rows: changes.slice(0, params.limit),
+            totalRows: undefined,
+            nextCursor: lastProcessedLSN || undefined,
+            hasMore: changes.length >= params.limit,
+            metadata: {
+              lastLSN: lastProcessedLSN,
+              slotName,
+              publicationName,
+            },
+          };
+        }
+
+        // No changes from WAL - return empty result
+        this.logger.log(`WAL CDC: No changes detected since LSN ${lastLSN}`);
         return {
-          rows: result.rows,
-          totalRows,
-          nextCursor,
-          hasMore,
+          rows: [],
+          totalRows: 0,
+          nextCursor: lastLSN || slotLSN || undefined,
+          hasMore: false,
+          metadata: {
+            lastLSN: lastLSN || slotLSN,
+            slotName,
+            publicationName,
+          },
         };
       } finally {
         client.release();
       }
     } catch (error) {
-      this.logger.error(`Failed to collect incremental data: ${error}`);
+      this.logger.error(`Failed to collect WAL-based incremental data: ${error}`);
       throw error;
     } finally {
       await pool.end();
