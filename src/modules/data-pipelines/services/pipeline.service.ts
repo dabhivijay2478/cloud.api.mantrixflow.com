@@ -25,10 +25,9 @@ import {
   PIPELINE_RUN_ACTIONS,
 } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import { ConnectionService } from '../../data-sources/connection.service';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { CollectorService } from './collector.service';
-import { EmitterService } from './emitter.service';
-import { TransformerService } from './transformer.service';
+import { PythonETLService } from './python-etl.service';
 import { PipelineLifecycleService } from './pipeline-lifecycle.service';
 import type {
   ColumnMapping,
@@ -36,8 +35,9 @@ import type {
   ValidationResult,
   BatchOptions,
   PipelineError,
+  WriteResult,
 } from '../types/common.types';
-import type { SchemaInfo } from '../types/source-handler.types';
+import type { SchemaInfo } from '../types/common.types';
 import { PipelineStatus, PipelineCheckpoint } from '../types/pipeline-lifecycle.types';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
@@ -45,7 +45,7 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PgBossService } from './pgboss.service';
+import { RabbitMQService } from '../../queue/rabbitmq.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -73,14 +73,13 @@ export class PipelineService {
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
-    private readonly collectorService: CollectorService,
-    private readonly transformerService: TransformerService,
-    private readonly emitterService: EmitterService,
+    private readonly pythonETLService: PythonETLService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
     private readonly lifecycleService: PipelineLifecycleService,
     private readonly schedulerService: PipelineSchedulerService,
-    private readonly pgBossService: PgBossService,
+    private readonly rabbitmqService: RabbitMQService,
+    private readonly connectionService: ConnectionService,
   ) {}
 
   /**
@@ -435,38 +434,18 @@ export class PipelineService {
   ): Promise<void> {
     const startTime = Date.now();
 
-    // ROOT FIX: Status-based sync type determination with WAL CDC (user requirement)
-    // Logic: 
-    // 1. If status is 'listing' → ALWAYS incremental using WAL CDC (no column checks)
-    // 2. If no checkpoint → FULL sync (first time only)
-    // 3. After full sync → transition to 'listing' → then always WAL-based incremental
+    // Determine sync mode - Python handles all CDC/incremental logic
+    // NestJS only orchestrates: calls Python with sync mode and checkpoint
     let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
     
-    let isFullSync: boolean;
-    let syncReason: string;
-    
-    // USER REQUIREMENT: If status is 'listing', ALWAYS do incremental sync using WAL
-    if (pipeline.status === 'listing') {
-      // Pipeline is in CDC mode - always incremental using WAL (no column needed)
-      isFullSync = false;
-      syncReason = `WAL CDC mode (status=listing) - reading changes from transaction logs`;
-      this.logger.log(`Pipeline ${pipeline.id}: WAL-based CDC incremental sync (status=listing)`);
-    } else if (!checkpoint || (!checkpoint.walPosition && !checkpoint.lsn && !checkpoint.lastSyncValue && !checkpoint.offset)) {
-      // No checkpoint exists - first run, do full sync
-      isFullSync = true;
-      syncReason = 'first run - initial full sync (will transition to listing/WAL CDC mode after)';
-      this.logger.log(`Pipeline ${pipeline.id}: First run - performing full sync, will use WAL CDC after`);
-    } else {
-      // Checkpoint exists but status is not 'listing' - use WAL CDC for incremental
-      isFullSync = false;
-      syncReason = `checkpoint exists (LSN=${checkpoint.walPosition || checkpoint.lsn || 'none'}) - WAL CDC incremental`;
-      this.logger.log(`Pipeline ${pipeline.id}: WAL-based incremental sync from checkpoint`);
-    }
-    
+    // Determine sync mode from pipeline configuration
+    // Python will handle CDC detection, incremental logic, checkpoint management
+    const syncMode = pipeline.syncMode || 'full';
+    const isFullSync = syncMode === 'full' || !checkpoint;
     const syncType = isFullSync ? 'full' : 'incremental';
-    
-    // For WAL CDC, we use LSN position, not column values
-    const effectiveLSN = checkpoint?.walPosition || checkpoint?.lsn;
+    const syncReason = isFullSync 
+      ? 'Full sync (Python handles all data collection)'
+      : 'Incremental sync (Python handles CDC and checkpoint management)';
 
     // Log startup with detailed sync info
     console.log(`\n${'='.repeat(60)}`);
@@ -478,14 +457,11 @@ export class PipelineService {
     console.log(`   Sync Reason:     ${syncReason}`);
     console.log(`   Batch Size:      ${options?.batchSize || DEFAULT_BATCH_SIZE}`);
     console.log(`   Source:          ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`);
-    if (effectiveLSN && !isFullSync) {
-      console.log(`   WAL LSN:        ${effectiveLSN}`);
-    }
     console.log(`${'='.repeat(60)}\n`);
 
     // ROOT FIX: Publish starting status via Socket.io for real-time UI update
-    if (this.pgBossService.isReady()) {
-      await this.pgBossService.publishStatusUpdate({
+    if (this.rabbitmqService.isReady()) {
+      await this.rabbitmqService.publishStatusUpdate({
         pipelineId: pipeline.id,
         organizationId: pipeline.organizationId,
         status: 'running',
@@ -507,18 +483,10 @@ export class PipelineService {
 
     try {
       // For full sync, clear checkpoint to start fresh
-      // ROOT FIX: Only clear checkpoint if explicitly doing full sync
+      // Python will handle all checkpoint management
       if (isFullSync && checkpoint) {
         this.logger.log('Full sync detected - clearing checkpoint to start from beginning');
         await this.lifecycleService.clearCheckpoint(pipeline.id, userId);
-        checkpoint = null; // Reset checkpoint reference
-      }
-      
-      // For WAL-based incremental sync, ensure we have LSN position
-      if (!isFullSync && !effectiveLSN) {
-        this.logger.warn('WAL CDC incremental sync requested but missing LSN - falling back to full');
-        isFullSync = true;
-        syncReason = 'WAL CDC incremental sync failed validation - missing LSN position';
       }
 
       // Set pipeline to RUNNING status
@@ -535,20 +503,29 @@ export class PipelineService {
         throw new BadRequestException('Source and destination must have data source IDs');
       }
 
-      // Get column mappings and enhance with auto-detected transformations
+      // Get column mappings
       let columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
       
       // Auto-enhance mappings for MongoDB ObjectId -> UUID conversion
       // This ensures _id fields are automatically converted to UUIDs
       if (sourceSchema.sourceType === 'mongodb') {
-        columnMappings = this.transformerService.enhanceColumnMappings(columnMappings);
+        // Check for _id mappings and add objectIdToUuid transformation if needed
+        columnMappings = columnMappings.map(mapping => {
+          if (mapping.sourceColumn === '_id' && !mapping.transformation && mapping.dataType !== 'uuid') {
+            return { ...mapping, transformation: 'objectIdToUuid' as any, dataType: 'uuid' };
+          }
+          return mapping;
+        });
       }
       
       const transformations = (pipeline.transformations as any[]) || [];
 
       // Log applied mappings for visibility
       if (columnMappings.length > 0) {
-        const mappedFields = this.transformerService.getMappedFieldsList(columnMappings);
+        const mappedFields = columnMappings.map(m => ({
+          sourcePath: m.sourcePath || m.sourceColumn,
+          destPath: m.destPath || m.destinationColumn
+        }));
         // Get destination type from data source
         const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
         const destType = destDataSource?.sourceType || 'unknown';
@@ -561,27 +538,18 @@ export class PipelineService {
       }
 
       // Collect data with batching
+      // Python handles all pagination, checkpoint management, and CDC logic
       let hasMore = true;
-      // For full sync, always start from offset 0 (ignore checkpoint offset)
-      // For incremental sync, use checkpoint offset to resume
       let offset = isFullSync ? 0 : (checkpoint?.offset || 0);
       let cursor: string | undefined = isFullSync ? undefined : checkpoint?.cursor;
 
-      // Log checkpoint restoration if applicable (only for incremental sync)
+      // Log checkpoint restoration if applicable
       if (!isFullSync && checkpoint?.rowsProcessed) {
         console.log(
-          `📂 Resuming from checkpoint: ${checkpoint.rowsProcessed.toLocaleString()} rows already processed (offset: ${offset})`,
-        );
-        await this.activityLogService.logPipelineAction(
-          pipeline.organizationId,
-          userId,
-          PIPELINE_ACTIONS.CHECKPOINT_SAVED,
-          pipeline.id,
-          pipeline.name,
-          { action: 'restored', checkpoint },
+          `📂 Resuming from checkpoint: ${checkpoint.rowsProcessed.toLocaleString()} rows already processed`,
         );
       } else if (isFullSync) {
-        console.log(`🔄 Full sync: Starting from beginning (offset: 0)`);
+        console.log(`🔄 Full sync: Starting from beginning`);
       }
 
       while (hasMore) {
@@ -593,49 +561,33 @@ export class PipelineService {
 
         console.log(`\n📦 Batch ${batchCount}: Collecting data...`);
 
+        // Get connection config for source
+        const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
+          pipeline.organizationId,
+          sourceSchema.dataSourceId!,
+          userId,
+        );
+
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
-            // ROOT FIX: For incremental sync, use WAL-based CDC (no column checks)
-            if (!isFullSync) {
-              // WAL-based CDC: Use LSN position from checkpoint
-              console.log(`   🔄 WAL CDC: Reading changes from transaction logs (LSN: ${effectiveLSN || 'start'})`);
-              
-              sourceData = await this.collectorService.collectIncremental({
-                sourceSchema,
-                organizationId: pipeline.organizationId,
-                userId,
-                checkpoint: {
-                  walPosition: effectiveLSN,
-                  lsn: effectiveLSN,
-                  slotName: checkpoint?.slotName,
-                  publicationName: checkpoint?.publicationName,
-                } as any, // Type assertion for WAL checkpoint
-                limit: batchSize,
-                offset,
-                cursor,
-              });
-              
-              // Update checkpoint with LSN from WAL CDC result
-              const resultMetadata = (sourceData as any).metadata;
-              if (resultMetadata?.lastLSN) {
-                checkpoint = {
-                  ...(checkpoint || {}),
-                  walPosition: resultMetadata.lastLSN,
-                  lsn: resultMetadata.lastLSN,
-                  slotName: resultMetadata.slotName || checkpoint?.slotName,
-                  publicationName: resultMetadata.publicationName || checkpoint?.publicationName,
-                } as PipelineCheckpoint;
-              }
-            } else {
-              // Full sync - collect all data
-              sourceData = await this.collectorService.collect({
-                sourceSchema,
-                organizationId: pipeline.organizationId,
-                userId,
-                limit: batchSize,
-                offset,
-                cursor,
-              });
+            // Call Python ETL service - Python handles all CDC/incremental logic
+            // Python will determine WAL CDC, checkpoint management, incremental detection, etc.
+            sourceData = await this.pythonETLService.collect({
+              sourceSchema,
+              connectionConfig: sourceConnectionConfig,
+              organizationId: pipeline.organizationId,
+              userId,
+              syncMode: syncType,
+              checkpoint: checkpoint || undefined, // Pass current checkpoint to Python
+              limit: batchSize,
+              offset,
+              cursor,
+            });
+            
+            // Python returns updated checkpoint in metadata - use it for next batch
+            const resultMetadata = (sourceData as any).metadata;
+            if (resultMetadata?.checkpoint) {
+              checkpoint = resultMetadata.checkpoint as PipelineCheckpoint;
             }
             break;
           } catch (error) {
@@ -714,17 +666,24 @@ export class PipelineService {
         );
 
         // STEP 2: Emit data to destination (with internal transformation)
+        // Get connection config for destination
+        const destConnectionConfig = await this.connectionService.getDecryptedConnection(
+          pipeline.organizationId,
+          destinationSchema.dataSourceId!,
+          userId,
+        );
+
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
-            const writeResult = await this.emitterService.emit({
+            const writeResult = await this.pythonETLService.emit({
               destinationSchema,
+              connectionConfig: destConnectionConfig,
               organizationId: pipeline.organizationId,
               userId,
               rows: sourceData.rows,
               writeMode: effectiveWriteMode,
               upsertKey: effectiveUpsertKey,
               columnMappings,
-              transformations,
             });
 
             totalRowsWritten += writeResult.rowsWritten;
@@ -742,8 +701,8 @@ export class PipelineService {
             console.log(`   📈 PROGRESS: ${totalRowsWritten.toLocaleString()} rows written so far`);
 
             // ROOT FIX: Publish real-time progress update via Socket.io
-            if (this.pgBossService.isReady()) {
-              await this.pgBossService.publishStatusUpdate({
+            if (this.rabbitmqService.isReady()) {
+              await this.rabbitmqService.publishStatusUpdate({
                 pipelineId: pipeline.id,
                 organizationId: pipeline.organizationId,
                 status: 'running',
@@ -788,36 +747,27 @@ export class PipelineService {
           console.log(`   ✓ End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`);
         }
 
-        // ROOT FIX: For WAL-based CDC, track LSN position instead of column values
-        // Extract LSN from WAL CDC result (if available)
+        // Python returns updated checkpoint in metadata - save it
         const resultMetadata = (sourceData as any).metadata;
-        const batchLSN = resultMetadata?.lastLSN || sourceData.nextCursor;
-        
-        if (batchLSN && !isFullSync) {
-          console.log(`   📌 WAL CDC: Processed up to LSN ${batchLSN}`);
+        if (resultMetadata?.checkpoint) {
+          // Use checkpoint returned from Python (Python handles all CDC/checkpoint logic)
+          const updatedCheckpoint = resultMetadata.checkpoint as PipelineCheckpoint;
+          await this.lifecycleService.saveCheckpoint(pipeline.id, updatedCheckpoint, userId);
+          checkpoint = updatedCheckpoint;
+        } else {
+          // Fallback: update basic checkpoint info if Python didn't return one
+          const currentCheckpoint: PipelineCheckpoint = {
+            ...(checkpoint || {}),
+            lastSyncAt: new Date().toISOString(),
+            offset,
+            cursor,
+            rowsProcessed: totalRowsWritten,
+            totalRows: estimatedTotalRows,
+            currentBatch: batchCount,
+          };
+          await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
+          checkpoint = currentCheckpoint;
         }
-
-        // Save checkpoint after each batch for resumability
-        // ROOT FIX: For WAL CDC, store LSN position instead of column values
-        const currentCheckpoint: PipelineCheckpoint = {
-          lastSyncAt: new Date().toISOString(),
-          offset,
-          cursor,
-          rowsProcessed: totalRowsWritten,
-          totalRows: estimatedTotalRows,
-          currentBatch: batchCount,
-          // WAL-based CDC: Store LSN position (not column values)
-          walPosition: batchLSN || checkpoint?.walPosition || checkpoint?.lsn,
-          lsn: batchLSN || checkpoint?.walPosition || checkpoint?.lsn,
-          // Store slot and publication names for WAL CDC
-          slotName: resultMetadata?.slotName || checkpoint?.slotName,
-          publicationName: resultMetadata?.publicationName || checkpoint?.publicationName,
-        };
-
-        await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
-        
-        // Update local checkpoint reference so subsequent batches use the updated value
-        checkpoint = currentCheckpoint;
 
         // Update progress in database
         await this.pipelineRepository.updateRun(runId, {
@@ -859,55 +809,31 @@ export class PipelineService {
         durationSeconds,
       });
 
-      // Get the final checkpoint
+      // Get the final checkpoint (Python may have updated it)
       const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
       
-      // ROOT FIX: User requirement - After FIRST full sync, ALWAYS transition to LISTING
-      // Once in LISTING mode, all subsequent runs use WAL-based incremental CDC
-      // No column configuration needed - uses PostgreSQL transaction logs
-      const targetStatus = isFullSync 
-        ? PipelineStatus.LISTING  // After full sync → listing mode → always WAL CDC
-        : PipelineStatus.LISTING;  // Keep in listing mode for WAL CDC
+      // Determine target status based on sync mode
+      // Python handles all CDC logic - NestJS just updates status
+      const targetStatus = syncMode === 'incremental' 
+        ? PipelineStatus.LISTING  // Incremental mode → listing for polling
+        : PipelineStatus.COMPLETED; // Full sync → completed
       
-      // ROOT FIX: Update totalRowsProcessed - cumulative across all runs
+      // Update totalRowsProcessed - cumulative across all runs
       const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;
       
-      // Get final LSN from checkpoint (WAL-based CDC)
-      const finalLSN = finalCheckpoint?.walPosition || finalCheckpoint?.lsn || checkpoint?.walPosition || checkpoint?.lsn;
-      
-      // ROOT FIX: After successful sync, transition to LISTING for WAL CDC
+      // Update pipeline with final checkpoint from Python
       await this.pipelineRepository.update(pipeline.id, {
         lastRunAt: new Date(),
         lastRunStatus: totalRowsFailed > 0 && totalRowsWritten === 0 ? 'failed' : 'success',
-        status: targetStatus, // LISTING for WAL CDC
+        status: targetStatus,
         totalRowsProcessed: newTotalRowsProcessed,
         totalRunsSuccessful: (pipeline.totalRunsSuccessful || 0) + (totalRowsFailed === 0 ? 1 : 0),
         totalRunsFailed:
           (pipeline.totalRunsFailed || 0) + (totalRowsFailed > 0 && totalRowsWritten === 0 ? 1 : 0),
         lastSyncAt: new Date(),
-        // ROOT FIX: Store WAL LSN position in checkpoint (not column values)
-        checkpoint: finalCheckpoint ? {
-          ...finalCheckpoint,
-          walPosition: finalLSN || finalCheckpoint.walPosition,
-          lsn: finalLSN || finalCheckpoint.lsn,
-          slotName: finalCheckpoint.slotName || checkpoint?.slotName,
-          publicationName: finalCheckpoint.publicationName || checkpoint?.publicationName,
-        } : (finalLSN ? {
-          walPosition: finalLSN,
-          lsn: finalLSN,
-          offset: 0,
-          slotName: checkpoint?.slotName,
-          publicationName: checkpoint?.publicationName,
-        } : undefined),
+        // Store checkpoint returned from Python (Python handles all CDC/checkpoint logic)
+        checkpoint: finalCheckpoint || undefined,
       });
-      
-      // ROOT FIX: If transitioning to LISTING mode after full sync, pg_cron will automatically
-      // detect this pipeline and enqueue incremental sync jobs via PGMQ
-      if (targetStatus === PipelineStatus.LISTING) {
-        this.logger.log(
-          `Pipeline ${pipeline.id} transitioned to LISTING mode. pg_cron will automatically poll and enqueue incremental syncs.`,
-        );
-      }
       
       // Log completion summary
       console.log(`\n${'='.repeat(60)}`);
@@ -920,10 +846,6 @@ export class PipelineService {
       console.log(`   Rows Failed:     ${totalRowsFailed.toLocaleString()}`);
       console.log(`   Duration:        ${durationSeconds}s`);
       console.log(`   Final Status:    ${targetStatus}`);
-      if (finalLSN) {
-        console.log(`   WAL LSN Position: ${finalLSN}`);
-        console.log(`   ➡️  Next incremental run will read changes from WAL starting at LSN ${finalLSN}`);
-      }
       console.log(`${'='.repeat(60)}\n`);
       
       this.logger.log(`Pipeline ${pipeline.id} status set to ${targetStatus} after completion`);
@@ -944,7 +866,6 @@ export class PipelineService {
           rowsFailed: totalRowsFailed,
           durationSeconds,
           finalStatus: targetStatus,
-          walLSN: finalLSN,
         },
       );
 
@@ -954,8 +875,8 @@ export class PipelineService {
 
       // ROOT FIX: Publish completion status via Socket.io for real-time UI update
       // Use newTotalRowsProcessed to show cumulative total in UI
-      if (this.pgBossService.isReady()) {
-        await this.pgBossService.publishStatusUpdate({
+      if (this.rabbitmqService.isReady()) {
+        await this.rabbitmqService.publishStatusUpdate({
           pipelineId: pipeline.id,
           organizationId: pipeline.organizationId,
           status: targetStatus,
@@ -1003,8 +924,8 @@ export class PipelineService {
       this.logger.error(`Pipeline ${pipeline.id} run ${runId} failed: ${errorMessage}`);
 
       // ROOT FIX: Publish failure status via Socket.io for real-time UI update
-      if (this.pgBossService.isReady()) {
-        await this.pgBossService.publishStatusUpdate({
+      if (this.rabbitmqService.isReady()) {
+        await this.rabbitmqService.publishStatusUpdate({
           pipelineId: pipeline.id,
           organizationId: pipeline.organizationId,
           status: 'failed',
@@ -1020,7 +941,7 @@ export class PipelineService {
 
   /**
    * Pause pipeline
-   * ROOT FIX: Store pause_timestamp in checkpoint to preserve state for resume
+   * Pause pipeline - Python handles checkpoint preservation
    */
   async pausePipeline(pipelineId: string, userId: string): Promise<Pipeline> {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -1063,7 +984,7 @@ export class PipelineService {
 
   /**
    * Resume pipeline
-   * ROOT FIX: Use pause_timestamp to calculate delta since pause, preserving checkpoint
+   * Resume pipeline - Python handles delta calculation and checkpoint management
    */
   async resumePipeline(pipelineId: string, userId: string): Promise<Pipeline> {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -1073,12 +994,8 @@ export class PipelineService {
 
     await this.checkPipelineManagePermission(userId, pipeline.organizationId);
 
-    // Get checkpoint (which should have pauseTimestamp)
+    // Get checkpoint - Python will handle delta calculation and checkpoint management
     const checkpoint = await this.lifecycleService.getCheckpoint(pipelineId);
-    
-    // ROOT FIX: Preserve checkpoint and pauseTimestamp for delta calculation
-    // The pauseTimestamp will be used in collectIncremental to catch all changes during pause
-    // No need to clear checkpoint - it will be used in next incremental sync
 
     // Recalculate next scheduled run time if the pipeline has a schedule
     let nextScheduledRunAt: Date | null = null;
@@ -1111,8 +1028,9 @@ export class PipelineService {
       // Keep pauseTimestamp in pipeline for reference, but checkpoint has the authoritative one
     });
 
+    // Python handles all delta calculation and checkpoint management
     this.logger.log(
-      `Pipeline ${pipelineId} resumed. Checkpoint preserved with pauseTimestamp: ${checkpoint?.pauseTimestamp || 'none'}. Next incremental sync will use min(pauseTimestamp, lastSyncValue) for delta calculation.`,
+      `Pipeline ${pipelineId} resumed. Python will handle delta calculation and checkpoint management.`,
     );
 
     await this.activityLogService.logPipelineAction(
@@ -1166,20 +1084,19 @@ export class PipelineService {
     if (columnMappings.length === 0) {
       warnings.push('No column mappings defined - will attempt to map columns by name');
     } else {
-      const mappingValidation = this.transformerService.validate(
-        columnMappings,
-        (pipeline.transformations as any[]) || undefined,
-      );
-      errors.push(...mappingValidation.errors);
-      if (mappingValidation.warnings) {
-        warnings.push(...mappingValidation.warnings);
+      // Basic validation - check for required fields
+      for (let i = 0; i < columnMappings.length; i++) {
+        const mapping = columnMappings[i];
+        if (!mapping.sourceColumn) {
+          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
+        }
+        if (!mapping.destinationColumn) {
+          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
+        }
       }
     }
 
-    // Validate incremental sync configuration
-    if (pipeline.syncMode === 'incremental' && !pipeline.incrementalColumn) {
-      errors.push('Incremental sync requires an incremental column');
-    }
+    // Python handles incremental sync validation - no need to validate here
 
     // Validate upsert configuration
     if (destinationSchema.writeMode === 'upsert') {
@@ -1213,9 +1130,17 @@ export class PipelineService {
 
     await this.checkPipelineViewPermission(userId, pipeline.organizationId);
 
+    // Get connection configs
+    const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
+      pipeline.organizationId,
+      sourceSchema.dataSourceId!,
+      userId,
+    );
+
     // Collect sample data
-    const sourceData = await this.collectorService.collect({
+    const sourceData = await this.pythonETLService.collect({
       sourceSchema,
+      connectionConfig: sourceConnectionConfig,
       organizationId: pipeline.organizationId,
       userId,
       limit: sampleSize,
@@ -1226,7 +1151,10 @@ export class PipelineService {
     const transformations = (pipeline.transformations as any[]) || [];
 
     // Log applied mappings for visibility
-    const mappedFields = this.transformerService.getMappedFieldsList(columnMappings);
+    const mappedFields = columnMappings.map(m => ({
+      sourcePath: m.sourcePath || m.sourceColumn,
+      destPath: m.destPath || m.destinationColumn
+    }));
     // Get destination type from data source
     const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
     const destType = destDataSource?.sourceType || 'unknown';
@@ -1234,11 +1162,12 @@ export class PipelineService {
       `Dry run: Mapping applied to ${sourceSchema.sourceType}→${destType}: ${mappedFields.length} fields`,
     );
 
-    const transformedSample = await this.transformerService.transform(
-      sourceData.rows,
+    const transformResult = await this.pythonETLService.transform({
+      rows: sourceData.rows,
       columnMappings,
       transformations,
-    );
+    });
+    const transformedSample = transformResult.transformedRows;
 
     // Log sample transformed data
     if (transformedSample.length > 0) {
@@ -1365,10 +1294,13 @@ export class PipelineService {
     }
 
     // Determine schema types
+    const relationalTypes = ['postgres', 'postgresql', 'mysql', 'mariadb', 'sqlite', 'mssql', 'oracle'];
+    const isRelational = (type: string) => relationalTypes.includes(type?.toLowerCase());
+    
     const sourceSchemaInfo: SchemaInfo = {
       columns: [],
       primaryKeys: [],
-      isRelational: this.transformerService.isRelationalType(sourceDataSource.sourceType),
+      isRelational: isRelational(sourceDataSource.sourceType),
       sourceType: sourceDataSource.sourceType,
       entityName: sourceSchema.sourceTable || undefined,
     };
@@ -1376,7 +1308,7 @@ export class PipelineService {
     const destSchemaInfo: SchemaInfo = {
       columns: [],
       primaryKeys: [],
-      isRelational: this.transformerService.isRelationalType(destDataSource.sourceType),
+      isRelational: isRelational(destDataSource.sourceType),
       sourceType: destDataSource.sourceType,
       entityName: destinationSchema.destinationTable || undefined,
     };
@@ -1447,26 +1379,24 @@ export class PipelineService {
       // Get column mappings
       const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
 
-      // Validate mappings for bidirectional transform
-      const validation = this.transformerService.validateBidirectional(
-        columnMappings,
-        sourceSchemaInfo,
-        destSchemaInfo,
+      // Basic validation
+      if (columnMappings.length === 0) {
+        throw new BadRequestException('At least one column mapping is required');
+      }
+
+      // Get connection configs
+      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        sourceSchema.dataSourceId!,
+        userId,
       );
-
-      if (!validation.valid) {
-        throw new BadRequestException(`Mapping validation failed: ${validation.errors.join(', ')}`);
-      }
-
-      if (validation.warnings?.length) {
-        this.logger.warn(`Mapping warnings: ${validation.warnings.join(', ')}`);
-      }
 
       // Collect all data (for simplicity, batching can be added later)
       console.log(`\n📦 Collecting data from ${sourceSchemaInfo.sourceType}...`);
       
-      const sourceData = await this.collectorService.collect({
+      const sourceData = await this.pythonETLService.collect({
         sourceSchema,
+        connectionConfig: sourceConnectionConfig,
         organizationId: pipeline.organizationId,
         userId,
         limit: batchSize * 10, // Collect more for batch processing
@@ -1489,32 +1419,46 @@ export class PipelineService {
       totalRowsRead = sourceData.rows.length;
       console.log(`   📥 Collected ${totalRowsRead.toLocaleString()} rows`);
 
-      // Transform using bidirectional method
+      // Transform using Python service
       console.log(`\n🔄 Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})...`);
       
-      const transformedData = await this.transformerService.transformBidirectional(
-        sourceData.rows,
+      const transformResult = await this.pythonETLService.transform({
+        rows: sourceData.rows,
         columnMappings,
-        sourceSchemaInfo,
-        destSchemaInfo,
-      );
+      });
+      
+      // Group by entity if needed (simplified - assumes single entity for now)
+      const transformedData: Record<string, any[]> = {
+        default: transformResult.transformedRows
+      };
 
       // Log transformation results
       for (const [entity, rows] of Object.entries(transformedData)) {
         console.log(`   📋 Entity '${entity}': ${rows.length} rows`);
       }
 
-      // Emit to destination using multi-entity method
+      // Emit to destination
       console.log(`\n📤 Writing to ${destSchemaInfo.sourceType}...`);
       
-      const writeResults = await this.emitterService.emitMultiEntity({
-        destinationSchema,
-        organizationId: pipeline.organizationId,
+      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        destinationSchema.dataSourceId!,
         userId,
-        entityData: transformedData,
-        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
-        upsertKeys: options?.upsertKeys,
-      });
+      );
+      
+      const writeResults: Record<string, WriteResult> = {};
+      for (const [entity, rows] of Object.entries(transformedData)) {
+        const result = await this.pythonETLService.emit({
+          destinationSchema,
+          connectionConfig: destConnectionConfig,
+          organizationId: pipeline.organizationId,
+          userId,
+          rows,
+          writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+          upsertKey: options?.upsertKeys?.[entity],
+        });
+        writeResults[entity] = result;
+      }
 
       // Calculate totals
       for (const [entity, result] of Object.entries(writeResults)) {

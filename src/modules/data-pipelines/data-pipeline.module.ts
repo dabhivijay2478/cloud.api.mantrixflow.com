@@ -7,18 +7,22 @@
  * - MySQL (relational database)
  * - MongoDB (document database)
  *
- * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
+ * Architecture: 
+ * - NestJS: Orchestration, CRUD, user/org management, activity logging
+ * - Python FastAPI: ETL operations (collect, transform, emit)
+ * - RabbitMQ: Job queuing, scheduling, CDC polling
+ * - Socket.io: Real-time updates
  *
  * Features:
- * - Incremental sync with checkpoint tracking
- * - PgBoss for job queuing (exactly-once delivery, cron scheduling, retries)
+ * - Incremental sync with checkpoint tracking (WAL CDC for PostgreSQL)
+ * - RabbitMQ for job queuing (message queues, topic exchange for pub/sub)
+ * - Polling-based CDC (checks for changes every 2 minutes)
  * - Socket.io for real-time updates
  *
  * Guide: To add a new data source type:
- * 1. Create handler in services/handlers/
- * 2. Register in handler-registry.ts
- * 3. Add type to DataSourceType enum
- * 4. Add emitter/collector methods for the new type
+ * 1. Add connector in Python service: etl-service/connectors/{source-name}.py
+ * 2. Register in Python main.py CONNECTORS dict
+ * 3. Add type to DataSourceType enum (postgresql, mysql, mongodb only)
  */
 
 import { Module, forwardRef } from '@nestjs/common';
@@ -38,17 +42,16 @@ import { DestinationSchemaController } from './destination-schema.controller';
 import { PipelineService } from './services/pipeline.service';
 import { SourceSchemaService } from './services/source-schema.service';
 import { DestinationSchemaService } from './services/destination-schema.service';
-import { CollectorService } from './services/collector.service';
-import { TransformerService } from './services/transformer.service';
-import { EmitterService } from './services/emitter.service';
+import { PythonETLService } from './services/python-etl.service';
 import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 import { PipelineSchedulerService } from './services/pipeline-scheduler.service';
 import { ScheduledPipelineWorkerService } from './services/scheduled-pipeline-worker.service';
 import { SchemaValidationService } from './services/schema-validation.service';
 
-// PgBoss Services (replaces PGMQ and pg_cron)
-import { PgBossService } from './services/pgboss.service';
-import { PgBossJobHandlerService } from './services/pgboss-job-handler.service';
+// RabbitMQ Services
+import { RabbitMQModule } from '../queue/rabbitmq.module';
+import { RabbitMQService } from '../queue/rabbitmq.service';
+import { RabbitMQJobHandlerService } from './services/rabbitmq-job-handler.service';
 
 // Gateways
 import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
@@ -69,6 +72,9 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
+
+    // RabbitMQ module for job queuing and scheduling
+    RabbitMQModule.forRoot(),
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
@@ -103,16 +109,14 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     PipelineSchedulerService, // Handles pipeline scheduling configuration
     ScheduledPipelineWorkerService, // Worker for processing scheduled pipeline jobs
 
-    // Generic Data Services (support PostgreSQL, MySQL, MongoDB only)
-    CollectorService, // Collects data from sources (Postgres, MySQL, MongoDB)
-    TransformerService, // Transforms data with mappings and transformations
-    EmitterService, // Emits data to destinations with transformation
+    // Python ETL Service - HTTP client for Python FastAPI microservice
+    PythonETLService, // Handles collect, transform, emit via Python service
 
-    // PgBoss Services - Job queue and handlers
-    // PgBoss provides: exactly-once delivery, cron scheduling, priority queues,
-    // automatic retries with exponential backoff, dead letter queues, pub/sub
-    PgBossService, // Core PgBoss service for job management
-    PgBossJobHandlerService, // Job handlers for sync operations
+    // RabbitMQ Services - Job queue and handlers
+    // RabbitMQ provides: message queuing, topic exchange for pub/sub,
+    // delayed messages for scheduling, polling consumers for CDC
+    RabbitMQService, // Core RabbitMQ service for job management
+    RabbitMQJobHandlerService, // Job handlers for sync operations
 
     // Schema Validation
     SchemaValidationService, // Validates database schema on startup
@@ -127,10 +131,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     DestinationSchemaService,
     PipelineLifecycleService,
     PipelineSchedulerService,
-    CollectorService,
-    TransformerService,
-    EmitterService,
-    PgBossService,
+    PythonETLService,
+    RabbitMQService,
 
     // Export repositories for advanced use cases
     PipelineRepository,

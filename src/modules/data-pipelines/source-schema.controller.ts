@@ -175,35 +175,6 @@ export class SourceSchemaController {
   }
 
   /**
-   * Discover schema from source
-   */
-  @Post(':id/discover')
-  @ApiOperation({
-    summary: 'Discover source schema',
-    description: 'Automatically discover columns and metadata from the source.',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string' })
-  @ApiParam({ name: 'id', type: 'string' })
-  @ApiResponse({ status: 200, description: 'Schema discovered successfully' })
-  async discoverSchema(
-    @Param('organizationId', RequiredUUIDPipe) _organizationId: string,
-    @Param('id', RequiredUUIDPipe) id: string,
-    @Request() req: ExpressRequestType,
-  ) {
-    try {
-      const userId = this.extractUserId(req);
-      const result = await this.sourceSchemaService.discoverSchema(id, userId);
-
-      return createSuccessResponse(
-        result,
-        `Discovered ${result.discovered.columns.length} columns`,
-      );
-    } catch (error) {
-      this.handleError('discover schema', error);
-    }
-  }
-
-  /**
    * Validate source schema
    */
   @Post(':id/validate')
@@ -229,32 +200,6 @@ export class SourceSchemaController {
       );
     } catch (error) {
       this.handleError('validate source schema', error);
-    }
-  }
-
-  /**
-   * Preview source data
-   */
-  @Get(':id/preview')
-  @ApiOperation({
-    summary: 'Preview source data',
-    description: 'Get a sample of data from the source.',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string' })
-  @ApiParam({ name: 'id', type: 'string' })
-  @ApiResponse({ status: 200, description: 'Sample data from source' })
-  async previewData(
-    @Param('organizationId', RequiredUUIDPipe) _organizationId: string,
-    @Param('id', RequiredUUIDPipe) id: string,
-    @Request() req: ExpressRequestType,
-  ) {
-    try {
-      const userId = this.extractUserId(req);
-      const result = await this.sourceSchemaService.previewData(id, userId, 10);
-
-      return createSuccessResponse(result, `Retrieved ${result.rows.length} sample rows`);
-    } catch (error) {
-      this.handleError('preview data', error);
     }
   }
 

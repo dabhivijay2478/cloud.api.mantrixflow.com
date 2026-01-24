@@ -11,6 +11,9 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { firstValueFrom } from 'rxjs';
 import { Pool } from 'pg';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import type { DataSourceConnection } from '../../database/schemas/data-sources';
@@ -42,6 +45,7 @@ export interface UpdateConnectionDto {
 @Injectable()
 export class ConnectionService {
   private readonly logger = new Logger(ConnectionService.name);
+  private readonly pythonServiceUrl: string;
 
   constructor(
     private readonly connectionRepository: DataSourceConnectionRepository,
@@ -49,7 +53,14 @@ export class ConnectionService {
     private readonly encryptionService: EncryptionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
-  ) {}
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
+  ) {
+    this.pythonServiceUrl =
+      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
+      this.configService.get<string>('PYTHON_SERVICE_URL') ||
+      'http://localhost:8001';
+  }
 
   /**
    * Encrypt sensitive fields in config based on connection type
@@ -528,6 +539,56 @@ export class ConnectionService {
   }
 
   /**
+   * Delete connection for a data source
+   * AUTHORIZATION: Only ADMIN or OWNER can delete connections
+   */
+  async deleteConnection(
+    organizationId: string,
+    dataSourceId: string,
+    userId: string,
+  ): Promise<void> {
+    // Verify data source exists and belongs to organization
+    const dataSource = await this.dataSourceRepository.findById(dataSourceId);
+    if (!dataSource) {
+      throw new NotFoundException(`Data source with ID "${dataSourceId}" not found`);
+    }
+    if (dataSource.organizationId !== organizationId) {
+      throw new ForbiddenException('Data source does not belong to this organization');
+    }
+
+    // AUTHORIZATION: Check if user can manage data sources
+    const canManage = await this.roleService.canManageDataSources(userId, organizationId);
+    if (!canManage) {
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can delete connections');
+    }
+
+    // Check if connection exists
+    const connection = await this.connectionRepository.findByDataSourceId(dataSourceId);
+    if (!connection) {
+      throw new NotFoundException('Connection not found for this data source');
+    }
+
+    // Delete connection
+    await this.connectionRepository.deleteByDataSourceId(dataSourceId);
+
+    // Log activity
+    try {
+      await this.activityLogService.logConnectionAction(
+        organizationId,
+        userId,
+        CONNECTION_ACTIONS.DELETED,
+        connection.id,
+        dataSource.name,
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to log connection deletion activity',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
    * Get decrypted connection config for actual use
    * AUTHORIZATION: Only EDITOR+ can get decrypted config
    */
@@ -546,13 +607,32 @@ export class ConnectionService {
   }
 
   /**
+   * Normalize source type for Python service
+   */
+  private normalizeSourceTypeForPython(connectionType: string): string {
+    const normalized = connectionType.toLowerCase();
+    if (normalized === 'postgres' || normalized === 'pgvector' || normalized === 'redshift') {
+      return 'postgresql';
+    }
+    if (normalized === 'mysql') {
+      return 'mysql';
+    }
+    if (normalized === 'mongodb') {
+      return 'mongodb';
+    }
+    return normalized;
+  }
+
+  /**
    * Test connection
    * AUTHORIZATION: Only EDITOR+ can test connections
+   * Now calls Python service for actual connection testing
    */
   async testConnection(
     organizationId: string,
     dataSourceId: string,
     userId: string,
+    authToken?: string,
   ): Promise<{ success: boolean; message: string; details?: any }> {
     // Verify data source exists
     const dataSource = await this.dataSourceRepository.findById(dataSourceId);
@@ -588,28 +668,90 @@ export class ConnectionService {
         connection.config as any,
       );
 
-      // Test connection based on type
-      switch (connection.connectionType) {
-        case 'postgres':
-          testResult = await this.testPostgresConnection(decryptedConfig as PostgresConfig);
-          break;
-        case 'mysql':
-          testResult = await this.testMySQLConnection(decryptedConfig as MySQLConfig);
-          break;
-        case 'mongodb':
-          testResult = await this.testMongoDBConnection(decryptedConfig as MongoDBConfig);
-          break;
-        case 's3':
-          testResult = await this.testS3Connection(decryptedConfig as S3Config);
-          break;
-        case 'api':
-          testResult = await this.testAPIConnection(decryptedConfig as APIConfig);
-          break;
-        default:
-          throw new BadRequestException(
-            `Connection testing not yet implemented for type: ${connection.connectionType}`,
-          );
+      // Call Python service to test connection
+      // Get auth token from request context (we'll need to pass it)
+      // For now, we'll call Python service directly - it will handle auth via JWT
+      const sourceType = this.normalizeSourceTypeForPython(connection.connectionType);
+      
+      // Build request payload for Python service
+      const pythonRequest: any = {
+        type: sourceType,
+      };
+
+      // Map connection config to Python service format
+      if (sourceType === 'mongodb') {
+        if (decryptedConfig.connection_string) {
+          pythonRequest.connection_string_mongo = decryptedConfig.connection_string;
+        } else {
+          pythonRequest.host = decryptedConfig.host || 'localhost';
+          pythonRequest.port = decryptedConfig.port || 27017;
+          pythonRequest.database = decryptedConfig.database || '';
+          pythonRequest.username = decryptedConfig.username;
+          pythonRequest.password = decryptedConfig.password;
+          if (decryptedConfig.auth_source) {
+            pythonRequest.auth_source = decryptedConfig.auth_source;
+          }
+          if (decryptedConfig.replica_set) {
+            pythonRequest.replica_set = decryptedConfig.replica_set;
+          }
+          if (decryptedConfig.tls !== undefined) {
+            pythonRequest.tls = decryptedConfig.tls;
+          }
+        }
+      } else {
+        // SQL databases (PostgreSQL, MySQL)
+        if (decryptedConfig.connection_string) {
+          pythonRequest.connection_string = decryptedConfig.connection_string;
+        } else {
+          pythonRequest.host = decryptedConfig.host || 'localhost';
+          pythonRequest.port = decryptedConfig.port || (sourceType === 'postgresql' ? 5432 : 3306);
+          pythonRequest.database = decryptedConfig.database || '';
+          pythonRequest.username = decryptedConfig.username || '';
+          pythonRequest.password = decryptedConfig.password || '';
+          if (decryptedConfig.ssl) {
+            pythonRequest.ssl = decryptedConfig.ssl;
+          }
+        }
       }
+
+      // Call Python service
+      this.logger.log(`Calling Python service to test ${sourceType} connection`);
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+      
+      let pythonResponse;
+      try {
+        pythonResponse = await firstValueFrom(
+          this.httpService.post(
+            `${this.pythonServiceUrl}/test-connection`,
+            pythonRequest,
+            {
+              headers,
+              timeout: 30000,
+            },
+          ),
+        );
+      } catch (error: any) {
+        const errorMessage = error?.response?.data?.detail || error?.response?.data?.error || error?.message || 'Failed to connect to Python service';
+        this.logger.error(`Python service call failed: ${errorMessage}`, error?.stack);
+        throw new BadRequestException(`Connection test failed: ${errorMessage}`);
+      }
+
+      // Map Python response to our format
+      testResult = {
+        success: pythonResponse.data.success || false,
+        message: pythonResponse.data.message || pythonResponse.data.error || 'Connection test completed',
+        details: pythonResponse.data.details || {
+          version: pythonResponse.data.version,
+          response_time_ms: pythonResponse.data.response_time_ms,
+        },
+      };
 
       // Update connection status and test result
       await this.connectionRepository.updateByDataSourceId(dataSourceId, {

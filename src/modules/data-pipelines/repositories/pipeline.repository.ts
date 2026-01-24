@@ -563,7 +563,7 @@ export class PipelineRepository {
   }
 
   // ============================================================================
-  // POLLING/CDC SUPPORT METHODS (PgBoss Integration)
+  // POLLING/CDC SUPPORT METHODS (RabbitMQ Integration)
   // ============================================================================
 
   /**

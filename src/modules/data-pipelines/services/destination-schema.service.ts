@@ -16,10 +16,11 @@ import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DESTINATION_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { EmitterService } from './emitter.service';
-import { TransformerService } from './transformer.service';
+import { PythonETLService } from './python-etl.service';
+import { ConnectionService } from '../../data-sources/connection.service';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
 import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
+import { WriteMode } from '../dto/create-destination-schema.dto';
 import type {
   ColumnMapping,
   SchemaValidationResult,
@@ -40,8 +41,8 @@ export class DestinationSchemaService {
   constructor(
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
-    private readonly emitterService: EmitterService,
-    private readonly transformerService: TransformerService,
+    private readonly pythonETLService: PythonETLService,
+    private readonly connectionService: ConnectionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
   ) {}
@@ -67,16 +68,25 @@ export class DestinationSchemaService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Validate column mappings if provided
+    // Validate column mappings if provided (basic validation)
     if (dto.columnMappings && dto.columnMappings.length > 0) {
-      const validation = this.transformerService.validate(dto.columnMappings as ColumnMapping[]);
-      if (!validation.valid) {
-        throw new BadRequestException(`Invalid column mappings: ${validation.errors.join(', ')}`);
+      const errors: string[] = [];
+      for (let i = 0; i < dto.columnMappings.length; i++) {
+        const mapping = dto.columnMappings[i];
+        if (!mapping.sourceColumn) {
+          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
+        }
+        if (!mapping.destinationColumn) {
+          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
+        }
+      }
+      if (errors.length > 0) {
+        throw new BadRequestException(`Invalid column mappings: ${errors.join(', ')}`);
       }
     }
 
     // Validate upsert configuration
-    if (dto.writeMode === 'upsert' && (!dto.upsertKey || dto.upsertKey.length === 0)) {
+    if (dto.writeMode === WriteMode.UPSERT && (!dto.upsertKey || dto.upsertKey.length === 0)) {
       throw new BadRequestException('Upsert mode requires upsert key columns');
     }
 
@@ -86,9 +96,9 @@ export class DestinationSchemaService {
       destinationSchema: dto.destinationSchema || 'public',
       destinationTable,
       destinationTableExists: dto.destinationTableExists || false,
-      columnMappings: (dto.columnMappings as any) || null,
-      writeMode: dto.writeMode || 'append',
-      upsertKey: (dto.upsertKey as any) || null,
+      columnMappings: (dto.columnMappings as ColumnMapping[]) || null,
+      writeMode: (dto.writeMode as string) || 'append',
+      upsertKey: (dto.upsertKey as string[]) || null,
       name: dto.name || `${destinationTable}_destination`,
       isActive: true,
     });
@@ -164,13 +174,20 @@ export class DestinationSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    // Validate column mappings if being updated
+    // Validate column mappings if being updated (basic validation)
     if (updates.columnMappings && updates.columnMappings.length > 0) {
-      const validation = this.transformerService.validate(
-        updates.columnMappings as ColumnMapping[],
-      );
-      if (!validation.valid) {
-        throw new BadRequestException(`Invalid column mappings: ${validation.errors.join(', ')}`);
+      const errors: string[] = [];
+      for (let i = 0; i < updates.columnMappings.length; i++) {
+        const mapping = updates.columnMappings[i];
+        if (!mapping.sourceColumn) {
+          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
+        }
+        if (!mapping.destinationColumn) {
+          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
+        }
+      }
+      if (errors.length > 0) {
+        throw new BadRequestException(`Invalid column mappings: ${errors.join(', ')}`);
       }
     }
 
@@ -183,8 +200,8 @@ export class DestinationSchemaService {
 
     const updated = await this.destinationSchemaRepository.update(id, {
       ...updates,
-      columnMappings: updates.columnMappings as any,
-      upsertKey: updates.upsertKey as any,
+      columnMappings: (updates.columnMappings as ColumnMapping[]) || undefined,
+      upsertKey: (updates.upsertKey as string[]) || undefined,
       updatedAt: new Date(),
     });
 
@@ -204,6 +221,7 @@ export class DestinationSchemaService {
 
   /**
    * Validate destination schema against actual database schema
+   * Note: Full validation now handled by Python service via discover-schema endpoint
    */
   async validateSchema(id: string, userId: string): Promise<SchemaValidationResult> {
     const schema = await this.destinationSchemaRepository.findById(id);
@@ -221,17 +239,26 @@ export class DestinationSchemaService {
       };
     }
 
+    // Basic validation - full schema validation can be done via Python service discover-schema
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!schema.destinationTable) {
+      errors.push('Destination table is required');
+    }
+
     const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
+    if (columnMappings.length === 0) {
+      warnings.push('No column mappings defined');
+    }
 
-    // Validate using emitter
-    const validationResult = await this.emitterService.validateSchema({
-      destinationSchema: schema,
-      organizationId: schema.organizationId,
-      userId,
-      columnMappings,
-    });
+    const validationResult: SchemaValidationResult = {
+      valid: errors.length === 0,
+      errors,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
 
-    // Update schema with validation result
+    // Update schema with validation result (include validatedAt for DestinationSchemaValidationResult)
     await this.destinationSchemaRepository.update(id, {
       validationResult: {
         ...validationResult,
@@ -251,7 +278,6 @@ export class DestinationSchemaService {
       metadata: {
         valid: validationResult.valid,
         errorsCount: validationResult.errors.length,
-        missingColumns: validationResult.missingColumns,
       },
     });
 
@@ -260,6 +286,8 @@ export class DestinationSchemaService {
 
   /**
    * Check if destination table exists
+   * Note: This can be implemented by calling Python service discover-schema endpoint
+   * For now, returns the cached value
    */
   async checkTableExists(id: string, userId: string): Promise<boolean> {
     const schema = await this.destinationSchemaRepository.findById(id);
@@ -269,22 +297,17 @@ export class DestinationSchemaService {
 
     await this.checkViewPermission(userId, schema.organizationId);
 
-    const exists = await this.emitterService.tableExists({
-      destinationSchema: schema,
-      organizationId: schema.organizationId,
-      userId,
-    });
-
-    // Update cached existence status
-    await this.destinationSchemaRepository.update(id, {
-      destinationTableExists: exists,
-    });
+    // TODO: Implement via Python service discover-schema endpoint
+    // For now, return cached value
+    const exists = schema.destinationTableExists || false;
 
     return exists;
   }
 
   /**
    * Create destination table based on column mappings
+   * Note: Table creation is now handled by Python service during emit operation
+   * This method is kept for backward compatibility but table creation happens automatically
    */
   async createTable(id: string, userId: string): Promise<{ created: boolean; tableName: string }> {
     const schema = await this.destinationSchemaRepository.findById(id);
@@ -300,38 +323,18 @@ export class DestinationSchemaService {
       throw new BadRequestException('Column mappings are required to create table');
     }
 
-    const result = await this.emitterService.createTable({
-      destinationSchema: schema,
-      organizationId: schema.organizationId,
-      userId,
-      columnMappings,
-    });
+    // Table creation is now handled automatically by Python service during emit
+    // This method is kept for API compatibility
+    // The table will be created on first emit if it doesn't exist
 
-    if (result.created) {
-      // Update schema status
-      await this.destinationSchemaRepository.update(id, {
-        destinationTableExists: true,
-        lastSyncedAt: new Date(),
-      });
+    this.logger.log(
+      `Table creation will happen automatically on first emit for: ${schema.destinationTable}`,
+    );
 
-      // Log activity
-      await this.activityLogService.logActivity({
-        organizationId: schema.organizationId,
-        userId,
-        actionType: DESTINATION_SCHEMA_ACTIONS.SYNCED,
-        entityType: 'pipeline_destination_schema',
-        entityId: id,
-        message: `Destination table created: ${result.tableName}`,
-        metadata: {
-          tableName: result.tableName,
-          columnsCount: columnMappings.length,
-        },
-      });
-
-      this.logger.log(`Created destination table: ${result.tableName}`);
-    }
-
-    return result;
+    return {
+      created: false, // Table creation deferred to emit operation
+      tableName: schema.destinationTable,
+    };
   }
 
   /**
@@ -340,9 +343,9 @@ export class DestinationSchemaService {
    */
   async syncFromSource(
     id: string,
-    _sourceSchemaId: string,
+    sourceSchemaId: string,
     userId: string,
-    _options?: {
+    options?: {
       includeAllColumns?: boolean;
       preserveExisting?: boolean;
     },
@@ -357,6 +360,9 @@ export class DestinationSchemaService {
 
     // TODO: Get source schema columns and generate mappings
     // This would integrate with SourceSchemaService to get discovered columns
+    // For now, this is a placeholder
+    void sourceSchemaId;
+    void options;
 
     throw new BadRequestException('Sync from source not yet implemented');
   }
@@ -393,20 +399,25 @@ export class DestinationSchemaService {
       }
     }
 
-    // Check column mappings
+    // Check column mappings (basic validation)
     const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
     if (columnMappings.length === 0) {
       warnings.push('No column mappings defined');
     } else {
-      const mappingValidation = this.transformerService.validate(columnMappings);
-      errors.push(...mappingValidation.errors);
-      if (mappingValidation.warnings) {
-        warnings.push(...mappingValidation.warnings);
+      // Basic validation
+      for (let i = 0; i < columnMappings.length; i++) {
+        const mapping = columnMappings[i];
+        if (!mapping.sourceColumn) {
+          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
+        }
+        if (!mapping.destinationColumn) {
+          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
+        }
       }
     }
 
     // Check upsert configuration
-    if (schema.writeMode === 'upsert') {
+    if ((schema.writeMode as string) === 'upsert') {
       const upsertKey = schema.upsertKey as string[];
       if (!upsertKey || upsertKey.length === 0) {
         errors.push('Upsert mode requires upsert key columns');

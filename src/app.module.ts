@@ -23,7 +23,7 @@ import { UserModule } from './modules/users/user.module';
     // Use for quick, in-memory tasks that run on every instance
     ScheduleModule.forRoot(),
 
-    // Note: PgBoss has been removed - we now use PGMQ (Postgres Message Queue)
+    // Note: PgBoss has been removed - we now use RabbitMQ for job queuing and scheduling
     // PGMQ is integrated directly via PGMQService in DataPipelineModule
 
     // Application Modules

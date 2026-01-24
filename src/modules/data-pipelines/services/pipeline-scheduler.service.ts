@@ -4,7 +4,7 @@
  * 
  * Note: This service stores schedule config in the database.
  * The ScheduledPipelineWorkerService polls for due pipelines and executes them.
- * We no longer use PgBoss - scheduling is handled via database polling.
+ * Scheduling is handled via database polling and RabbitMQ.
  */
 
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
@@ -56,7 +56,7 @@ export class PipelineSchedulerService {
       throw new BadRequestException('Invalid schedule configuration');
     }
 
-    // We DON'T use PgBoss schedule directly for per-pipeline schedules
+    // Scheduling is handled via database polling and RabbitMQ
     // Instead, we store the schedule config in the database and
     // the ScheduledPipelineWorkerService polls for due pipelines
     

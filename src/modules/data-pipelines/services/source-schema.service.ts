@@ -15,8 +15,8 @@ import type { PipelineSourceSchema } from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { SOURCE_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import { ConnectionService } from '../../data-sources/connection.service';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { CollectorService } from './collector.service';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import type { CreateSourceSchemaDto, UpdateSourceSchemaDto } from '../dto';
 import type { ColumnInfo, ValidationResult } from '../types/common.types';
@@ -35,7 +35,7 @@ export class SourceSchemaService {
   constructor(
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
-    private readonly collectorService: CollectorService,
+    private readonly connectionService: ConnectionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
   ) {}
@@ -178,76 +178,6 @@ export class SourceSchemaService {
   }
 
   /**
-   * Discover schema from source
-   * Uses CollectorService to discover columns, primary keys, and row count
-   */
-  async discoverSchema(
-    id: string,
-    userId: string,
-  ): Promise<{
-    schema: PipelineSourceSchema;
-    discovered: {
-      columns: ColumnInfo[];
-      primaryKeys: string[];
-      estimatedRowCount?: number;
-    };
-  }> {
-    const schema = await this.sourceSchemaRepository.findById(id);
-    if (!schema) {
-      throw new NotFoundException(`Source schema ${id} not found`);
-    }
-
-    // AUTHORIZATION
-    await this.checkManagePermission(userId, schema.organizationId);
-
-    if (!schema.dataSourceId) {
-      throw new BadRequestException('Source schema must have a data source ID for discovery');
-    }
-
-    // Discover schema using collector
-    const discovered = await this.collectorService.discoverSchema({
-      sourceSchema: schema,
-      organizationId: schema.organizationId,
-      userId,
-    });
-
-    // Update schema with discovered information
-    const updated = await this.sourceSchemaRepository.update(id, {
-      discoveredColumns: discovered.columns as any,
-      primaryKeys: discovered.primaryKeys as any,
-      estimatedRowCount: discovered.estimatedRowCount as any,
-      lastDiscoveredAt: new Date(),
-      validationResult: {
-        valid: true,
-        errors: [],
-        warnings: [],
-        validatedAt: new Date().toISOString(),
-      } as any,
-    });
-
-    // Log activity
-    await this.activityLogService.logActivity({
-      organizationId: schema.organizationId,
-      userId,
-      actionType: SOURCE_SCHEMA_ACTIONS.DISCOVERED,
-      entityType: 'pipeline_source_schema',
-      entityId: id,
-      message: `Schema discovered: ${discovered.columns.length} columns, ${discovered.primaryKeys.length} primary keys`,
-      metadata: {
-        columnsCount: discovered.columns.length,
-        primaryKeysCount: discovered.primaryKeys.length,
-        estimatedRowCount: discovered.estimatedRowCount,
-      },
-    });
-
-    this.logger.log(
-      `Schema discovered for ${id}: ${discovered.columns.length} columns, ~${discovered.estimatedRowCount} rows`,
-    );
-
-    return { schema: updated, discovered };
-  }
-
-  /**
    * Validate source schema configuration
    */
   async validateSchema(id: string, userId: string): Promise<ValidationResult> {
@@ -314,41 +244,6 @@ export class SourceSchemaService {
     });
 
     return validationResult;
-  }
-
-  /**
-   * Preview source data (sample)
-   */
-  async previewData(
-    id: string,
-    userId: string,
-    limit: number = 10,
-  ): Promise<{ rows: any[]; columns: ColumnInfo[] }> {
-    const schema = await this.sourceSchemaRepository.findById(id);
-    if (!schema) {
-      throw new NotFoundException(`Source schema ${id} not found`);
-    }
-
-    await this.checkViewPermission(userId, schema.organizationId);
-
-    if (!schema.dataSourceId) {
-      throw new BadRequestException('Source schema must have a data source ID for preview');
-    }
-
-    const result = await this.collectorService.collect({
-      sourceSchema: schema,
-      organizationId: schema.organizationId,
-      userId,
-      limit: Math.min(limit, 100), // Cap at 100 rows for preview
-    });
-
-    // Get or infer columns
-    const columns = (schema.discoveredColumns as ColumnInfo[]) || [];
-
-    return {
-      rows: result.rows,
-      columns,
-    };
   }
 
   /**

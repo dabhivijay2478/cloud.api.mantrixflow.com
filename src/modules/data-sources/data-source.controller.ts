@@ -1,10 +1,28 @@
 /**
- * Data Source Controller
- * REST API endpoints for data source management
+ * Data Source Controller (READ-ONLY)
+ * REST API endpoints for data source management - GET operations only
+ * 
+ * Architecture:
+ * - NestJS: Provides read-only GET endpoints for listing and retrieving data source metadata
+ * - Python FastAPI: Handles all data operations (create, update, delete, test connection, discover schema)
+ * 
+ * Available Endpoints (GET only):
+ * - GET / - List all data sources
+ * - GET /types - Get supported data source types
+ * - GET /:id - Get data source by ID
+ * - GET /:sourceId/connection - Get connection metadata (read-only)
+ * 
+ * Removed Endpoints (moved to Python FastAPI):
+ * - POST / - Create data source
+ * - PUT /:id - Update data source
+ * - DELETE /:id - Delete data source
+ * - POST /test-connection - Test connection config
+ * - POST /:sourceId/connection - Create/update connection
+ * - POST /:sourceId/test-connection - Test connection
+ * - POST /:sourceId/discover-schema - Discover schema
  */
 
 import {
-  Body,
   Controller,
   Delete,
   Get,
@@ -13,7 +31,6 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
-  Put,
   Query,
   Request,
   UseGuards,
@@ -32,14 +49,10 @@ import {
   createListResponse,
   createSuccessResponse,
 } from '../../common/dto/api-response.dto';
-import { OrganizationRoleGuard, RequireRole } from '../../common/guards/organization-role.guard';
+import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import {
-  DataSourceService,
-  type CreateDataSourceDto,
-  type UpdateDataSourceDto,
-} from './data-source.service';
-import { ConnectionService, type CreateConnectionDto } from './connection.service';
+import { DataSourceService } from './data-source.service';
+import { ConnectionService } from './connection.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -107,76 +120,6 @@ export class DataSourceController {
   }
 
   /**
-   * Create new data source
-   */
-  @Post()
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Create data source',
-    description: 'Create a new data source for the organization',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiResponse({ status: 201, description: 'Data source created successfully' })
-  async createDataSource(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Body() dto: CreateDataSourceDto,
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
-    }
-
-    const dataSource = await this.dataSourceService.createDataSource(organizationId, userId, dto);
-
-    return createSuccessResponse(dataSource, 'Data source created successfully');
-  }
-
-  /**
-   * Test connection with config (Ad-hoc)
-   */
-  @Post('test-connection')
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Test connection configuration',
-    description: 'Test a connection configuration without saving. Supports all database types: postgres, mysql, mongodb, s3, api, bigquery, snowflake',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiResponse({ status: 200, description: 'Connection test completed' })
-  async testConnectionConfig(
-    @Param('organizationId', ParseUUIDPipe) _organizationId: string,
-    @Body() config: any,
-  ) {
-    // Determine type from various possible field names
-    // Frontend might send: type, databaseType, connectionType, or sourceType
-    let type = config.type || config.databaseType || config.connectionType || config.sourceType;
-    
-    // Auto-detect from connection string if not specified
-    if (!type || type === 'other') {
-      if (config.connection_string) {
-        if (config.connection_string.startsWith('mongodb://') || config.connection_string.startsWith('mongodb+srv://')) {
-          type = 'mongodb';
-        } else if (config.connection_string.includes('postgresql://') || config.connection_string.includes('postgres://')) {
-          type = 'postgres';
-        } else if (config.connection_string.includes('mysql://')) {
-          type = 'mysql';
-        }
-      }
-    }
-    
-    // Default to postgres if still not determined
-    type = type || 'postgres';
-    
-    // Log for debugging
-    console.log(`[test-connection] Type: ${type}, Config keys: ${Object.keys(config).join(', ')}`);
-    
-    const result = await this.connectionService.testConnectionConfig(type, config);
-    return createSuccessResponse(result);
-  }
-
-  /**
    * Get data source by ID
    */
   @Get(':id')
@@ -204,103 +147,9 @@ export class DataSourceController {
   }
 
   /**
-   * Update data source
-   */
-  @Put(':id')
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Update data source',
-    description: 'Update data source details',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Data source updated successfully' })
-  async updateDataSource(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateDataSourceDto,
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
-    }
-
-    const dataSource = await this.dataSourceService.updateDataSource(
-      organizationId,
-      id,
-      userId,
-      dto,
-    );
-
-    return createSuccessResponse(dataSource, 'Data source updated successfully');
-  }
-
-  /**
-   * Delete data source
-   */
-  @Delete(':id')
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Delete data source',
-    description: 'Soft delete a data source',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Data source deleted successfully' })
-  async deleteDataSource(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
-    }
-
-    await this.dataSourceService.deleteDataSource(organizationId, id, userId);
-
-    return createDeleteResponse('Data source deleted successfully');
-  }
-
-  /**
-   * Create or update connection for data source
-   */
-  @Post(':sourceId/connection')
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Configure connection',
-    description: 'Create or update connection configuration for a data source',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Connection configured successfully' })
-  async createOrUpdateConnection(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Param('sourceId', ParseUUIDPipe) sourceId: string,
-    @Body() dto: CreateConnectionDto,
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
-    }
-
-    const connection = await this.connectionService.createOrUpdateConnection(
-      organizationId,
-      sourceId,
-      userId,
-      dto,
-    );
-
-    return createSuccessResponse(connection, 'Connection configured successfully');
-  }
-
-  /**
    * Get connection for data source
+   * NOTE: All connection operations (create, update, test, discover) are handled by Python FastAPI service
+   * This endpoint only retrieves existing connection metadata for display
    */
   @Get(':sourceId/connection')
   @HttpCode(HttpStatus.OK)
@@ -338,14 +187,14 @@ export class DataSourceController {
   }
 
   /**
-   * Test connection
+   * Test connection for a data source
+   * Calls Python service to test the connection configuration
    */
   @Post(':sourceId/test-connection')
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Test connection',
-    description: 'Test the connection configuration for a data source',
+    description: 'Test connection configuration for a data source (calls Python service)',
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
@@ -360,25 +209,35 @@ export class DataSourceController {
       throw new Error('User not authenticated');
     }
 
-    const result = await this.connectionService.testConnection(organizationId, sourceId, userId);
+    // Extract auth token from request headers
+    const authHeader = req.headers.authorization;
+    const authToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
 
-    return createSuccessResponse(result);
+    const result = await this.connectionService.testConnection(
+      organizationId,
+      sourceId,
+      userId,
+      authToken,
+    );
+
+    return createSuccessResponse(result, 'Connection test completed');
   }
 
   /**
-   * Discover schema
+   * Delete connection for data source
+   * NOTE: This endpoint is kept for Python service to call back for actual database deletion
+   * Frontend should call Python API directly: DELETE /connections/{connection_id}
    */
-  @Post(':sourceId/discover-schema')
-  @RequireRole('OWNER', 'ADMIN', 'EDITOR')
+  @Delete(':sourceId/connection')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Discover schema',
-    description: 'Discover database schema for a data source',
+    summary: 'Delete connection',
+    description: 'Delete connection configuration for a data source (called by Python service)',
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Schema discovered successfully' })
-  async discoverSchema(
+  @ApiResponse({ status: 200, description: 'Connection deleted successfully' })
+  async deleteConnection(
     @Param('organizationId', ParseUUIDPipe) organizationId: string,
     @Param('sourceId', ParseUUIDPipe) sourceId: string,
     @Request() req: ExpressRequestType,
@@ -388,8 +247,9 @@ export class DataSourceController {
       throw new Error('User not authenticated');
     }
 
-    const schema = await this.connectionService.discoverSchema(organizationId, sourceId, userId);
+    await this.connectionService.deleteConnection(organizationId, sourceId, userId);
 
-    return createSuccessResponse(schema, 'Schema discovered successfully');
+    return createSuccessResponse({ deletedId: sourceId }, 'Connection deleted successfully');
   }
+
 }

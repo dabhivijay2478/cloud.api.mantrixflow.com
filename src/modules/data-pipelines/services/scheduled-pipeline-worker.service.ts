@@ -1,12 +1,12 @@
 /**
  * Scheduled Pipeline Worker Service
- * Handles scheduled pipeline execution using PgBoss cron jobs
+ * Handles scheduled pipeline execution using RabbitMQ
  *
- * ROOT FIX: Uses PgBoss for reliable scheduling with:
- * - Exactly-once execution (no duplicate runs)
+ * Uses RabbitMQ for reliable scheduling with:
+ * - Message queuing for scheduled runs
+ * - Delayed messages for scheduling
  * - Automatic retry on failure
  * - Priority queues for urgent vs routine runs
- * - Transaction support for checkpoint updates
  *
  * Guide: Each pipeline can have its own schedule, configured via:
  * - scheduleType: 'minutes' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'custom_cron'
@@ -20,8 +20,7 @@ import { PipelineRepository } from '../repositories/pipeline.repository';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { PIPELINE_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PgBossService } from './pgboss.service';
-import type { Job } from 'pg-boss';
+import { RabbitMQService, FullSyncJobData } from '../../queue/rabbitmq.service';
 
 // Default batch size for scheduled runs
 const DEFAULT_BATCH_SIZE = 500;
@@ -50,7 +49,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     private readonly pipelineRepository: PipelineRepository,
     private readonly activityLogService: ActivityLogService,
     private readonly schedulerService: PipelineSchedulerService,
-    private readonly pgBossService: PgBossService,
+    private readonly rabbitmqService: RabbitMQService,
   ) {}
 
   /**
@@ -62,17 +61,25 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     this.logger.log(`   Poll Interval: ${POLL_INTERVAL_MS / 1000} seconds`);
     this.logger.log(`   Default Batch Size: ${DEFAULT_BATCH_SIZE} records`);
     this.logger.log('════════════════════════════════════════════════════════');
-    this.logger.log('📌 Using PgBoss for job management:');
-    this.logger.log('   - Exactly-once execution');
-    this.logger.log('   - Automatic retries with exponential backoff');
+    this.logger.log('📌 Using RabbitMQ for job management:');
+    this.logger.log('   - Message queuing for scheduled runs');
+    this.logger.log('   - Delayed messages for scheduling');
+    this.logger.log('   - Automatic retries');
     this.logger.log('   - Priority queues (high: manual, normal: scheduled)');
     this.logger.log('════════════════════════════════════════════════════════');
 
-    // Wait for PgBoss to initialize
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // Wait for RabbitMQ to initialize
+    let retries = 0;
+    while (!this.rabbitmqService.isReady() && retries < 10) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      retries++;
+    }
 
-    // Register the scheduled run handler
-    await this.registerScheduledRunHandler();
+    if (!this.rabbitmqService.isReady()) {
+      this.logger.warn('RabbitMQ not ready, will retry');
+      setTimeout(() => this.onModuleInit(), 5000);
+      return;
+    }
 
     // Start polling for due pipelines
     this.startPolling();
@@ -89,34 +96,14 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
   }
 
   /**
-   * Register the PgBoss handler for scheduled pipeline runs
+   * Handle a scheduled pipeline run (called directly from polling)
    */
-  private async registerScheduledRunHandler(): Promise<void> {
-    if (!this.pgBossService.isReady()) {
-      this.logger.warn('PgBoss not ready, will retry handler registration');
-      setTimeout(() => this.registerScheduledRunHandler(), 5000);
-      return;
-    }
-
-    await this.pgBossService.registerWorker<ScheduledRunJobData>(
-      'scheduled-pipeline-run',
-      this.handleScheduledRun.bind(this),
-    );
-
-    this.logger.log('Registered handler for scheduled-pipeline-run jobs');
-  }
-
-  /**
-   * Handle a scheduled pipeline run job
-   */
-  private async handleScheduledRun(job: Job<ScheduledRunJobData>): Promise<void> {
-    const { pipelineId, organizationId, name, scheduleType, scheduleValue, scheduleTimezone } =
-      job.data;
+  private async handleScheduledRun(data: ScheduledRunJobData): Promise<void> {
+    const { pipelineId, organizationId, name, scheduleType, scheduleValue, scheduleTimezone } = data;
     const startTime = Date.now();
 
     this.logger.log('════════════════════════════════════════════════════════');
     this.logger.log('🚀 SCHEDULED PIPELINE RUN TRIGGERED');
-    this.logger.log(`   Job ID: ${job.id}`);
     this.logger.log(`   Pipeline: ${name} (${pipelineId})`);
     this.logger.log(`   Organization: ${organizationId}`);
     this.logger.log(`   Schedule: ${scheduleType} / ${scheduleValue}`);
@@ -134,13 +121,11 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
           scheduleType,
           scheduleValue,
           scheduledAt: new Date().toISOString(),
-          jobId: job.id,
         },
       );
 
       // Execute the pipeline using the pipeline creator's user ID
-      // This is necessary because runPipeline checks organization membership
-      const userId = job.data.createdBy || 'system';
+      const userId = data.createdBy || 'system';
       const run = await this.pipelineService.runPipeline(
         pipelineId,
         userId,
@@ -216,9 +201,6 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
       } catch (logError) {
         this.logger.error(`Failed to log activity: ${logError}`);
       }
-
-      // Re-throw to trigger PgBoss retry
-      throw error;
     }
   }
 
@@ -312,43 +294,25 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
 
       this.logger.log(`[SCHEDULER] Found ${duePipelines.length} pipeline(s) due to run`);
 
-      // Enqueue each pipeline as a PgBoss job
+      // Enqueue each pipeline as a RabbitMQ job
       for (const pipeline of duePipelines) {
-        if (!this.pgBossService.isReady()) {
-          this.logger.warn('[SCHEDULER] PgBoss not ready, cannot enqueue job');
+        if (!this.rabbitmqService.isReady()) {
+          this.logger.warn('[SCHEDULER] RabbitMQ not ready, cannot enqueue job');
           continue;
         }
 
-        const boss = this.pgBossService.getInstance();
-        if (!boss) continue;
+        // Enqueue the scheduled run as a full sync job
+        await this.rabbitmqService.enqueueFullSync({
+          pipelineId: pipeline.id,
+          organizationId: pipeline.organizationId,
+          userId: pipeline.createdBy || 'system',
+          triggerType: 'scheduled',
+          batchSize: DEFAULT_BATCH_SIZE,
+        });
 
-        // Enqueue the scheduled run job
-        const jobId = await boss.send(
-          'scheduled-pipeline-run',
-          {
-            pipelineId: pipeline.id,
-            organizationId: pipeline.organizationId,
-            name: pipeline.name,
-            scheduleType: pipeline.scheduleType,
-            scheduleValue: pipeline.scheduleValue,
-            scheduleTimezone: pipeline.scheduleTimezone,
-            createdBy: pipeline.createdBy, // Include creator for authorization
-          } as ScheduledRunJobData,
-          {
-            // Use singleton to prevent duplicate jobs for same pipeline
-            singletonKey: `scheduled-${pipeline.id}`,
-            singletonSeconds: 300, // 5 minute window
-            retryLimit: 3,
-            retryDelay: 60, // 1 minute retry delay
-            retryBackoff: true,
-          },
+        this.logger.log(
+          `[SCHEDULER] Enqueued scheduled run for pipeline ${pipeline.name} (${pipeline.id})`,
         );
-
-        if (jobId) {
-          this.logger.log(
-            `[SCHEDULER] Enqueued scheduled run job ${jobId} for pipeline ${pipeline.name}`,
-          );
-        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

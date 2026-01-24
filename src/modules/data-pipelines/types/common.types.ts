@@ -9,9 +9,9 @@
  * 
  * Guide: To add a new source:
  * 1. Add enum value here
- * 2. Create handler file: {source-name}.handler.ts
- * 3. Implement ISourceHandler interface with collectIncremental method
- * 4. Register in handler-registry.ts
+ * 2. Create connector in Python service: etl-service/connectors/{source-name}.py
+ * 3. Register in Python main.py CONNECTORS dict
+ * 4. Update Python service endpoints if needed
  */
 export enum DataSourceType {
   POSTGRES = 'postgres',
@@ -286,93 +286,24 @@ export interface ProgressInfo {
 }
 
 /**
- * Collector interface - reads data from source
+ * Schema information for orchestration
+ * Used internally by PipelineService for metadata
  */
-export interface ICollector {
-  /**
-   * Collect data from source
-   */
-  collect(options: {
-    sourceSchema: any;
-    connection: any;
-    limit?: number;
-    offset?: number;
-    cursor?: string;
-    incrementalColumn?: string;
-    lastSyncValue?: any;
-  }): Promise<{
-    rows: any[];
-    totalRows?: number;
-    nextCursor?: string;
-    hasMore?: boolean;
-  }>;
-
-  /**
-   * Discover schema from source
-   */
-  discoverSchema(options: { sourceSchema: any; connection: any }): Promise<{
-    columns: ColumnInfo[];
-    primaryKeys: string[];
-    estimatedRowCount?: number;
-  }>;
-}
-
-/**
- * Transformer interface - transforms data
- */
-export interface ITransformer {
-  /**
-   * Transform a batch of rows
-   */
-  transform(
-    rows: any[],
-    mappings: ColumnMapping[],
-    transformations?: Transformation[],
-  ): Promise<any[]>;
-
-  /**
-   * Validate transformation configuration
-   */
-  validate(mappings: ColumnMapping[], transformations?: Transformation[]): ValidationResult;
-}
-
-/**
- * Emitter interface - writes data to destination
- */
-export interface IEmitter {
-  /**
-   * Write data to destination
-   */
-  emit(options: {
-    destinationSchema: any;
-    connection: any;
-    rows: any[];
-    writeMode: 'append' | 'upsert' | 'replace';
-    upsertKey?: string[];
-  }): Promise<WriteResult>;
-
-  /**
-   * Validate destination schema
-   */
-  validateSchema(options: {
-    destinationSchema: any;
-    connection: any;
-    columnMappings: ColumnMapping[];
-  }): Promise<SchemaValidationResult>;
-
-  /**
-   * Create destination table if needed
-   */
-  createTable(options: {
-    destinationSchema: any;
-    connection: any;
-    columnMappings: ColumnMapping[];
-  }): Promise<{ created: boolean; tableName: string }>;
-
-  /**
-   * Check if table exists
-   */
-  tableExists(options: { destinationSchema: any; connection: any }): Promise<boolean>;
+export interface SchemaInfo {
+  columns: ColumnInfo[];
+  primaryKeys: string[];
+  estimatedRowCount?: number;
+  // For NoSQL databases
+  sampleDocuments?: any[];
+  // For nested structures
+  nestedFields?: Map<string, ColumnInfo[]>;
+  // Schema type indicators for transformation
+  /** Whether this is a relational (SQL) schema */
+  isRelational?: boolean;
+  /** The source type (postgres, mongodb, etc.) */
+  sourceType?: string;
+  /** Entity name (table/collection) */
+  entityName?: string;
 }
 
 /**

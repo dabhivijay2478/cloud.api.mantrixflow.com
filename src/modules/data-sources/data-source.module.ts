@@ -5,6 +5,7 @@
 
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { HttpModule } from '@nestjs/axios';
 import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { OrganizationModule } from '../organizations/organization.module';
@@ -16,7 +17,14 @@ import { DataSourceRepository } from './repositories/data-source.repository';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 
 @Module({
-  imports: [ActivityLogModule, OrganizationModule],
+  imports: [
+    ActivityLogModule,
+    OrganizationModule,
+    HttpModule.register({
+      timeout: 30000,
+      maxRedirects: 5,
+    }),
+  ],
   controllers: [DataSourceController],
   providers: [
     // Database provider
