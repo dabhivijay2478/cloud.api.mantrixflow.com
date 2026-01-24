@@ -1,4 +1,4 @@
-import { boolean, jsonb, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { dataSources } from '../../data-sources/data-sources.schema';
 
 /**
@@ -44,8 +44,8 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   /** Index definitions */
   indexes: jsonb('indexes').$type<IndexDefinition[]>(),
 
-  /** Column mappings from source to destination */
-  columnMappings: jsonb('column_mappings').$type<ColumnMapping[]>(),
+  /** Custom Python transform script (defines transform(record) function) */
+  transformScript: text('transform_script'),
 
   // ============================================================================
   // WRITE CONFIGURATION
@@ -104,19 +104,6 @@ export interface IndexDefinition {
   columns: string[];
   unique?: boolean;
   where?: string; // Partial index condition
-}
-
-/**
- * Column mapping from source to destination
- */
-export interface ColumnMapping {
-  sourceColumn: string;
-  destinationColumn: string;
-  dataType: string; // PostgreSQL data type
-  nullable: boolean;
-  defaultValue?: string;
-  isPrimaryKey?: boolean;
-  maxLength?: number;
 }
 
 /**

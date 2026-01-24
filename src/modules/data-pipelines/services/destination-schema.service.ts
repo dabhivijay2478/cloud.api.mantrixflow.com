@@ -22,7 +22,6 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
 import { WriteMode } from '../dto/create-destination-schema.dto';
 import type {
-  ColumnMapping,
   SchemaValidationResult,
   ValidationResult,
 } from '../types/common.types';
@@ -68,21 +67,9 @@ export class DestinationSchemaService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Validate column mappings if provided (basic validation)
-    if (dto.columnMappings && dto.columnMappings.length > 0) {
-      const errors: string[] = [];
-      for (let i = 0; i < dto.columnMappings.length; i++) {
-        const mapping = dto.columnMappings[i];
-        if (!mapping.sourceColumn) {
-          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
-        }
-        if (!mapping.destinationColumn) {
-          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
-        }
-      }
-      if (errors.length > 0) {
-        throw new BadRequestException(`Invalid column mappings: ${errors.join(', ')}`);
-      }
+    // Validate that transformScript is provided
+    if (!dto.transformScript || !dto.transformScript.trim()) {
+      throw new BadRequestException('transformScript is required');
     }
 
     // Validate upsert configuration
@@ -96,7 +83,7 @@ export class DestinationSchemaService {
       destinationSchema: dto.destinationSchema || 'public',
       destinationTable,
       destinationTableExists: dto.destinationTableExists || false,
-      columnMappings: (dto.columnMappings as ColumnMapping[]) || null,
+      transformScript: dto.transformScript || null,
       writeMode: (dto.writeMode as string) || 'append',
       upsertKey: (dto.upsertKey as string[]) || null,
       name: dto.name || `${destinationTable}_destination`,
@@ -115,7 +102,6 @@ export class DestinationSchemaService {
         dataSourceId,
         destinationTable,
         writeMode: dto.writeMode || 'append',
-        columnMappingsCount: dto.columnMappings?.length || 0,
       },
     });
 
@@ -174,22 +160,6 @@ export class DestinationSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    // Validate column mappings if being updated (basic validation)
-    if (updates.columnMappings && updates.columnMappings.length > 0) {
-      const errors: string[] = [];
-      for (let i = 0; i < updates.columnMappings.length; i++) {
-        const mapping = updates.columnMappings[i];
-        if (!mapping.sourceColumn) {
-          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
-        }
-        if (!mapping.destinationColumn) {
-          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
-        }
-      }
-      if (errors.length > 0) {
-        throw new BadRequestException(`Invalid column mappings: ${errors.join(', ')}`);
-      }
-    }
 
     // Validate upsert configuration
     const newWriteMode = updates.writeMode || schema.writeMode;
@@ -200,7 +170,7 @@ export class DestinationSchemaService {
 
     const updated = await this.destinationSchemaRepository.update(id, {
       ...updates,
-      columnMappings: (updates.columnMappings as ColumnMapping[]) || undefined,
+      transformScript: updates.transformScript !== undefined ? updates.transformScript : undefined,
       upsertKey: (updates.upsertKey as string[]) || undefined,
       updatedAt: new Date(),
     });
@@ -247,9 +217,8 @@ export class DestinationSchemaService {
       errors.push('Destination table is required');
     }
 
-    const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
-    if (columnMappings.length === 0) {
-      warnings.push('No column mappings defined');
+    if (!schema.transformScript || !schema.transformScript.trim()) {
+      warnings.push('No transform script defined');
     }
 
     const validationResult: SchemaValidationResult = {
@@ -318,9 +287,8 @@ export class DestinationSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
-    if (columnMappings.length === 0) {
-      throw new BadRequestException('Column mappings are required to create table');
+    if (!schema.transformScript || !schema.transformScript.trim()) {
+      throw new BadRequestException('Transform script is required to create table');
     }
 
     // Table creation is now handled automatically by Python service during emit
@@ -399,21 +367,9 @@ export class DestinationSchemaService {
       }
     }
 
-    // Check column mappings (basic validation)
-    const columnMappings = (schema.columnMappings as ColumnMapping[]) || [];
-    if (columnMappings.length === 0) {
-      warnings.push('No column mappings defined');
-    } else {
-      // Basic validation
-      for (let i = 0; i < columnMappings.length; i++) {
-        const mapping = columnMappings[i];
-        if (!mapping.sourceColumn) {
-          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
-        }
-        if (!mapping.destinationColumn) {
-          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
-        }
-      }
+    // Check transform script
+    if (!schema.transformScript || !schema.transformScript.trim()) {
+      warnings.push('No transform script defined');
     }
 
     // Check upsert configuration
@@ -421,13 +377,6 @@ export class DestinationSchemaService {
       const upsertKey = schema.upsertKey as string[];
       if (!upsertKey || upsertKey.length === 0) {
         errors.push('Upsert mode requires upsert key columns');
-      } else {
-        // Check upsert keys are in column mappings
-        for (const key of upsertKey) {
-          if (!columnMappings.find((m) => m.destinationColumn === key)) {
-            errors.push(`Upsert key '${key}' not found in column mappings`);
-          }
-        }
       }
     }
 

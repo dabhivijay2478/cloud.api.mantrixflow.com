@@ -11,8 +11,6 @@ import { firstValueFrom } from 'rxjs';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
 import type {
-  ColumnMapping,
-  Transformation,
   WriteResult,
   ColumnInfo,
 } from '../types/common.types';
@@ -144,17 +142,24 @@ export class PythonETLService {
   }
 
   /**
-   * Transform data
+   * Transform data using custom Python script
    */
   async transform(options: {
     rows: any[];
-    columnMappings: ColumnMapping[];
-    transformations?: Transformation[];
+    transformScript: string;
   }): Promise<{
     transformedRows: any[];
     errors: any[];
   }> {
-    const { rows, columnMappings, transformations } = options;
+    const { rows, transformScript } = options;
+    
+    if (!transformScript || !transformScript.trim()) {
+      this.logger.warn('Empty transform script provided, returning rows as-is');
+      return {
+        transformedRows: rows,
+        errors: [],
+      };
+    }
     
     try {
       const response = await firstValueFrom(
@@ -162,8 +167,7 @@ export class PythonETLService {
           `${this.pythonServiceUrl}/transform`,
           {
             rows,
-            column_mappings: columnMappings,
-            transformations: transformations || [],
+            transform_script: transformScript,
           },
           {
             timeout: 30000,
@@ -192,24 +196,13 @@ export class PythonETLService {
     rows: any[];
     writeMode: 'append' | 'upsert' | 'replace';
     upsertKey?: string[];
-    columnMappings?: ColumnMapping[];
   }): Promise<WriteResult> {
-    const { destinationSchema, connectionConfig, rows, writeMode, upsertKey, columnMappings } = options;
+    const { destinationSchema, connectionConfig, rows, writeMode, upsertKey } = options;
     
     try {
       // Get destination data source type
       const destDataSource = await this.getDataSourceType(destinationSchema.dataSourceId!);
       const destType = this.normalizeSourceType(destDataSource);
-      
-      // Transform data first if column mappings provided
-      let transformedRows = rows;
-      if (columnMappings && columnMappings.length > 0) {
-        const transformResult = await this.transform({
-          rows,
-          columnMappings,
-        });
-        transformedRows = transformResult.transformedRows;
-      }
       
       const response = await firstValueFrom(
         this.httpService.post(
@@ -220,10 +213,9 @@ export class PythonETLService {
             destination_config: {}, // Destination-specific config (not stored in schema)
             table_name: destinationSchema.destinationTable,
             schema_name: destinationSchema.destinationSchema || undefined,
-            rows: transformedRows,
+            rows: rows,
             write_mode: writeMode,
             upsert_key: upsertKey || [],
-            column_mappings: [],
           },
           {
             timeout: 60000, // 60 seconds for emission

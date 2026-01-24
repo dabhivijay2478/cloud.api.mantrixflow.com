@@ -162,19 +162,15 @@ export class PipelineController {
         throw new NotFoundException(`Pipeline ${id} not found`);
       }
 
-      const { pipeline, destinationSchema } = pipelineWithSchemas;
+      const { pipeline } = pipelineWithSchemas;
       
-      // Get applied mappings for visibility
-      const columnMappings = (destinationSchema.columnMappings as any[]) || [];
-      const appliedMappings = columnMappings.map((m) => ({
-        sourcePath: m.sourcePath || m.sourceColumn,
-        destPath: m.destPath || m.destinationColumn,
-      }));
+      // Transform script is now the source of truth for transformations
+      // No need to extract mappings - the script handles all transformations
 
-      // Add appliedMappings to pipeline response
+      // Return pipeline response
       const pipelineResponse = {
         ...pipeline,
-        appliedMappings,
+        appliedMappings: [], // Empty since we use transform script now
       };
 
       return createSuccessResponse(pipelineResponse, 'Pipeline retrieved successfully');

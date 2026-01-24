@@ -10,11 +10,9 @@ import {
   IsArray,
   IsEnum,
   MaxLength,
-  ValidateNested,
   IsBoolean,
 } from 'class-validator';
-import { Type } from 'class-transformer';
-import { ColumnMappingDto, WriteMode } from './create-destination-schema.dto';
+import { WriteMode } from './create-destination-schema.dto';
 
 export class UpdateDestinationSchemaDto {
   @ApiPropertyOptional({
@@ -48,14 +46,12 @@ export class UpdateDestinationSchemaDto {
   destinationTable?: string;
 
   @ApiPropertyOptional({
-    description: 'Column mappings from source to destination',
-    type: [ColumnMappingDto],
+    description: 'Custom Python transform script (defines transform(record) function)',
+    example: 'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
   })
   @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ColumnMappingDto)
-  columnMappings?: ColumnMappingDto[];
+  @IsString()
+  transformScript?: string;
 
   @ApiPropertyOptional({
     description: 'Write mode for destination',

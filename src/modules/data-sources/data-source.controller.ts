@@ -187,43 +187,6 @@ export class DataSourceController {
   }
 
   /**
-   * Test connection for a data source
-   * Calls Python service to test the connection configuration
-   */
-  @Post(':sourceId/test-connection')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Test connection',
-    description: 'Test connection configuration for a data source (calls Python service)',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Connection test completed' })
-  async testConnection(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Param('sourceId', ParseUUIDPipe) sourceId: string,
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
-    }
-
-    // Extract auth token from request headers
-    const authHeader = req.headers.authorization;
-    const authToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
-
-    const result = await this.connectionService.testConnection(
-      organizationId,
-      sourceId,
-      userId,
-      authToken,
-    );
-
-    return createSuccessResponse(result, 'Connection test completed');
-  }
-
-  /**
    * Delete connection for data source
    * NOTE: This endpoint is kept for Python service to call back for actual database deletion
    * Frontend should call Python API directly: DELETE /connections/{connection_id}

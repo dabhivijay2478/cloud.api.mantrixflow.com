@@ -30,7 +30,6 @@ import { OrganizationRoleService } from '../../organizations/services/organizati
 import { PythonETLService } from './python-etl.service';
 import { PipelineLifecycleService } from './pipeline-lifecycle.service';
 import type {
-  ColumnMapping,
   DryRunResult,
   ValidationResult,
   BatchOptions,
@@ -503,38 +502,11 @@ export class PipelineService {
         throw new BadRequestException('Source and destination must have data source IDs');
       }
 
-      // Get column mappings
-      let columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
+      // Get transform script
+      const transformScript = destinationSchema.transformScript;
       
-      // Auto-enhance mappings for MongoDB ObjectId -> UUID conversion
-      // This ensures _id fields are automatically converted to UUIDs
-      if (sourceSchema.sourceType === 'mongodb') {
-        // Check for _id mappings and add objectIdToUuid transformation if needed
-        columnMappings = columnMappings.map(mapping => {
-          if (mapping.sourceColumn === '_id' && !mapping.transformation && mapping.dataType !== 'uuid') {
-            return { ...mapping, transformation: 'objectIdToUuid' as any, dataType: 'uuid' };
-          }
-          return mapping;
-        });
-      }
-      
-      const transformations = (pipeline.transformations as any[]) || [];
-
-      // Log applied mappings for visibility
-      if (columnMappings.length > 0) {
-        const mappedFields = columnMappings.map(m => ({
-          sourcePath: m.sourcePath || m.sourceColumn,
-          destPath: m.destPath || m.destinationColumn
-        }));
-        // Get destination type from data source
-        const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
-        const destType = destDataSource?.sourceType || 'unknown';
-        this.logger.log(
-          `Mapping applied to ${sourceSchema.sourceType}→${destType}: ${mappedFields.length} fields transformed`,
-        );
-        this.logger.log(
-          `Mapped fields: ${mappedFields.map((f) => `${f.sourcePath} → ${f.destPath}`).join(', ')}`,
-        );
+      if (!transformScript || !transformScript.trim()) {
+        throw new BadRequestException('Transform script is required for destination schema');
       }
 
       // Collect data with batching
@@ -624,9 +596,8 @@ export class PipelineService {
           `   📥 Collected ${sourceData.rows.length.toLocaleString()} rows (Total: ${totalRowsRead.toLocaleString()}${estimatedTotalRows ? `/${estimatedTotalRows.toLocaleString()}` : ''}${percentage ? ` - ${percentage}%` : ''})`,
         );
 
-        const primaryKeys = columnMappings
-          .filter((m) => m.isPrimaryKey)
-          .map((m) => m.destinationColumn);
+        // Primary keys are determined from destination schema upsertKey if available
+        const primaryKeys = (destinationSchema.upsertKey as string[]) || [];
 
         // ROOT FIX: Determine write mode for CDC-friendly data preservation
         // Priority: 
@@ -675,15 +646,20 @@ export class PipelineService {
 
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
+            // Transform data first using transform script
+            const transformResult = await this.pythonETLService.transform({
+              rows: sourceData.rows,
+              transformScript: transformScript,
+            });
+
             const writeResult = await this.pythonETLService.emit({
               destinationSchema,
               connectionConfig: destConnectionConfig,
               organizationId: pipeline.organizationId,
               userId,
-              rows: sourceData.rows,
+              rows: transformResult.transformedRows,
               writeMode: effectiveWriteMode,
               upsertKey: effectiveUpsertKey,
-              columnMappings,
             });
 
             totalRowsWritten += writeResult.rowsWritten;
@@ -1079,21 +1055,9 @@ export class PipelineService {
       errors.push('Destination schema must have a destination table');
     }
 
-    // Validate column mappings
-    const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
-    if (columnMappings.length === 0) {
-      warnings.push('No column mappings defined - will attempt to map columns by name');
-    } else {
-      // Basic validation - check for required fields
-      for (let i = 0; i < columnMappings.length; i++) {
-        const mapping = columnMappings[i];
-        if (!mapping.sourceColumn) {
-          errors.push(`Mapping ${i + 1}: sourceColumn is required`);
-        }
-        if (!mapping.destinationColumn) {
-          errors.push(`Mapping ${i + 1}: destinationColumn is required`);
-        }
-      }
+    // Validate transform script
+    if (!destinationSchema.transformScript || !destinationSchema.transformScript.trim()) {
+      errors.push('Transform script is required');
     }
 
     // Python handles incremental sync validation - no need to validate here
@@ -1147,25 +1111,15 @@ export class PipelineService {
     });
 
     // Transform sample data
-    const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
-    const transformations = (pipeline.transformations as any[]) || [];
-
-    // Log applied mappings for visibility
-    const mappedFields = columnMappings.map(m => ({
-      sourcePath: m.sourcePath || m.sourceColumn,
-      destPath: m.destPath || m.destinationColumn
-    }));
-    // Get destination type from data source
-    const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
-    const destType = destDataSource?.sourceType || 'unknown';
-    this.logger.log(
-      `Dry run: Mapping applied to ${sourceSchema.sourceType}→${destType}: ${mappedFields.length} fields`,
-    );
+    const transformScript = destinationSchema.transformScript;
+    
+    if (!transformScript || !transformScript.trim()) {
+      throw new BadRequestException('Transform script is required for destination schema');
+    }
 
     const transformResult = await this.pythonETLService.transform({
       rows: sourceData.rows,
-      columnMappings,
-      transformations,
+      transformScript: transformScript,
     });
     const transformedSample = transformResult.transformedRows;
 
@@ -1180,7 +1134,7 @@ export class PipelineService {
       sampleRows: sourceData.rows,
       transformedSample,
       errors: [],
-      appliedMappings: mappedFields,
+      appliedMappings: [],
     };
   }
 
@@ -1376,12 +1330,12 @@ export class PipelineService {
         jobState: 'running',
       });
 
-      // Get column mappings
-      const columnMappings = (destinationSchema.columnMappings as ColumnMapping[]) || [];
+      // Get transform script
+      const transformScript = destinationSchema.transformScript;
 
       // Basic validation
-      if (columnMappings.length === 0) {
-        throw new BadRequestException('At least one column mapping is required');
+      if (!transformScript || !transformScript.trim()) {
+        throw new BadRequestException('Transform script is required');
       }
 
       // Get connection configs
@@ -1424,7 +1378,7 @@ export class PipelineService {
       
       const transformResult = await this.pythonETLService.transform({
         rows: sourceData.rows,
-        columnMappings,
+        transformScript: transformScript || '',
       });
       
       // Group by entity if needed (simplified - assumes single entity for now)
@@ -1510,6 +1464,7 @@ export class PipelineService {
       });
     }
   }
+
 
   // ============================================================================
   // AUTHORIZATION HELPERS

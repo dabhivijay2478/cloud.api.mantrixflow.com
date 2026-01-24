@@ -12,47 +12,13 @@ import {
   IsEnum,
   MaxLength,
   MinLength,
-  ValidateNested,
   IsBoolean,
 } from 'class-validator';
-import { Type } from 'class-transformer';
 
 export enum WriteMode {
   APPEND = 'append',
   UPSERT = 'upsert',
   REPLACE = 'replace',
-}
-
-export class ColumnMappingDto {
-  @ApiProperty({ description: 'Source column name' })
-  @IsString()
-  sourceColumn: string;
-
-  @ApiProperty({ description: 'Destination column name' })
-  @IsString()
-  destinationColumn: string;
-
-  @ApiProperty({ description: 'Data type for destination' })
-  @IsString()
-  dataType: string;
-
-  @ApiProperty({ description: 'Whether column is nullable' })
-  @IsBoolean()
-  nullable: boolean;
-
-  @ApiPropertyOptional({ description: 'Whether this is a primary key' })
-  @IsOptional()
-  @IsBoolean()
-  isPrimaryKey?: boolean;
-
-  @ApiPropertyOptional({ description: 'Default value' })
-  @IsOptional()
-  @IsString()
-  defaultValue?: string;
-
-  @ApiPropertyOptional({ description: 'Maximum length for string columns' })
-  @IsOptional()
-  maxLength?: number;
 }
 
 export class CreateDestinationSchemaDto {
@@ -93,14 +59,12 @@ export class CreateDestinationSchemaDto {
   destinationTableExists?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Column mappings from source to destination',
-    type: [ColumnMappingDto],
+    description: 'Custom Python transform script (defines transform(record) function)',
+    example: 'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
   })
   @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ColumnMappingDto)
-  columnMappings?: ColumnMappingDto[];
+  @IsString()
+  transformScript?: string;
 
   @ApiPropertyOptional({
     description: 'Write mode for destination',
