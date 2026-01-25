@@ -556,10 +556,13 @@ export class PipelineService {
               cursor,
             });
             
-            // Python returns updated checkpoint in metadata - use it for next batch
+            // Python returns updated checkpoint in metadata - use it for next batch and save it
             const resultMetadata = (sourceData as any).metadata;
             if (resultMetadata?.checkpoint) {
               checkpoint = resultMetadata.checkpoint as PipelineCheckpoint;
+              // Save checkpoint immediately so it persists for next run (CDC support)
+              await this.lifecycleService.saveCheckpoint(pipeline.id, checkpoint, userId);
+              this.logger.debug(`Checkpoint saved: ${JSON.stringify(checkpoint).slice(0, 200)}...`);
             }
             break;
           } catch (error) {
@@ -788,14 +791,25 @@ export class PipelineService {
       // Get the final checkpoint (Python may have updated it)
       const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
       
-      // Determine target status based on sync mode
-      // Python handles all CDC logic - NestJS just updates status
-      const targetStatus = syncMode === 'incremental' 
-        ? PipelineStatus.LISTING  // Incremental mode → listing for polling
-        : PipelineStatus.COMPLETED; // Full sync → completed
+      // ROOT FIX: Always set status to 'idle' after completion so pipeline can run again
+      // Previously was 'completed' which prevented scheduled runs
+      const targetStatus = PipelineStatus.IDLE;
       
       // Update totalRowsProcessed - cumulative across all runs
       const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;
+      
+      // Calculate next scheduled run time based on pipeline schedule configuration
+      // Default to 2 minutes for CDC/incremental polling if no schedule configured
+      let nextScheduledRunAt: Date | null = null;
+      const scheduleType = pipeline.scheduleType || 'none';
+      const scheduleValue = pipeline.scheduleValue || '';
+      
+      if (scheduleType !== 'none') {
+        nextScheduledRunAt = this.calculateNextScheduledRun(scheduleType, scheduleValue);
+      } else if (pipeline.syncMode === 'incremental') {
+        // Default 2-minute polling for incremental/CDC mode
+        nextScheduledRunAt = new Date(Date.now() + 2 * 60 * 1000);
+      }
       
       // Update pipeline with final checkpoint from Python
       await this.pipelineRepository.update(pipeline.id, {
@@ -809,6 +823,9 @@ export class PipelineService {
         lastSyncAt: new Date(),
         // Store checkpoint returned from Python (Python handles all CDC/checkpoint logic)
         checkpoint: finalCheckpoint || undefined,
+        // Schedule next run
+        nextScheduledRunAt: nextScheduledRunAt,
+        nextSyncAt: nextScheduledRunAt,
       });
       
       // Log completion summary
@@ -1484,6 +1501,57 @@ export class PipelineService {
     const canManage = await this.roleService.canManageDataSources(userId, organizationId);
     if (!canManage) {
       throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can manage pipelines');
+    }
+  }
+
+  // ============================================================================
+  // SCHEDULING HELPERS
+  // ============================================================================
+
+  /**
+   * Calculate next scheduled run time based on schedule type and value
+   * Used for CDC/incremental sync scheduling
+   */
+  private calculateNextScheduledRun(scheduleType: string, scheduleValue: string | null): Date {
+    const now = new Date();
+    const value = scheduleValue || '';
+
+    switch (scheduleType) {
+      case 'minutes': {
+        // Value is number of minutes (default: 2 for CDC)
+        const minutes = parseInt(value, 10) || 2;
+        return new Date(now.getTime() + minutes * 60 * 1000);
+      }
+      case 'hourly': {
+        // Value is number of hours (default: 1)
+        const hours = parseInt(value, 10) || 1;
+        return new Date(now.getTime() + hours * 60 * 60 * 1000);
+      }
+      case 'daily': {
+        // Value is time in HH:MM format (default: 00:00)
+        const [hours, minutes] = (value || '00:00').split(':').map(Number);
+        const next = new Date(now);
+        next.setDate(next.getDate() + 1);
+        next.setHours(hours || 0, minutes || 0, 0, 0);
+        return next;
+      }
+      case 'weekly': {
+        // Run once a week
+        return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      }
+      case 'monthly': {
+        // Run once a month
+        const next = new Date(now);
+        next.setMonth(next.getMonth() + 1);
+        return next;
+      }
+      case 'custom_cron': {
+        // For now, default to 1 hour (cron parsing would require a library)
+        return new Date(now.getTime() + 60 * 60 * 1000);
+      }
+      default:
+        // Default to 2 minutes for CDC/incremental
+        return new Date(now.getTime() + 2 * 60 * 1000);
     }
   }
 

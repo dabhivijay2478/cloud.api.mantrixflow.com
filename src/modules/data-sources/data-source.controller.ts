@@ -1,25 +1,22 @@
 /**
- * Data Source Controller (READ-ONLY)
- * REST API endpoints for data source management - GET operations only
+ * Data Source Controller
+ * REST API endpoints for data source management
  * 
  * Architecture:
- * - NestJS: Provides read-only GET endpoints for listing and retrieving data source metadata
- * - Python FastAPI: Handles all data operations (create, update, delete, test connection, discover schema)
+ * - NestJS: Handles listing (GET) and deletion (DELETE) of data sources
+ * - Python FastAPI: Handles connection operations (create, update, test), collector/emitter/transformations
  * 
- * Available Endpoints (GET only):
- * - GET / - List all data sources
- * - GET /types - Get supported data source types
- * - GET /:id - Get data source by ID
- * - GET /:sourceId/connection - Get connection metadata (read-only)
+ * Available Endpoints:
+ * - GET / - List all data sources (NestJS)
+ * - GET /types - Get supported data source types (NestJS)
+ * - GET /:id - Get data source by ID (NestJS)
+ * - DELETE /:id - Delete data source (NestJS)
+ * - GET /:sourceId/connection - Get connection metadata (read-only, NestJS)
  * 
- * Removed Endpoints (moved to Python FastAPI):
- * - POST / - Create data source
- * - PUT /:id - Update data source
- * - DELETE /:id - Delete data source
+ * Python FastAPI Endpoints:
+ * - POST /connections - Create/update connection
  * - POST /test-connection - Test connection config
- * - POST /:sourceId/connection - Create/update connection
- * - POST /:sourceId/test-connection - Test connection
- * - POST /:sourceId/discover-schema - Discover schema
+ * - Collector/Emitter/Transformations endpoints
  */
 
 import {
@@ -184,6 +181,34 @@ export class DataSourceController {
     }
 
     return createSuccessResponse(connection);
+  }
+
+  /**
+   * Delete data source (soft delete)
+   * NestJS handles data source deletion
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete data source',
+    description: 'Soft delete a data source (NestJS handles deletion)',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Data source deleted successfully' })
+  async deleteDataSource(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    await this.dataSourceService.deleteDataSource(organizationId, id, userId);
+
+    return createDeleteResponse(id, 'Data source deleted successfully');
   }
 
   /**

@@ -123,7 +123,7 @@ export class PythonETLService {
             cursor: cursor || null,
           },
           {
-            timeout: 60000, // 60 seconds for collection
+            timeout: 300000, // 5 minutes for collection (was 60s)
           },
         ),
       );
@@ -133,7 +133,11 @@ export class PythonETLService {
         totalRows: response.data.total_rows,
         nextCursor: response.data.next_cursor,
         hasMore: response.data.has_more || false,
-        metadata: response.data.metadata,
+        metadata: {
+          // Include checkpoint in metadata so pipeline service can access it
+          checkpoint: response.data.checkpoint,
+          ...response.data.metadata,
+        },
       };
     } catch (error: any) {
       this.logger.error(`Collection failed: ${error.message}`, error.stack);
@@ -170,7 +174,7 @@ export class PythonETLService {
             transform_script: transformScript,
           },
           {
-            timeout: 30000,
+            timeout: 300000, // 5 minutes for transformation (was 30s)
           },
         ),
       );
@@ -218,7 +222,7 @@ export class PythonETLService {
             upsert_key: upsertKey || [],
           },
           {
-            timeout: 60000, // 60 seconds for emission
+            timeout: 300000, // 5 minutes for emission (was 60s)
           },
         ),
       );

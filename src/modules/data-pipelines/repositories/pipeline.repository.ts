@@ -429,12 +429,19 @@ export class PipelineRepository {
         .where(
           and(
             isNull(pipelines.deletedAt),
-            // Has a schedule configured
-            isNotNull(pipelines.scheduleType),
-            ne(pipelines.scheduleType, 'none'),
-            // Is due to run
+            // Is due to run - nextScheduledRunAt is set and in the past
             isNotNull(pipelines.nextScheduledRunAt),
             lte(pipelines.nextScheduledRunAt, now),
+            // Either has explicit schedule OR is incremental/CDC mode (syncMode = 'incremental')
+            or(
+              // Explicit schedule configured
+              and(
+                isNotNull(pipelines.scheduleType),
+                ne(pipelines.scheduleType, 'none'),
+              ),
+              // OR incremental/CDC mode with nextScheduledRunAt set (auto 2-min polling)
+              eq(pipelines.syncMode, 'incremental'),
+            ),
             // Not currently running - include idle, listing (incremental waiting), completed, and failed
             // ROOT FIX: Also allow 'running' status if it's been running for more than 1 hour (stuck pipeline recovery)
             or(
