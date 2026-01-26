@@ -19,7 +19,7 @@ import { ConnectionService } from '../../data-sources/connection.service';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import type { CreateSourceSchemaDto, UpdateSourceSchemaDto } from '../dto';
-import type { ColumnInfo, ValidationResult } from '../types/common.types';
+import type { ValidationResult } from '../types/common.types';
 
 /**
  * Internal DTO with organization context
@@ -35,7 +35,7 @@ export class SourceSchemaService {
   constructor(
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
-    private readonly connectionService: ConnectionService,
+    readonly _connectionService: ConnectionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
   ) {}

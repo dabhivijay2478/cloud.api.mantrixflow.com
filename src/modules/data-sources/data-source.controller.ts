@@ -27,7 +27,6 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
-  Post,
   Query,
   Request,
   UseGuards,

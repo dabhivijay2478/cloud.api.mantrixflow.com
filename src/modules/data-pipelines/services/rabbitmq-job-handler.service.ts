@@ -20,7 +20,6 @@ import { PipelineUpdatesGateway } from '../gateways/pipeline-updates.gateway';
 import {
   RabbitMQService,
   QUEUE_NAMES,
-  EXCHANGE_NAME,
   FullSyncJobData,
   IncrementalSyncJobData,
   DeltaCheckJobData,
@@ -170,7 +169,7 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
     ack: () => void,
     nack: () => void,
   ): Promise<void> {
-    const { pipelineId, organizationId, userId, triggerType, checkpoint, batchSize } = data;
+    const { pipelineId, organizationId, userId, triggerType, batchSize } = data;
 
     this.logger.log(`[INCREMENTAL-SYNC] Starting job for pipeline ${pipelineId}`);
 
@@ -228,7 +227,7 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
   private async handleDeltaCheck(
     data: DeltaCheckJobData,
     ack: () => void,
-    nack: () => void,
+    _nack: () => void,
   ): Promise<void> {
     const { pipelineId, organizationId } = data;
 

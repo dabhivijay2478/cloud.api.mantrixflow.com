@@ -5,13 +5,13 @@
  */
 
 import { DynamicModule, Global, Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { RabbitMQService } from './rabbitmq.service';
 
 @Global()
 @Module({})
+// biome-ignore lint/complexity/noStaticOnlyClass: NestJS module pattern requires static methods
 export class RabbitMQModule {
-  static forRootAsync(options?: {
+  static forRootAsync(_options?: {
     inject?: any[];
     useFactory?: (...args: any[]) => Promise<any> | any;
   }): DynamicModule {

@@ -722,10 +722,10 @@ export class ConnectionService {
       };
 
       if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
+        headers.Authorization = `Bearer ${authToken}`;
       }
 
-      let pythonResponse;
+      let pythonResponse: any;
       try {
         pythonResponse = await firstValueFrom(
           this.httpService.post(`${this.pythonServiceUrl}/test-connection`, pythonRequest, {

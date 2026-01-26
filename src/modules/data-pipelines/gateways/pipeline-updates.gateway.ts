@@ -22,7 +22,6 @@ import {
 import { Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
-import { Pool } from 'pg';
 
 interface PipelineUpdatePayload {
   pipeline_id: string;
@@ -185,7 +184,7 @@ export class PipelineUpdatesGateway
   private handlePipelineRunUpdate(payload: string) {
     try {
       const update: PipelineRunUpdatePayload = JSON.parse(payload);
-      const { pipeline_id, organization_id, run_id } = update;
+      const { pipeline_id, run_id } = update;
 
       // Broadcast to pipeline room
       this.server.to(`pipeline_${pipeline_id}`).emit('run_update', {

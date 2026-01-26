@@ -1012,7 +1012,7 @@ export class PipelineService {
     await this.checkPipelineManagePermission(userId, pipeline.organizationId);
 
     // Get checkpoint - Python will handle delta calculation and checkpoint management
-    const checkpoint = await this.lifecycleService.getCheckpoint(pipelineId);
+    const _checkpoint = await this.lifecycleService.getCheckpoint(pipelineId);
 
     // Recalculate next scheduled run time if the pipeline has a schedule
     let nextScheduledRunAt: Date | null = null;

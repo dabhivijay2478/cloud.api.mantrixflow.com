@@ -37,8 +37,8 @@ export class DestinationSchemaService {
   constructor(
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
-    private readonly pythonETLService: PythonETLService,
-    private readonly connectionService: ConnectionService,
+    readonly _pythonETLService: PythonETLService,
+    readonly _connectionService: ConnectionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
   ) {}

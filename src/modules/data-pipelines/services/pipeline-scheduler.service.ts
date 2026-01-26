@@ -133,7 +133,7 @@ export class PipelineSchedulerService {
       case ScheduleType.MINUTES: {
         // scheduleValue is the interval in minutes (e.g., "15" for every 15 minutes)
         const minutes = parseInt(scheduleValue || '30', 10);
-        if (isNaN(minutes) || minutes < 1 || minutes > 59) {
+        if (Number.isNaN(minutes) || minutes < 1 || minutes > 59) {
           throw new BadRequestException('Invalid minutes value. Must be between 1 and 59.');
         }
         return `*/${minutes} * * * *`;
@@ -143,7 +143,7 @@ export class PipelineSchedulerService {
         // scheduleValue is the interval in hours (e.g., "2" for every 2 hours)
         // or specific minute (e.g., "30" for XX:30)
         const value = parseInt(scheduleValue || '1', 10);
-        if (isNaN(value) || value < 1 || value > 23) {
+        if (Number.isNaN(value) || value < 1 || value > 23) {
           throw new BadRequestException('Invalid hourly value. Must be between 1 and 23.');
         }
         return `0 */${value} * * *`;
@@ -163,7 +163,7 @@ export class PipelineSchedulerService {
         const time = this.parseTimeString(
           timeStr ? `${timeStr}:${scheduleValue?.split(':')[2] || '00'}` : '00:00',
         );
-        if (isNaN(day) || day < 0 || day > 6) {
+        if (Number.isNaN(day) || day < 0 || day > 6) {
           throw new BadRequestException('Invalid weekly day value. Must be 0-6 (Sunday-Saturday).');
         }
         return `${time.minute} ${time.hour} * * ${day}`;
@@ -176,7 +176,7 @@ export class PipelineSchedulerService {
         const time = this.parseTimeString(
           parts.length > 1 ? `${parts[1]}:${parts[2] || '00'}` : '00:00',
         );
-        if (isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+        if (Number.isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
           throw new BadRequestException('Invalid monthly day value. Must be 1-31.');
         }
         return `${time.minute} ${time.hour} ${dayOfMonth} * *`;
@@ -205,10 +205,10 @@ export class PipelineSchedulerService {
     const hour = parseInt(hourStr || '0', 10);
     const minute = parseInt(minuteStr || '0', 10);
 
-    if (isNaN(hour) || hour < 0 || hour > 23) {
+    if (Number.isNaN(hour) || hour < 0 || hour > 23) {
       throw new BadRequestException('Invalid hour. Must be 0-23.');
     }
-    if (isNaN(minute) || minute < 0 || minute > 59) {
+    if (Number.isNaN(minute) || minute < 0 || minute > 59) {
       throw new BadRequestException('Invalid minute. Must be 0-59.');
     }
 
@@ -237,7 +237,7 @@ export class PipelineSchedulerService {
     const minutePart = parts[0];
     const hourPart = parts[1];
 
-    let nextRun = new Date(now);
+    const nextRun = new Date(now);
 
     // Handle */N patterns for minutes
     if (minutePart.startsWith('*/')) {
