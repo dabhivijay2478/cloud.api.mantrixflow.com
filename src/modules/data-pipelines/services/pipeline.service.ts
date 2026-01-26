@@ -616,7 +616,7 @@ export class PipelineService {
               const pythonTotalRecords = bookmarks[streamId].total_records;
               if (pythonTotalRecords && (!estimatedTotalRows || estimatedTotalRows !== pythonTotalRecords)) {
                 estimatedTotalRows = pythonTotalRecords;
-                console.log(`   📊 Total rows from checkpoint: ${estimatedTotalRows.toLocaleString()}`);
+                console.log(`   📊 Total rows from checkpoint: ${pythonTotalRecords.toLocaleString()}`);
               }
             }
           }
