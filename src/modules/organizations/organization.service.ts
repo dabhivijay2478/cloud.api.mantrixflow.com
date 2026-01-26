@@ -17,7 +17,6 @@ import { ENTITY_TYPES, ORG_ACTIONS } from '../activity-logs/constants/activity-l
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationMemberRepository } from './repositories/organization-member.repository';
-import { OrganizationOwnerRepository } from './repositories/organization-owner.repository';
 import { OrganizationRepository } from './repositories/organization.repository';
 import { OrganizationRoleService } from './services/organization-role.service';
 import { UserRepository } from '../users/repositories/user.repository';
@@ -27,7 +26,6 @@ export class OrganizationService {
   constructor(
     private readonly organizationRepository: OrganizationRepository,
     private readonly memberRepository: OrganizationMemberRepository,
-    private readonly ownerRepository: OrganizationOwnerRepository,
     @Inject(forwardRef(() => UserRepository))
     private readonly userRepository: UserRepository,
     private readonly activityLogService: ActivityLogService,
@@ -52,15 +50,15 @@ export class OrganizationService {
    *
    * An invited-only user is one who:
    * - Has at least one organization membership
-   * - Does NOT own any organizations (checked via organization_owners table)
+   * - Does NOT own any organizations (checked via owner_user_id in organizations table)
    * - ALL of their memberships have invitedBy set (they were invited, not owners)
    *
    * @param userId The user ID to check
    * @returns true if user is invited-only, false otherwise
    */
   async isInvitedOnlyUser(userId: string): Promise<boolean> {
-    // Check if user owns any organizations (most reliable check)
-    const ownedOrgs = await this.ownerRepository.findByUserId(userId);
+    // Check if user owns any organizations (using owner_user_id in organizations table)
+    const ownedOrgs = await this.organizationRepository.findByOwnerUserId(userId);
     if (ownedOrgs.length > 0) {
       // User owns at least one organization, so they're not invited-only
       return false;
@@ -116,16 +114,10 @@ export class OrganizationService {
       isActive: true,
     });
 
-    // Add the user as owner of the organization in the organization_owners table
+    // Add the user as member with OWNER role
     try {
       const user = await this.userRepository.findById(userId);
       if (user) {
-        // Create ownership record in organization_owners table
-        await this.ownerRepository.create({
-          organizationId: organization.id,
-          userId: userId,
-        });
-
         // Create member record with OWNER role and active status
         // Note: This membership does NOT have invitedBy set, indicating the user created the org
         await this.memberRepository.create({
@@ -143,7 +135,10 @@ export class OrganizationService {
       }
     } catch (error) {
       // Log error but don't fail organization creation
-      console.error('Failed to add user as owner/member or set current organization:', error);
+      this.activityLogService.logger.error(
+        'Failed to add user as member or set current organization',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     // Log activity
@@ -162,7 +157,10 @@ export class OrganizationService {
       });
     } catch (error) {
       // Don't fail organization creation if logging fails
-      console.error('Failed to log organization creation activity:', error);
+      this.activityLogService.logger.error(
+        'Failed to log organization creation activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     return organization;
@@ -171,7 +169,7 @@ export class OrganizationService {
   /**
    * List all organizations for a user
    * Returns organizations where the user is:
-   * 1. An owner (from organization_owners table)
+   * 1. An owner (from owner_user_id in organizations table)
    * 2. A member (from organization_members table with active status)
    *
    * This ensures users see all organizations they have access to, whether they own them or are members
@@ -181,9 +179,9 @@ export class OrganizationService {
   async listOrganizations(
     userId: string,
   ): Promise<Array<Organization & { isOwner: boolean; role?: string }>> {
-    // Get organizations where user is an owner
-    const ownedOrgs = await this.ownerRepository.findByUserId(userId);
-    const ownedOrgIds = new Set(ownedOrgs.map((o) => o.organizationId));
+    // Get organizations where user is an owner (using owner_user_id)
+    const ownedOrgs = await this.organizationRepository.findByOwnerUserId(userId);
+    const ownedOrgIds = new Set(ownedOrgs.map((o) => o.id));
 
     // Get organizations where user is a member (active memberships)
     const activeMembers = await this.memberRepository.findActiveMembershipsByUserId(userId);
@@ -251,7 +249,7 @@ export class OrganizationService {
 
   /**
    * Update organization
-   * 
+   *
    * AUTHORIZATION: Only OWNER can update organization details
    */
   async updateOrganization(
@@ -265,9 +263,7 @@ export class OrganizationService {
     if (userId) {
       const canUpdate = await this.roleService.canUpdateOrganization(userId, id);
       if (!canUpdate) {
-        throw new ForbiddenException(
-          'Only OWNER can update organization details',
-        );
+        throw new ForbiddenException('Only OWNER can update organization details');
       }
     }
 
@@ -310,7 +306,10 @@ export class OrganizationService {
       });
     } catch (error) {
       // Don't fail update if logging fails
-      console.error('Failed to log organization update activity:', error);
+      this.activityLogService.logger.error(
+        'Failed to log organization update activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     return updated;
@@ -338,8 +337,8 @@ export class OrganizationService {
 
     const organization = await this.getOrganization(user.currentOrgId);
 
-    // Get user's role in this organization
-    const isOwner = await this.ownerRepository.isOwner(userId, organization.id);
+    // Check if user is owner (using owner_user_id)
+    const isOwner = organization.ownerUserId === userId;
     let role: string | undefined;
 
     if (isOwner) {
@@ -363,7 +362,7 @@ export class OrganizationService {
 
   /**
    * Set current organization for a user
-   * 
+   *
    * AUTHORIZATION: User must be a member of the organization
    */
   async setCurrentOrganization(userId: string, id: string): Promise<Organization> {
@@ -394,9 +393,125 @@ export class OrganizationService {
       });
     } catch (error) {
       // Don't fail organization switch if logging fails
-      console.error('Failed to log organization selection activity:', error);
+      this.activityLogService.logger.error(
+        'Failed to log organization selection activity',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
 
     return organization;
+  }
+
+  /**
+   * Transfer organization ownership
+   *
+   * AUTHORIZATION: Only current OWNER can transfer ownership
+   * The new owner must be a member of the organization
+   */
+  async transferOwnership(
+    organizationId: string,
+    newOwnerId: string,
+    currentOwnerId: string,
+  ): Promise<Organization> {
+    // Verify organization exists
+    const organization = await this.getOrganization(organizationId);
+
+    // AUTHORIZATION: Verify current user is the owner
+    if (organization.ownerUserId !== currentOwnerId) {
+      throw new ForbiddenException('Only the current owner can transfer ownership');
+    }
+
+    // Verify new owner is not the same as current owner
+    if (newOwnerId === currentOwnerId) {
+      throw new BadRequestException('New owner must be different from current owner');
+    }
+
+    // Verify new owner is a member of the organization
+    const newOwnerMember = await this.memberRepository.findByOrganizationAndUserId(
+      organizationId,
+      newOwnerId,
+    );
+    if (
+      !newOwnerMember ||
+      (newOwnerMember.status !== 'active' && newOwnerMember.status !== 'accepted')
+    ) {
+      throw new BadRequestException(
+        'New owner must be an active member of the organization. Please invite them first.',
+      );
+    }
+
+    // Get old owner member record (if exists)
+    const oldOwnerMember = await this.memberRepository.findByOrganizationAndUserId(
+      organizationId,
+      currentOwnerId,
+    );
+
+    // Update organization owner
+    const updated = await this.organizationRepository.update(organizationId, {
+      ownerUserId: newOwnerId,
+    });
+
+    // Update member roles:
+    // 1. Set new owner's role to OWNER (or create member record if doesn't exist)
+    if (newOwnerMember) {
+      await this.memberRepository.update(newOwnerMember.id, {
+        role: 'OWNER',
+      });
+    } else {
+      // Get user details to get email
+      const newOwnerUser = await this.userRepository.findById(newOwnerId);
+      if (!newOwnerUser || !newOwnerUser.email) {
+        throw new BadRequestException(
+          `Cannot transfer ownership: User ${newOwnerId} not found or has no email`,
+        );
+      }
+
+      // Create OWNER member record for new owner
+      await this.memberRepository.create({
+        organizationId,
+        userId: newOwnerId,
+        email: newOwnerUser.email.toLowerCase(),
+        role: 'OWNER',
+        status: 'active',
+        acceptedAt: new Date(),
+      });
+    }
+
+    // 2. Update old owner's role to ADMIN (if they have a member record)
+    if (oldOwnerMember && oldOwnerMember.role === 'OWNER') {
+      await this.memberRepository.update(oldOwnerMember.id, {
+        role: 'ADMIN',
+      });
+    }
+
+    // Get user details for logging
+    const oldOwnerUser = await this.userRepository.findById(currentOwnerId);
+    const newOwnerUser = await this.userRepository.findById(newOwnerId);
+
+    // Log activity
+    try {
+      await this.activityLogService.logActivity({
+        organizationId,
+        userId: currentOwnerId,
+        actionType: ORG_ACTIONS.OWNERSHIP_TRANSFERRED,
+        entityType: ENTITY_TYPES.ORGANIZATION,
+        entityId: organizationId,
+        message: `Ownership transferred from ${oldOwnerUser?.email || currentOwnerId} to ${newOwnerUser?.email || newOwnerId}`,
+        metadata: {
+          oldOwnerId: currentOwnerId,
+          oldOwnerEmail: oldOwnerUser?.email,
+          newOwnerId,
+          newOwnerEmail: newOwnerUser?.email,
+        },
+      });
+    } catch (error) {
+      // Don't fail transfer if logging fails
+      this.activityLogService.logger.error(
+        'Failed to log ownership transfer activity',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    return updated;
   }
 }

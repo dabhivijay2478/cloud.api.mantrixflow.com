@@ -4,6 +4,7 @@
  */
 
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -38,6 +39,7 @@ import {
 import { OrganizationRoleGuard, RequireRole } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationService } from './organization.service';
 
@@ -245,6 +247,53 @@ export class OrganizationController {
     const userId = req.user?.id;
     const organization = await this.organizationService.updateOrganization(id, dto, userId);
     return createSuccessResponse(organization, 'Organization updated successfully');
+  }
+
+  /**
+   * Transfer organization ownership
+   * AUTHORIZATION: Only OWNER can transfer ownership
+   */
+  @Post(':id/transfer-ownership')
+  @UseGuards(OrganizationRoleGuard)
+  @RequireRole('OWNER')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Transfer organization ownership',
+    description: 'Transfer ownership of an organization to another member (OWNER only)',
+  })
+  @ApiParam({ name: 'id', description: 'Organization ID (UUID)' })
+  @ApiBody({ type: TransferOwnershipDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Ownership transferred successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid UUID format or new owner is not a member',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - Only OWNER can transfer ownership',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Organization not found',
+  })
+  async transferOwnership(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TransferOwnershipDto,
+    @Request() req: ExpressRequestType,
+  ) {
+    const currentOwnerId = req.user?.id;
+    if (!currentOwnerId) {
+      throw new BadRequestException('User ID is required');
+    }
+    const organization = await this.organizationService.transferOwnership(
+      id,
+      dto.newOwnerId,
+      currentOwnerId,
+    );
+    return createSuccessResponse(organization, 'Ownership transferred successfully');
   }
 
   /**

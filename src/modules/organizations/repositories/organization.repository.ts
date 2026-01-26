@@ -56,6 +56,25 @@ export class OrganizationRepository {
   }
 
   /**
+   * Find organizations by owner user ID
+   */
+  async findByOwnerUserId(ownerUserId: string): Promise<Organization[]> {
+    return this.db.select().from(organizations).where(eq(organizations.ownerUserId, ownerUserId));
+  }
+
+  /**
+   * Check if user is owner of organization
+   */
+  async isOwner(userId: string, organizationId: string): Promise<boolean> {
+    const [org] = await this.db
+      .select()
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .limit(1);
+    return org?.ownerUserId === userId;
+  }
+
+  /**
    * Update organization
    */
   async update(id: string, data: Partial<NewOrganization>): Promise<Organization> {

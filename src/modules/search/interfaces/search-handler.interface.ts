@@ -18,9 +18,5 @@ export interface SearchHandler {
    * @param limit - Maximum number of results
    * @returns Array of search results
    */
-  search(
-    organizationId: string,
-    query: string,
-    limit: number,
-  ): Promise<SearchResultDto[]>;
+  search(organizationId: string, query: string, limit: number): Promise<SearchResultDto[]>;
 }

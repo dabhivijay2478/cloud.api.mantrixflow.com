@@ -1,16 +1,13 @@
 /**
  * Pipeline Source Schema Repository
- * Data access layer for source schema entities
+ * Data access layer for pipeline_source_schemas table
  */
 
-import {
-  type NewPipelineSourceSchema,
-  type PipelineSourceSchema,
-  pipelineSourceSchemas,
-} from '../../../database/schemas';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { NewPipelineSourceSchema, PipelineSourceSchema } from '../../../database/schemas';
+import { pipelineSourceSchemas } from '../../../database/schemas';
 
 @Injectable()
 export class PipelineSourceSchemaRepository {
@@ -20,7 +17,7 @@ export class PipelineSourceSchemaRepository {
   ) {}
 
   /**
-   * Create new source schema
+   * Create source schema
    */
   async create(schema: NewPipelineSourceSchema): Promise<PipelineSourceSchema> {
     const [created] = await this.db.insert(pipelineSourceSchemas).values(schema).returning();
@@ -28,7 +25,7 @@ export class PipelineSourceSchemaRepository {
   }
 
   /**
-   * Find source schema by ID
+   * Find by ID
    */
   async findById(id: string): Promise<PipelineSourceSchema | null> {
     const [schema] = await this.db
@@ -38,6 +35,21 @@ export class PipelineSourceSchemaRepository {
       .limit(1);
 
     return schema || null;
+  }
+
+  /**
+   * Find by organization
+   */
+  async findByOrganization(organizationId: string): Promise<PipelineSourceSchema[]> {
+    return await this.db
+      .select()
+      .from(pipelineSourceSchemas)
+      .where(
+        and(
+          eq(pipelineSourceSchemas.organizationId, organizationId),
+          isNull(pipelineSourceSchemas.deletedAt),
+        ),
+      );
   }
 
   /**
@@ -55,5 +67,15 @@ export class PipelineSourceSchemaRepository {
     }
 
     return updated;
+  }
+
+  /**
+   * Soft delete
+   */
+  async delete(id: string): Promise<void> {
+    await this.db
+      .update(pipelineSourceSchemas)
+      .set({ deletedAt: new Date() })
+      .where(eq(pipelineSourceSchemas.id, id));
   }
 }

@@ -1,5 +1,5 @@
-import { boolean, jsonb, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { postgresConnections } from '../../data-sources/connections/postgres-connections.schema';
+import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { dataSources } from '../../data-sources/data-sources.schema';
 
 /**
  * Pipeline Destination Schemas Table
@@ -10,16 +10,15 @@ import { postgresConnections } from '../../data-sources/connections/postgres-con
  */
 export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas', {
   id: uuid('id').primaryKey().defaultRandom(),
-  orgId: uuid('org_id').notNull(),
-  userId: uuid('user_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
 
   // ============================================================================
   // DESTINATION CONNECTION
   // ============================================================================
-  /** Destination connection ID (PostgreSQL connection) */
-  destinationConnectionId: uuid('destination_connection_id')
+  /** Data source ID (replaces destination_connection_id) - links to data_sources table */
+  dataSourceId: uuid('data_source_id')
     .notNull()
-    .references(() => postgresConnections.id, { onDelete: 'cascade' }),
+    .references(() => dataSources.id, { onDelete: 'cascade' }),
 
   // ============================================================================
   // DESTINATION LOCATION
@@ -45,8 +44,8 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   /** Index definitions */
   indexes: jsonb('indexes').$type<IndexDefinition[]>(),
 
-  /** Column mappings from source to destination */
-  columnMappings: jsonb('column_mappings').$type<ColumnMapping[]>(),
+  /** Custom Python transform script (defines transform(record) function) */
+  transformScript: text('transform_script'),
 
   // ============================================================================
   // WRITE CONFIGURATION
@@ -105,19 +104,6 @@ export interface IndexDefinition {
   columns: string[];
   unique?: boolean;
   where?: string; // Partial index condition
-}
-
-/**
- * Column mapping from source to destination
- */
-export interface ColumnMapping {
-  sourceColumn: string;
-  destinationColumn: string;
-  dataType: string; // PostgreSQL data type
-  nullable: boolean;
-  defaultValue?: string;
-  isPrimaryKey?: boolean;
-  maxLength?: number;
 }
 
 /**

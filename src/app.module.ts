@@ -1,17 +1,16 @@
-import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
-import { PostgresDataSourceModule } from './modules/data-sources/postgres/postgres-data-source.module';
+import { DataSourceModule } from './modules/data-sources/data-source.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
 import { SearchModule } from './modules/search/search.module';
 import { UserModule } from './modules/users/user.module';
-
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -19,41 +18,16 @@ import { UserModule } from './modules/users/user.module';
       envFilePath: '.env',
       cache: true,
     }),
-    // Global BullMQ configuration
-    BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const redisUrl = configService.get<string>('REDIS_URL');
 
-        // If REDIS_URL is provided, parse it
-        if (redisUrl) {
-          try {
-            const url = new URL(redisUrl);
-            return {
-              connection: {
-                host: url.hostname,
-                port: parseInt(url.port, 10),
-                password: url.password || undefined,
-                username: url.username || undefined,
-              },
-            };
-          } catch (error) {
-            console.warn('Failed to parse REDIS_URL, falling back to individual config', error);
-          }
-        }
+    // NestJS native scheduler for simple, non-distributed cron jobs
+    // Use for quick, in-memory tasks that run on every instance
+    ScheduleModule.forRoot(),
 
-        // Fallback to individual configuration
-        return {
-          connection: {
-            host: configService.get('REDIS_HOST', 'localhost'),
-            port: configService.get<number>('REDIS_PORT', 6379),
-            password: configService.get<string>('REDIS_PASSWORD'),
-            username: configService.get<string>('REDIS_USERNAME'),
-          },
-        };
-      },
-    }),
-    PostgresDataSourceModule,
+    // Note: PgBoss has been removed - we now use RabbitMQ for job queuing and scheduling
+    // PGMQ is integrated directly via PGMQService in DataPipelineModule
+
+    // Application Modules
+    DataSourceModule,
     DataPipelineModule,
     OrganizationModule,
     UserModule,

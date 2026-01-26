@@ -6,7 +6,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, ilike, or } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
-import { postgresPipelines } from '../../../database/schemas/data-pipelines';
+import { pipelines } from '../../../database/schemas/data-pipelines';
 import type { SearchHandler } from '../interfaces/search-handler.interface';
 import type { SearchResultDto } from '../dto/search-response.dto';
 
@@ -16,28 +16,22 @@ export class PipelineSearchHandler implements SearchHandler {
 
   constructor(@Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase) {}
 
-  async search(
-    organizationId: string,
-    query: string,
-    limit: number,
-  ): Promise<SearchResultDto[]> {
+  async search(organizationId: string, query: string, limit: number): Promise<SearchResultDto[]> {
     const searchPattern = `%${query}%`;
 
     const results = await this.db
       .select({
-        id: postgresPipelines.id,
-        name: postgresPipelines.name,
-        description: postgresPipelines.description,
+        id: pipelines.id,
+        name: pipelines.name,
+        description: pipelines.description,
       })
-      .from(postgresPipelines)
+      .from(pipelines)
       .where(
         and(
-          eq(postgresPipelines.orgId, organizationId),
+          eq(pipelines.organizationId, organizationId),
           or(
-            ilike(postgresPipelines.name, searchPattern),
-            postgresPipelines.description
-              ? ilike(postgresPipelines.description, searchPattern)
-              : undefined,
+            ilike(pipelines.name, searchPattern),
+            pipelines.description ? ilike(pipelines.description, searchPattern) : undefined,
           ),
         ),
       )

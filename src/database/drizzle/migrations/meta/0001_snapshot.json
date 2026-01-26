@@ -1,11 +1,11 @@
 {
-  "id": "525c9dae-8ee0-49b0-8744-9afe17905968",
-  "prevId": "fda081a8-e2d1-460c-b5ef-7dfefc2f7a70",
+  "id": "3c982da7-0ac9-4eed-8cdb-25f7148139ad",
+  "prevId": "4f5afa2e-2f0e-492d-a95a-55f23ae5ee12",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.postgres_connections": {
-      "name": "postgres_connections",
+    "public.activity_logs": {
+      "name": "activity_logs",
       "schema": "",
       "columns": {
         "id": {
@@ -15,14 +15,211 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "org_id": {
-          "name": "org_id",
+        "organization_id": {
+          "name": "organization_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
         "user_id": {
           "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "action_type": {
+          "name": "action_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_type": {
+          "name": "entity_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_id": {
+          "name": "entity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "activity_logs_organization_id_idx": {
+          "name": "activity_logs_organization_id_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_logs_org_entity_type_idx": {
+          "name": "activity_logs_org_entity_type_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_logs_org_action_type_idx": {
+          "name": "activity_logs_org_action_type_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_logs_user_id_idx": {
+          "name": "activity_logs_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_logs_entity_idx": {
+          "name": "activity_logs_entity_idx",
+          "columns": [
+            {
+              "expression": "entity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_logs_created_at_idx": {
+          "name": "activity_logs_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "activity_logs_organization_id_organizations_id_fk": {
+          "name": "activity_logs_organization_id_organizations_id_fk",
+          "tableFrom": "activity_logs",
+          "tableTo": "organizations",
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "activity_logs_user_id_users_id_fk": {
+          "name": "activity_logs_user_id_users_id_fk",
+          "tableFrom": "activity_logs",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.pipelines": {
+      "name": "pipelines",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
@@ -33,260 +230,36 @@
           "primaryKey": false,
           "notNull": true
         },
-        "host": {
-          "name": "host",
+        "description": {
+          "name": "description",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_schema_id": {
+          "name": "source_schema_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "port": {
-          "name": "port",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 5432
-        },
-        "database": {
-          "name": "database",
-          "type": "text",
+        "destination_schema_id": {
+          "name": "destination_schema_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "username": {
-          "name": "username",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "password": {
-          "name": "password",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ssl_enabled": {
-          "name": "ssl_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "ssl_ca_cert": {
-          "name": "ssl_ca_cert",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ssh_tunnel_enabled": {
-          "name": "ssh_tunnel_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "ssh_host": {
-          "name": "ssh_host",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ssh_port": {
-          "name": "ssh_port",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ssh_username": {
-          "name": "ssh_username",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ssh_private_key": {
-          "name": "ssh_private_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "connection_pool_size": {
-          "name": "connection_pool_size",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 5
-        },
-        "query_timeout_seconds": {
-          "name": "query_timeout_seconds",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 60
-        },
-        "status": {
-          "name": "status",
-          "type": "connection_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'inactive'"
-        },
-        "last_connected_at": {
-          "name": "last_connected_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "schema_cache": {
-          "name": "schema_cache",
+        "transformations": {
+          "name": "transformations",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
-        "schema_cached_at": {
-          "name": "schema_cached_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.postgres_query_logs": {
-      "name": "postgres_query_logs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "query": {
-          "name": "query",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "execution_time_ms": {
-          "name": "execution_time_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rows_returned": {
-          "name": "rows_returned",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "status": {
-          "name": "status",
-          "type": "query_log_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "postgres_query_logs_connection_id_postgres_connections_id_fk": {
-          "name": "postgres_query_logs_connection_id_postgres_connections_id_fk",
-          "tableFrom": "postgres_query_logs",
-          "tableTo": "postgres_connections",
-          "columnsFrom": ["connection_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.postgres_sync_jobs": {
-      "name": "postgres_sync_jobs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "table_name": {
-          "name": "table_name",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
         "sync_mode": {
           "name": "sync_mode",
-          "type": "sync_mode",
-          "typeSchema": "public",
+          "type": "varchar(50)",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false,
+          "default": "'full'"
         },
         "incremental_column": {
           "name": "incremental_column",
@@ -300,51 +273,11 @@
           "primaryKey": false,
           "notNull": false
         },
-        "destination_table": {
-          "name": "destination_table",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "sync_job_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "rows_synced": {
-          "name": "rows_synced",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "sync_frequency": {
           "name": "sync_frequency",
-          "type": "sync_frequency",
-          "typeSchema": "public",
+          "type": "varchar(50)",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": "'manual'"
         },
         "next_sync_at": {
@@ -353,11 +286,59 @@
           "primaryKey": false,
           "notNull": false
         },
-        "custom_where_clause": {
-          "name": "custom_where_clause",
+        "status": {
+          "name": "status",
+          "type": "pipeline_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'active'"
+        },
+        "migration_state": {
+          "name": "migration_state",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_run_at": {
+          "name": "last_run_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_run_status": {
+          "name": "last_run_status",
+          "type": "run_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "total_rows_processed": {
+          "name": "total_rows_processed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "total_runs_successful": {
+          "name": "total_runs_successful",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "total_runs_failed": {
+          "name": "total_runs_failed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
         },
         "created_at": {
           "name": "created_at",
@@ -372,17 +353,50 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
       "foreignKeys": {
-        "postgres_sync_jobs_connection_id_postgres_connections_id_fk": {
-          "name": "postgres_sync_jobs_connection_id_postgres_connections_id_fk",
-          "tableFrom": "postgres_sync_jobs",
-          "tableTo": "postgres_connections",
-          "columnsFrom": ["connection_id"],
+        "pipelines_organization_id_organizations_id_fk": {
+          "name": "pipelines_organization_id_organizations_id_fk",
+          "tableFrom": "pipelines",
+          "tableTo": "organizations",
+          "columnsFrom": ["organization_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "pipelines_created_by_users_id_fk": {
+          "name": "pipelines_created_by_users_id_fk",
+          "tableFrom": "pipelines",
+          "tableTo": "users",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "pipelines_source_schema_id_pipeline_source_schemas_id_fk": {
+          "name": "pipelines_source_schema_id_pipeline_source_schemas_id_fk",
+          "tableFrom": "pipelines",
+          "tableTo": "pipeline_source_schemas",
+          "columnsFrom": ["source_schema_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "pipelines_destination_schema_id_pipeline_destination_schemas_id_fk": {
+          "name": "pipelines_destination_schema_id_pipeline_destination_schemas_id_fk",
+          "tableFrom": "pipelines",
+          "tableTo": "pipeline_destination_schemas",
+          "columnsFrom": ["destination_schema_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },
@@ -392,8 +406,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.postgres_pipeline_runs": {
-      "name": "postgres_pipeline_runs",
+    "public.pipeline_runs": {
+      "name": "pipeline_runs",
       "schema": "",
       "columns": {
         "id": {
@@ -409,8 +423,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "org_id": {
-          "name": "org_id",
+        "organization_id": {
+          "name": "organization_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
@@ -422,6 +436,28 @@
           "primaryKey": false,
           "notNull": false,
           "default": "'pending'"
+        },
+        "job_state": {
+          "name": "job_state",
+          "type": "job_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'pending'"
+        },
+        "trigger_type": {
+          "name": "trigger_type",
+          "type": "trigger_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'manual'"
+        },
+        "triggered_by": {
+          "name": "triggered_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         },
         "rows_read": {
           "name": "rows_read",
@@ -494,17 +530,39 @@
           "primaryKey": false,
           "notNull": false
         },
-        "trigger_type": {
-          "name": "trigger_type",
-          "type": "trigger_type",
-          "typeSchema": "public",
+        "resolved_destination_schema": {
+          "name": "resolved_destination_schema",
+          "type": "varchar(255)",
           "primaryKey": false,
-          "notNull": false,
-          "default": "'manual'"
+          "notNull": false
         },
-        "triggered_by": {
-          "name": "triggered_by",
-          "type": "uuid",
+        "resolved_destination_table": {
+          "name": "resolved_destination_table",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_column_mappings": {
+          "name": "resolved_column_mappings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "destination_table_was_created": {
+          "name": "destination_table_was_created",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_sync_cursor": {
+          "name": "last_sync_cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "job_state_updated_at": {
+          "name": "job_state_updated_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
@@ -520,17 +578,42 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         }
       },
       "indexes": {},
       "foreignKeys": {
-        "postgres_pipeline_runs_pipeline_id_postgres_pipelines_id_fk": {
-          "name": "postgres_pipeline_runs_pipeline_id_postgres_pipelines_id_fk",
-          "tableFrom": "postgres_pipeline_runs",
-          "tableTo": "postgres_pipelines",
+        "pipeline_runs_pipeline_id_pipelines_id_fk": {
+          "name": "pipeline_runs_pipeline_id_pipelines_id_fk",
+          "tableFrom": "pipeline_runs",
+          "tableTo": "pipelines",
           "columnsFrom": ["pipeline_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "pipeline_runs_organization_id_organizations_id_fk": {
+          "name": "pipeline_runs_organization_id_organizations_id_fk",
+          "tableFrom": "pipeline_runs",
+          "tableTo": "organizations",
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "pipeline_runs_triggered_by_users_id_fk": {
+          "name": "pipeline_runs_triggered_by_users_id_fk",
+          "tableFrom": "pipeline_runs",
+          "tableTo": "users",
+          "columnsFrom": ["triggered_by"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -540,8 +623,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.postgres_pipelines": {
-      "name": "postgres_pipelines",
+    "public.pipeline_source_schemas": {
+      "name": "pipeline_source_schemas",
       "schema": "",
       "columns": {
         "id": {
@@ -551,29 +634,11 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "org_id": {
-          "name": "org_id",
+        "organization_id": {
+          "name": "organization_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "source_type": {
           "name": "source_type",
@@ -581,8 +646,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "source_connection_id": {
-          "name": "source_connection_id",
+        "data_source_id": {
+          "name": "data_source_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -611,137 +676,60 @@
           "primaryKey": false,
           "notNull": false
         },
-        "destination_connection_id": {
-          "name": "destination_connection_id",
-          "type": "uuid",
+        "discovered_columns": {
+          "name": "discovered_columns",
+          "type": "jsonb",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
-        "destination_schema": {
-          "name": "destination_schema",
+        "primary_keys": {
+          "name": "primary_keys",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "foreign_keys": {
+          "name": "foreign_keys",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "estimated_row_count": {
+          "name": "estimated_row_count",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "size_mb": {
+          "name": "size_mb",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "validation_result": {
+          "name": "validation_result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
           "type": "varchar(255)",
           "primaryKey": false,
-          "notNull": false,
-          "default": "'public'"
+          "notNull": false
         },
-        "destination_table": {
-          "name": "destination_table",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "destination_table_exists": {
-          "name": "destination_table_exists",
+        "is_active": {
+          "name": "is_active",
           "type": "boolean",
           "primaryKey": false,
           "notNull": false,
-          "default": false
+          "default": true
         },
-        "column_mappings": {
-          "name": "column_mappings",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "transformations": {
-          "name": "transformations",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "write_mode": {
-          "name": "write_mode",
-          "type": "write_mode",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'append'"
-        },
-        "upsert_key": {
-          "name": "upsert_key",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sync_mode": {
-          "name": "sync_mode",
-          "type": "varchar(50)",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'full'"
-        },
-        "incremental_column": {
-          "name": "incremental_column",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_sync_value": {
-          "name": "last_sync_value",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sync_frequency": {
-          "name": "sync_frequency",
-          "type": "varchar(50)",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'manual'"
-        },
-        "next_sync_at": {
-          "name": "next_sync_at",
+        "last_discovered_at": {
+          "name": "last_discovered_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "pipeline_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'active'"
-        },
-        "last_run_at": {
-          "name": "last_run_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_run_status": {
-          "name": "last_run_status",
-          "type": "run_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "total_rows_processed": {
-          "name": "total_rows_processed",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "total_runs_successful": {
-          "name": "total_runs_successful",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "total_runs_failed": {
-          "name": "total_runs_failed",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
         },
         "created_at": {
           "name": "created_at",
@@ -766,20 +754,11 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "postgres_pipelines_source_connection_id_postgres_connections_id_fk": {
-          "name": "postgres_pipelines_source_connection_id_postgres_connections_id_fk",
-          "tableFrom": "postgres_pipelines",
-          "tableTo": "postgres_connections",
-          "columnsFrom": ["source_connection_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "postgres_pipelines_destination_connection_id_postgres_connections_id_fk": {
-          "name": "postgres_pipelines_destination_connection_id_postgres_connections_id_fk",
-          "tableFrom": "postgres_pipelines",
-          "tableTo": "postgres_connections",
-          "columnsFrom": ["destination_connection_id"],
+        "pipeline_source_schemas_data_source_id_data_sources_id_fk": {
+          "name": "pipeline_source_schemas_data_source_id_data_sources_id_fk",
+          "tableFrom": "pipeline_source_schemas",
+          "tableTo": "data_sources",
+          "columnsFrom": ["data_source_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -790,34 +769,882 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
+    },
+    "public.pipeline_destination_schemas": {
+      "name": "pipeline_destination_schemas",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "data_source_id": {
+          "name": "data_source_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_schema": {
+          "name": "destination_schema",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'public'"
+        },
+        "destination_table": {
+          "name": "destination_table",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_table_exists": {
+          "name": "destination_table_exists",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "column_definitions": {
+          "name": "column_definitions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "primary_keys": {
+          "name": "primary_keys",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "indexes": {
+          "name": "indexes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "column_mappings": {
+          "name": "column_mappings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "write_mode": {
+          "name": "write_mode",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'append'"
+        },
+        "upsert_key": {
+          "name": "upsert_key",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "validation_result": {
+          "name": "validation_result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_validated_at": {
+          "name": "last_validated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_synced_at": {
+          "name": "last_synced_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "pipeline_destination_schemas_data_source_id_data_sources_id_fk": {
+          "name": "pipeline_destination_schemas_data_source_id_data_sources_id_fk",
+          "tableFrom": "pipeline_destination_schemas",
+          "tableTo": "data_sources",
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.data_sources": {
+      "name": "data_sources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "data_sources_organization_id_idx": {
+          "name": "data_sources_organization_id_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_sources_source_type_idx": {
+          "name": "data_sources_source_type_idx",
+          "columns": [
+            {
+              "expression": "source_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "data_sources_organization_id_organizations_id_fk": {
+          "name": "data_sources_organization_id_organizations_id_fk",
+          "tableFrom": "data_sources",
+          "tableTo": "organizations",
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "data_sources_created_by_users_id_fk": {
+          "name": "data_sources_created_by_users_id_fk",
+          "tableFrom": "data_sources",
+          "tableTo": "users",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.data_source_connections": {
+      "name": "data_source_connections",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "data_source_id": {
+          "name": "data_source_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_type": {
+          "name": "connection_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "connection_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'inactive'"
+        },
+        "last_connected_at": {
+          "name": "last_connected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "test_result": {
+          "name": "test_result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "schema_cache": {
+          "name": "schema_cache",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "schema_cached_at": {
+          "name": "schema_cached_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "data_source_connections_data_source_id_idx": {
+          "name": "data_source_connections_data_source_id_idx",
+          "columns": [
+            {
+              "expression": "data_source_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_source_connections_connection_type_idx": {
+          "name": "data_source_connections_connection_type_idx",
+          "columns": [
+            {
+              "expression": "connection_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_source_connections_status_idx": {
+          "name": "data_source_connections_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "data_source_connections_data_source_id_data_sources_id_fk": {
+          "name": "data_source_connections_data_source_id_data_sources_id_fk",
+          "tableFrom": "data_source_connections",
+          "tableTo": "data_sources",
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.query_logs": {
+      "name": "query_logs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "data_source_id": {
+          "name": "data_source_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "query": {
+          "name": "query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "execution_time_ms": {
+          "name": "execution_time_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rows_returned": {
+          "name": "rows_returned",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "status": {
+          "name": "status",
+          "type": "query_log_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "query_logs_data_source_id_data_sources_id_fk": {
+          "name": "query_logs_data_source_id_data_sources_id_fk",
+          "tableFrom": "query_logs",
+          "tableTo": "data_sources",
+          "columnsFrom": ["data_source_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "query_logs_user_id_users_id_fk": {
+          "name": "query_logs_user_id_users_id_fk",
+          "tableFrom": "query_logs",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.organization_members": {
+      "name": "organization_members",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "organization_member_role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'VIEWER'"
+        },
+        "status": {
+          "name": "status",
+          "type": "organization_member_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'invited'"
+        },
+        "invited_by": {
+          "name": "invited_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invited_at": {
+          "name": "invited_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_panel_access": {
+          "name": "agent_panel_access",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "allowed_models": {
+          "name": "allowed_models",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'[]'::jsonb"
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "organization_members_organization_id_organizations_id_fk": {
+          "name": "organization_members_organization_id_organizations_id_fk",
+          "tableFrom": "organization_members",
+          "tableTo": "organizations",
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "organization_members_user_id_users_id_fk": {
+          "name": "organization_members_user_id_users_id_fk",
+          "tableFrom": "organization_members",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "organization_members_invited_by_users_id_fk": {
+          "name": "organization_members_invited_by_users_id_fk",
+          "tableFrom": "organization_members",
+          "tableTo": "users",
+          "columnsFrom": ["invited_by"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.organizations": {
+      "name": "organizations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settings": {
+          "name": "settings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "organizations_owner_user_id_users_id_fk": {
+          "name": "organizations_owner_user_id_users_id_fk",
+          "tableFrom": "organizations",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "organizations_slug_unique": {
+          "name": "organizations_slug_unique",
+          "nullsNotDistinct": false,
+          "columns": ["slug"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "first_name": {
+          "name": "first_name",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_name": {
+          "name": "last_name",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "full_name": {
+          "name": "full_name",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "avatar_url": {
+          "name": "avatar_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "supabase_user_id": {
+          "name": "supabase_user_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email_verified": {
+          "name": "email_verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "user_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "current_org_id": {
+          "name": "current_org_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "onboarding_completed": {
+          "name": "onboarding_completed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "onboarding_step": {
+          "name": "onboarding_step",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_login_at": {
+          "name": "last_login_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_email_unique": {
+          "name": "users_email_unique",
+          "nullsNotDistinct": false,
+          "columns": ["email"]
+        },
+        "users_supabase_user_id_unique": {
+          "name": "users_supabase_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": ["supabase_user_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
-    "public.connection_status": {
-      "name": "connection_status",
-      "schema": "public",
-      "values": ["active", "inactive", "error"]
-    },
-    "public.query_log_status": {
-      "name": "query_log_status",
-      "schema": "public",
-      "values": ["success", "error"]
-    },
-    "public.sync_frequency": {
-      "name": "sync_frequency",
-      "schema": "public",
-      "values": ["manual", "15min", "1hour", "24hours"]
-    },
-    "public.sync_job_status": {
-      "name": "sync_job_status",
-      "schema": "public",
-      "values": ["pending", "running", "success", "failed"]
-    },
-    "public.sync_mode": {
-      "name": "sync_mode",
-      "schema": "public",
-      "values": ["full", "incremental"]
-    },
     "public.pipeline_status": {
       "name": "pipeline_status",
       "schema": "public",
@@ -828,15 +1655,45 @@
       "schema": "public",
       "values": ["pending", "running", "success", "failed", "cancelled"]
     },
-    "public.trigger_type": {
-      "name": "trigger_type",
-      "schema": "public",
-      "values": ["manual", "scheduled", "webhook"]
-    },
     "public.write_mode": {
       "name": "write_mode",
       "schema": "public",
       "values": ["append", "upsert", "replace"]
+    },
+    "public.job_state": {
+      "name": "job_state",
+      "schema": "public",
+      "values": ["pending", "queued", "running", "completed", "failed"]
+    },
+    "public.trigger_type": {
+      "name": "trigger_type",
+      "schema": "public",
+      "values": ["manual", "scheduled", "api"]
+    },
+    "public.connection_status": {
+      "name": "connection_status",
+      "schema": "public",
+      "values": ["active", "inactive", "error", "testing"]
+    },
+    "public.query_log_status": {
+      "name": "query_log_status",
+      "schema": "public",
+      "values": ["success", "error"]
+    },
+    "public.organization_member_role": {
+      "name": "organization_member_role",
+      "schema": "public",
+      "values": ["OWNER", "ADMIN", "EDITOR", "VIEWER"]
+    },
+    "public.organization_member_status": {
+      "name": "organization_member_status",
+      "schema": "public",
+      "values": ["invited", "accepted", "active", "inactive"]
+    },
+    "public.user_status": {
+      "name": "user_status",
+      "schema": "public",
+      "values": ["active", "inactive", "suspended"]
     }
   },
   "schemas": {},

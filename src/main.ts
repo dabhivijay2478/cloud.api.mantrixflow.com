@@ -1,4 +1,4 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -7,6 +7,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+  const logger = new Logger('Bootstrap');
 
   // Set global API prefix
   app.setGlobalPrefix('api');
@@ -125,8 +126,14 @@ async function bootstrap() {
         return callback(null, origin);
       }
 
-      // Allow production domain (mantrixflow.com)
-      if (origin === 'https://mantrixflow.com' || origin === 'http://mantrixflow.com') {
+      // Allow production domain (mantrixflow.com and cloud subdomains)
+      if (
+        origin === 'https://mantrixflow.com' ||
+        origin === 'http://mantrixflow.com' ||
+        origin.includes('cloud.mantrixflow.com') ||
+        origin.includes('cloud.api.mantrixflow.com') ||
+        origin.includes('cloud.api.etl.server.mantrixflow.com')
+      ) {
         return callback(null, origin);
       }
 
@@ -151,10 +158,10 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  const port = configService.get<number>('PORT', 8000);
-  await app.listen(port);
-  console.log(`🚀 Application is running on: http://localhost:${port}`);
-  console.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  const port = configService.get<number>('PORT', 5000);
+  await app.listen(port, '0.0.0.0');
+  logger.log(`🚀 Application is running on: http://localhost:${port}`);
+  logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
 }
 
 bootstrap();

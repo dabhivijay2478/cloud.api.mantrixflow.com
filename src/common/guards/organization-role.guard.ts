@@ -1,7 +1,7 @@
 /**
  * Organization Role Guard
  * Enforces role-based access control for organization-scoped endpoints
- * 
+ *
  * Usage:
  * @UseGuards(SupabaseAuthGuard, OrganizationRoleGuard)
  * @RequireRole('OWNER', 'ADMIN')
@@ -18,7 +18,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { OrganizationMemberRepository } from '../../modules/organizations/repositories/organization-member.repository';
-import { OrganizationOwnerRepository } from '../../modules/organizations/repositories/organization-owner.repository';
+import { OrganizationRepository } from '../../modules/organizations/repositories/organization.repository';
 
 /**
  * Organization member role type
@@ -36,8 +36,7 @@ export const REQUIRED_ROLES_KEY = 'required_roles';
  * @param roles - Array of roles that can access this endpoint
  * @example @RequireRole('OWNER', 'ADMIN')
  */
-export const RequireRole = (...roles: OrganizationRole[]) =>
-  SetMetadata(REQUIRED_ROLES_KEY, roles);
+export const RequireRole = (...roles: OrganizationRole[]) => SetMetadata(REQUIRED_ROLES_KEY, roles);
 
 /**
  * Get user's role in an organization
@@ -47,19 +46,16 @@ export async function getUserRoleInOrganization(
   userId: string,
   organizationId: string,
   memberRepository: OrganizationMemberRepository,
-  ownerRepository: OrganizationOwnerRepository,
+  organizationRepository: OrganizationRepository,
 ): Promise<OrganizationRole | null> {
-  // Check if user is owner (from organization_owners table)
-  const isOwner = await ownerRepository.isOwner(userId, organizationId);
+  // Check if user is owner (using owner_user_id in organizations table)
+  const isOwner = await organizationRepository.isOwner(userId, organizationId);
   if (isOwner) {
     return 'OWNER';
   }
 
   // Check membership and get role
-  const member = await memberRepository.findByOrganizationAndUserId(
-    organizationId,
-    userId,
-  );
+  const member = await memberRepository.findByOrganizationAndUserId(organizationId, userId);
 
   if (!member) {
     return null;
@@ -78,15 +74,15 @@ export class OrganizationRoleGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly memberRepository: OrganizationMemberRepository,
-    private readonly ownerRepository: OrganizationOwnerRepository,
+    private readonly organizationRepository: OrganizationRepository,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Get required roles from metadata
-    const requiredRoles = this.reflector.getAllAndOverride<OrganizationRole[]>(
-      REQUIRED_ROLES_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const requiredRoles = this.reflector.getAllAndOverride<OrganizationRole[]>(REQUIRED_ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
 
     // If no roles required, allow access
     if (!requiredRoles || requiredRoles.length === 0) {
@@ -119,13 +115,11 @@ export class OrganizationRoleGuard implements CanActivate {
       userId,
       organizationId,
       this.memberRepository,
-      this.ownerRepository,
+      this.organizationRepository,
     );
 
     if (!userRole) {
-      throw new ForbiddenException(
-        'You are not a member of this organization',
-      );
+      throw new ForbiddenException('You are not a member of this organization');
     }
 
     // Check if user's role is in the required roles list

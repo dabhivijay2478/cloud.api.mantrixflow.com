@@ -1,468 +1,163 @@
+/**
+ * Create Pipeline DTO
+ * Validation and documentation for pipeline creation
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
 import {
-  IsArray,
-  IsBoolean,
-  IsEnum,
-  IsNotEmpty,
-  IsObject,
-  IsOptional,
   IsString,
   IsUUID,
+  IsOptional,
+  IsArray,
+  IsEnum,
   MaxLength,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
-/**
- * Field Mapping DTO (for transformers)
- */
-export class FieldMappingDto {
-  @ApiProperty({ description: 'Source field path' })
-  @IsString()
-  @IsNotEmpty()
-  source: string;
-
-  @ApiProperty({ description: 'Destination field name' })
-  @IsString()
-  @IsNotEmpty()
-  destination: string;
+export enum SyncMode {
+  FULL = 'full',
+  INCREMENTAL = 'incremental',
 }
 
-/**
- * Transformer DTO (within collectors)
- */
-export class TransformerDto {
-  @ApiProperty({ description: 'Transformer ID' })
-  @IsString()
-  @IsNotEmpty()
-  id: string;
-
-  @ApiProperty({ description: 'Transformer name' })
-  @IsString()
-  @IsNotEmpty()
-  name: string;
-
-  @ApiPropertyOptional({ description: 'Collector ID this transformer belongs to' })
-  @IsString()
-  @IsOptional()
-  collectorId?: string;
-
-  @ApiPropertyOptional({ description: 'Emitter ID this transformer belongs to' })
-  @IsString()
-  @IsOptional()
-  emitterId?: string;
-
-  @ApiPropertyOptional({
-    description: 'Field mappings (object format: { "source": "destination" } or array format)',
-  })
-  @IsOptional()
-  // Note: fieldMappings can be either object or array, validation happens in controller
-  // Using any to allow both formats - controller will transform to array format
-  // We use @IsOptional() to whitelist the property, actual validation happens in controller
-  fieldMappings?: any;
+export enum SyncFrequency {
+  MANUAL = 'manual',
+  HOURLY = 'hourly',
+  DAILY = 'daily',
+  WEEKLY = 'weekly',
 }
 
-/**
- * Collector DTO
- */
-export class CollectorDto {
-  @ApiProperty({ description: 'Collector ID' })
-  @IsString()
-  @IsNotEmpty()
-  id: string;
-
-  @ApiProperty({ description: 'Source connection ID' })
-  @IsUUID()
-  @IsNotEmpty()
-  sourceId: string;
-
-  @ApiProperty({ description: 'Selected tables', type: [String] })
-  @IsArray()
-  @IsString({ each: true })
-  @IsNotEmpty()
-  selectedTables: string[];
-
-  @ApiPropertyOptional({
-    description: 'Transformers for this collector',
-    type: [TransformerDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => TransformerDto)
-  @IsOptional()
-  transformers?: TransformerDto[];
+export enum ScheduleType {
+  NONE = 'none',
+  MINUTES = 'minutes',
+  HOURLY = 'hourly',
+  DAILY = 'daily',
+  WEEKLY = 'weekly',
+  MONTHLY = 'monthly',
+  CUSTOM_CRON = 'custom_cron',
 }
 
-/**
- * Emitter DTO
- */
-export class EmitterDto {
-  @ApiProperty({ description: 'Emitter ID' })
-  @IsString()
-  @IsNotEmpty()
-  id: string;
-
-  @ApiProperty({ description: 'Transformer ID this emitter uses' })
-  @IsString()
-  @IsNotEmpty()
-  transformId: string;
-
-  @ApiProperty({ description: 'Destination connection ID' })
-  @IsUUID()
-  @IsNotEmpty()
-  destinationId: string;
-
-  @ApiProperty({ description: 'Destination name' })
-  @IsString()
-  @IsNotEmpty()
-  destinationName: string;
-
-  @ApiProperty({ description: 'Destination type' })
-  @IsString()
-  @IsNotEmpty()
-  destinationType: string;
-
-  @ApiPropertyOptional({
-    description: 'Connection config (ignored - connection is referenced by destinationId)',
-  })
-  @IsObject()
-  @IsOptional()
-  connectionConfig?: Record<string, string>;
-}
-
-/**
- * Column Mapping DTO
- */
-export class ColumnMappingDto {
-  @ApiProperty({ description: 'Source column name' })
-  @IsString()
-  @IsNotEmpty()
-  sourceColumn: string;
-
-  @ApiProperty({ description: 'Destination column name' })
-  @IsString()
-  @IsNotEmpty()
-  destinationColumn: string;
-
-  @ApiProperty({ description: 'PostgreSQL data type' })
-  @IsString()
-  @IsNotEmpty()
-  dataType: string;
-
-  @ApiProperty({ description: 'Whether column is nullable' })
-  @IsBoolean()
-  nullable: boolean;
-
-  @ApiPropertyOptional({ description: 'Default value for column' })
-  @IsString()
-  @IsOptional()
-  defaultValue?: string;
-
-  @ApiPropertyOptional({ description: 'Whether column is primary key' })
-  @IsBoolean()
-  @IsOptional()
-  isPrimaryKey?: boolean;
-
-  @ApiPropertyOptional({ description: 'Maximum length for VARCHAR columns' })
-  @IsOptional()
-  maxLength?: number;
-}
-
-/**
- * Transformation DTO
- */
 export class TransformationDto {
   @ApiProperty({ description: 'Source column name' })
   @IsString()
-  @IsNotEmpty()
   sourceColumn: string;
 
   @ApiProperty({
-    description: 'Type of transformation',
-    enum: ['rename', 'cast', 'concat', 'split', 'custom'],
+    description: 'Transformation type',
+    enum: ['rename', 'cast', 'concat', 'split', 'custom', 'filter', 'mask', 'hash'],
   })
-  @IsEnum(['rename', 'cast', 'concat', 'split', 'custom'])
-  transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom';
+  @IsString()
+  transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom' | 'filter' | 'mask' | 'hash';
 
-  @ApiProperty({ description: 'Transformation configuration' })
-  @IsObject()
-  transformConfig: any;
+  @ApiProperty({ description: 'Transformation configuration', default: {} })
+  transformConfig: any = {};
 
   @ApiProperty({ description: 'Destination column name' })
   @IsString()
-  @IsNotEmpty()
   destinationColumn: string;
 }
 
-/**
- * Create Pipeline DTO
- */
 export class CreatePipelineDto {
-  @ApiProperty({ description: 'Pipeline name' })
+  @ApiProperty({
+    description: 'Pipeline name',
+    example: 'Sales Data Pipeline',
+    maxLength: 255,
+  })
   @IsString()
-  @IsNotEmpty()
+  @MinLength(1)
   @MaxLength(255)
   name: string;
 
-  @ApiPropertyOptional({ description: 'Pipeline description' })
-  @IsString()
+  @ApiPropertyOptional({
+    description: 'Pipeline description',
+    example: 'Syncs sales data from PostgreSQL to BigQuery',
+  })
   @IsOptional()
+  @IsString()
   description?: string;
 
-  // Source configuration
   @ApiProperty({
-    description: 'Source type',
-    example: 'postgres',
-    enum: ['postgres', 'stripe', 'salesforce', 'google_sheets'],
-  })
-  @IsString()
-  @IsNotEmpty()
-  sourceType: string;
-
-  @ApiPropertyOptional({
-    description: 'Source connection ID (for postgres source)',
+    description: 'Source schema ID',
+    example: '550e8400-e29b-41d4-a716-446655440000',
   })
   @IsUUID()
-  @IsOptional()
-  sourceConnectionId?: string;
+  sourceSchemaId: string;
 
-  @ApiPropertyOptional({
-    description: 'Source configuration (for external sources)',
+  @ApiProperty({
+    description: 'Destination schema ID',
+    example: '550e8400-e29b-41d4-a716-446655440001',
   })
-  @IsObject()
-  @IsOptional()
-  sourceConfig?: any;
-
-  @ApiPropertyOptional({ description: 'Source schema name' })
-  @IsString()
-  @IsOptional()
-  sourceSchema?: string;
-
-  @ApiPropertyOptional({ description: 'Source table name' })
-  @IsString()
-  @IsOptional()
-  sourceTable?: string;
-
-  @ApiPropertyOptional({ description: 'Custom SQL query for source' })
-  @IsString()
-  @IsOptional()
-  sourceQuery?: string;
-
-  // Destination configuration
-  @ApiProperty({ description: 'Destination connection ID (PostgreSQL)' })
   @IsUUID()
-  @IsNotEmpty()
-  destinationConnectionId: string;
+  destinationSchemaId: string;
 
   @ApiPropertyOptional({
-    description: 'Destination schema name',
-    default: 'public',
-  })
-  @IsString()
-  @IsOptional()
-  destinationSchema?: string;
-
-  @ApiProperty({ description: 'Destination table name' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(255)
-  destinationTable: string;
-
-  // Schema mapping
-  @ApiPropertyOptional({
-    description: 'Column mappings from source to destination',
-    type: [ColumnMappingDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ColumnMappingDto)
-  @IsOptional()
-  columnMappings?: ColumnMappingDto[];
-
-  @ApiPropertyOptional({
-    description: 'Data transformations',
+    description: 'Data transformations to apply',
     type: [TransformationDto],
   })
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => TransformationDto)
-  @IsOptional()
   transformations?: TransformationDto[];
 
-  // Write mode
-  @ApiPropertyOptional({
-    description: 'Write mode',
-    enum: ['append', 'upsert', 'replace'],
-    default: 'append',
-  })
-  @IsEnum(['append', 'upsert', 'replace'])
-  @IsOptional()
-  writeMode?: 'append' | 'upsert' | 'replace';
-
-  @ApiPropertyOptional({
-    description: 'Upsert key columns (required for upsert mode)',
-    type: [String],
-  })
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  upsertKey?: string[];
-
-  // Sync configuration
   @ApiPropertyOptional({
     description: 'Sync mode',
-    enum: ['full', 'incremental'],
-    default: 'full',
+    enum: SyncMode,
+    default: SyncMode.FULL,
   })
-  @IsEnum(['full', 'incremental'])
   @IsOptional()
-  syncMode?: 'full' | 'incremental';
+  @IsEnum(SyncMode)
+  syncMode?: SyncMode;
 
   @ApiPropertyOptional({
-    description: 'Incremental column (required for incremental sync)',
+    description: 'Column to use for incremental syncs',
+    example: 'updated_at',
   })
-  @IsString()
   @IsOptional()
+  @IsString()
   incrementalColumn?: string;
 
   @ApiPropertyOptional({
     description: 'Sync frequency',
-    enum: ['manual', '15min', '1hour', '24hours'],
-    default: 'manual',
+    enum: SyncFrequency,
+    default: SyncFrequency.MANUAL,
   })
-  @IsEnum(['manual', '15min', '1hour', '24hours'])
   @IsOptional()
-  syncFrequency?: 'manual' | '15min' | '1hour' | '24hours';
+  @IsEnum(SyncFrequency)
+  syncFrequency?: SyncFrequency;
 
-  // Collector configuration
+  // ============================================================================
+  // SCHEDULING CONFIGURATION
+  // ============================================================================
+
   @ApiPropertyOptional({
-    description: 'Collector configurations',
-    type: 'array',
-    isArray: true,
+    description: 'Schedule type for automatic runs',
+    enum: ScheduleType,
+    default: ScheduleType.NONE,
+    example: 'daily',
   })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CollectorDto)
   @IsOptional()
-  collectors?: CollectorDto[];
+  @IsEnum(ScheduleType)
+  scheduleType?: ScheduleType;
 
-  // Emitter configuration
   @ApiPropertyOptional({
     description:
-      'Emitter configurations. Emitters use existing connections via destinationId - connectionConfig is ignored.',
-    type: 'array',
-    isArray: true,
+      'Schedule value: "15" for every 15 mins, "14:30" for daily at 14:30, "0 3 * * *" for cron',
+    example: '09:00',
   })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => EmitterDto)
   @IsOptional()
-  emitters?: EmitterDto[];
-}
-
-/**
- * Update Pipeline DTO
- */
-export class UpdatePipelineDto {
-  @ApiPropertyOptional({ description: 'Pipeline name' })
   @IsString()
-  @IsOptional()
   @MaxLength(255)
-  name?: string;
+  scheduleValue?: string;
 
-  @ApiPropertyOptional({ description: 'Pipeline description' })
+  @ApiPropertyOptional({
+    description: 'Timezone for schedule (IANA format)',
+    example: 'Asia/Kolkata',
+    default: 'UTC',
+  })
+  @IsOptional()
   @IsString()
-  @IsOptional()
-  description?: string;
-
-  @ApiPropertyOptional({
-    description: 'Column mappings',
-    type: [ColumnMappingDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ColumnMappingDto)
-  @IsOptional()
-  columnMappings?: ColumnMappingDto[];
-
-  @ApiPropertyOptional({
-    description: 'Data transformations',
-    type: [TransformationDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => TransformationDto)
-  @IsOptional()
-  transformations?: TransformationDto[];
-
-  @ApiPropertyOptional({
-    description: 'Write mode',
-    enum: ['append', 'upsert', 'replace'],
-  })
-  @IsEnum(['append', 'upsert', 'replace'])
-  @IsOptional()
-  writeMode?: 'append' | 'upsert' | 'replace';
-
-  @ApiPropertyOptional({
-    description: 'Upsert key columns',
-    type: [String],
-  })
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  upsertKey?: string[];
-
-  @ApiPropertyOptional({
-    description: 'Sync mode',
-    enum: ['full', 'incremental'],
-  })
-  @IsEnum(['full', 'incremental'])
-  @IsOptional()
-  syncMode?: 'full' | 'incremental';
-
-  @ApiPropertyOptional({ description: 'Incremental column' })
-  @IsString()
-  @IsOptional()
-  incrementalColumn?: string;
-
-  @ApiPropertyOptional({
-    description: 'Sync frequency',
-    enum: ['manual', '15min', '1hour', '24hours'],
-  })
-  @IsEnum(['manual', '15min', '1hour', '24hours'])
-  @IsOptional()
-  syncFrequency?: 'manual' | '15min' | '1hour' | '24hours';
-
-  @ApiPropertyOptional({
-    description: 'Pipeline status',
-    enum: ['active', 'paused'],
-  })
-  @IsEnum(['active', 'paused'])
-  @IsOptional()
-  status?: 'active' | 'paused';
-
-  // Collector configuration (for updating pipeline transformations)
-  @ApiPropertyOptional({
-    description: 'Collector configurations',
-    type: 'array',
-    isArray: true,
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CollectorDto)
-  @IsOptional()
-  collectors?: CollectorDto[];
-
-  // Emitter configuration (for updating pipeline transformations)
-  @ApiPropertyOptional({
-    description:
-      'Emitter configurations. Emitters use existing connections via destinationId - connectionConfig is ignored.',
-    type: 'array',
-    isArray: true,
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => EmitterDto)
-  @IsOptional()
-  emitters?: EmitterDto[];
+  @MaxLength(50)
+  scheduleTimezone?: string;
 }

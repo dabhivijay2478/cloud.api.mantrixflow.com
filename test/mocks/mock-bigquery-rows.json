@@ -1,0 +1,43 @@
+[
+  {
+    "event_id": "evt_001",
+    "user_id": "usr_123",
+    "event_type": "page_view",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "properties": {
+      "page_url": "/products",
+      "referrer": "google.com",
+      "device": "desktop"
+    },
+    "session_id": "sess_abc123",
+    "revenue": 0.0
+  },
+  {
+    "event_id": "evt_002",
+    "user_id": "usr_456",
+    "event_type": "purchase",
+    "timestamp": "2024-01-15T11:00:00Z",
+    "properties": {
+      "page_url": "/checkout",
+      "referrer": "direct",
+      "device": "mobile",
+      "product_id": "prod_789",
+      "amount": 99.99
+    },
+    "session_id": "sess_def456",
+    "revenue": 99.99
+  },
+  {
+    "event_id": "evt_003",
+    "user_id": "usr_123",
+    "event_type": "click",
+    "timestamp": "2024-01-15T11:30:00Z",
+    "properties": {
+      "page_url": "/products",
+      "element": "add_to_cart_button",
+      "device": "desktop"
+    },
+    "session_id": "sess_abc123",
+    "revenue": 0.0
+  }
+]

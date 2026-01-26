@@ -21,7 +21,8 @@ export class OrganizationResponseDto {
   isOwner: boolean;
 
   @ApiPropertyOptional({
-    description: "User's role in the organization (if member). AUTHORITATIVE ROLES: OWNER, ADMIN, EDITOR, VIEWER",
+    description:
+      "User's role in the organization (if member). AUTHORITATIVE ROLES: OWNER, ADMIN, EDITOR, VIEWER",
     enum: ['OWNER', 'ADMIN', 'EDITOR', 'VIEWER'],
   })
   role?: 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER';
