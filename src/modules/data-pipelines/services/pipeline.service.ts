@@ -569,7 +569,12 @@ export class PipelineService {
             // Python returns updated checkpoint in metadata - use it for next batch and save it
             const resultMetadata = (sourceData as any).metadata;
             if (resultMetadata?.checkpoint) {
-              checkpoint = resultMetadata.checkpoint as PipelineCheckpoint;
+              // Merge Python checkpoint with current progress tracking
+              checkpoint = {
+                ...(resultMetadata.checkpoint as PipelineCheckpoint),
+                rowsProcessed: totalRowsWritten, // Keep track of actual rows written so far
+                totalRows: sourceData.totalRows || estimatedTotalRows, // Use Python's total_rows if available
+              };
               // Save checkpoint immediately so it persists for next run (CDC support)
               await this.lifecycleService.saveCheckpoint(pipeline.id, checkpoint, userId);
               this.logger.debug(`Checkpoint saved: ${JSON.stringify(checkpoint).slice(0, 200)}...`);
@@ -593,9 +598,28 @@ export class PipelineService {
         }
 
         // Update estimated total if available
-        if (sourceData.totalRows && !estimatedTotalRows) {
+        // Python returns total_rows which is the actual total in source
+        if (sourceData.totalRows && (!estimatedTotalRows || estimatedTotalRows !== sourceData.totalRows)) {
           estimatedTotalRows = sourceData.totalRows;
           console.log(`   📊 Total rows in source: ${estimatedTotalRows.toLocaleString()}`);
+        }
+        
+        // Also check checkpoint for total_records from Python bookmarks (more authoritative)
+        const resultMetadataForTotal = (sourceData as any).metadata;
+        if (resultMetadataForTotal?.checkpoint) {
+          const pythonCheckpoint = resultMetadataForTotal.checkpoint as any;
+          // Python stores total_records in bookmarks.stream_id.total_records
+          if (pythonCheckpoint?.bookmarks) {
+            const bookmarks = pythonCheckpoint.bookmarks;
+            const streamId = Object.keys(bookmarks)[0]; // Get first stream
+            if (streamId && bookmarks[streamId]?.total_records) {
+              const pythonTotalRecords = bookmarks[streamId].total_records;
+              if (pythonTotalRecords && (!estimatedTotalRows || estimatedTotalRows !== pythonTotalRecords)) {
+                estimatedTotalRows = pythonTotalRecords;
+                console.log(`   📊 Total rows from checkpoint: ${estimatedTotalRows.toLocaleString()}`);
+              }
+            }
+          }
         }
 
         totalRowsRead += sourceData.rows.length;
@@ -749,8 +773,28 @@ export class PipelineService {
         // Python returns updated checkpoint in metadata - save it
         const resultMetadata = (sourceData as any).metadata;
         if (resultMetadata?.checkpoint) {
+          // Extract total_records from Python checkpoint bookmarks if available
+          const pythonCheckpoint = resultMetadata.checkpoint as any;
+          let pythonTotalRecords = sourceData.totalRows || estimatedTotalRows;
+          if (pythonCheckpoint?.bookmarks) {
+            const bookmarks = pythonCheckpoint.bookmarks;
+            const streamId = Object.keys(bookmarks)[0]; // Get first stream
+            if (streamId && bookmarks[streamId]?.total_records) {
+              pythonTotalRecords = bookmarks[streamId].total_records;
+            }
+          }
+          
           // Use checkpoint returned from Python (Python handles all CDC/checkpoint logic)
-          const updatedCheckpoint = resultMetadata.checkpoint as PipelineCheckpoint;
+          // Merge with current progress to ensure rowsProcessed is accurate
+          const updatedCheckpoint: PipelineCheckpoint = {
+            ...(resultMetadata.checkpoint as PipelineCheckpoint),
+            rowsProcessed: totalRowsWritten, // Always use actual rows written, not Python's value
+            totalRows: pythonTotalRecords, // Use Python's total_records from bookmarks as authoritative source
+            lastSyncAt: new Date().toISOString(),
+            offset,
+            cursor,
+            currentBatch: batchCount,
+          };
           await this.lifecycleService.saveCheckpoint(pipeline.id, updatedCheckpoint, userId);
           checkpoint = updatedCheckpoint;
         } else {
