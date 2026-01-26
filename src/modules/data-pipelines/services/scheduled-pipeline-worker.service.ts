@@ -99,7 +99,8 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
    * Handle a scheduled pipeline run (called directly from polling)
    */
   private async handleScheduledRun(data: ScheduledRunJobData): Promise<void> {
-    const { pipelineId, organizationId, name, scheduleType, scheduleValue, scheduleTimezone } = data;
+    const { pipelineId, organizationId, name, scheduleType, scheduleValue, scheduleTimezone } =
+      data;
     const startTime = Date.now();
 
     this.logger.log('════════════════════════════════════════════════════════');
@@ -126,12 +127,9 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
 
       // Execute the pipeline using the pipeline creator's user ID
       const userId = data.createdBy || 'system';
-      const run = await this.pipelineService.runPipeline(
-        pipelineId,
-        userId,
-        'scheduled',
-        { batchSize: DEFAULT_BATCH_SIZE },
-      );
+      const run = await this.pipelineService.runPipeline(pipelineId, userId, 'scheduled', {
+        batchSize: DEFAULT_BATCH_SIZE,
+      });
 
       // Calculate and update next run time
       const nextRunAt = this.calculateNextRun(scheduleType, scheduleValue);
@@ -237,20 +235,22 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     try {
       // Find pipelines stuck in 'running' status for more than 1 hour
       const stuckPipelines = await this.pipelineRepository.findStuckPipelines();
-      
+
       if (stuckPipelines.length > 0) {
-        this.logger.warn(`[SCHEDULER] Found ${stuckPipelines.length} stuck pipeline(s), recovering...`);
-        
+        this.logger.warn(
+          `[SCHEDULER] Found ${stuckPipelines.length} stuck pipeline(s), recovering...`,
+        );
+
         for (const pipeline of stuckPipelines) {
           try {
             // Reset to idle or listing based on incremental mode
             const targetStatus = pipeline.incrementalColumn ? 'listing' : 'idle';
-            
+
             await this.pipelineRepository.update(pipeline.id, {
               status: targetStatus,
               lastError: `Pipeline was stuck in 'running' status and has been automatically recovered`,
             });
-            
+
             this.logger.log(
               `[SCHEDULER] Recovered stuck pipeline ${pipeline.name} (${pipeline.id}) - reset to ${targetStatus}`,
             );

@@ -256,7 +256,9 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
       const hasChanges = await this.checkForChanges(pipelineId, pipeline);
 
       if (hasChanges) {
-        this.logger.log(`[DELTA-CHECK] Changes detected for pipeline ${pipelineId}, enqueuing incremental sync`);
+        this.logger.log(
+          `[DELTA-CHECK] Changes detected for pipeline ${pipelineId}, enqueuing incremental sync`,
+        );
 
         // Pass current checkpoint to Python - Python handles all checkpoint management
         const checkpoint = (pipeline.checkpoint as any) || {};
@@ -315,26 +317,29 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
    */
   private async setupPollingConsumer(): Promise<void> {
     // Poll every 2 minutes
-    setInterval(async () => {
-      try {
-        const activePipelines = await this.pipelineRepository.findActivePipelinesForPolling();
+    setInterval(
+      async () => {
+        try {
+          const activePipelines = await this.pipelineRepository.findActivePipelinesForPolling();
 
-        if (activePipelines.length === 0) {
-          return;
+          if (activePipelines.length === 0) {
+            return;
+          }
+
+          this.logger.log(`[POLLING] Found ${activePipelines.length} pipeline(s) to check`);
+
+          for (const pipeline of activePipelines) {
+            await this.rabbitmqService.enqueueDeltaCheck({
+              pipelineId: pipeline.id,
+              organizationId: pipeline.organizationId,
+            });
+          }
+        } catch (error) {
+          this.logger.error(`[POLLING] Error during polling: ${error}`);
         }
-
-        this.logger.log(`[POLLING] Found ${activePipelines.length} pipeline(s) to check`);
-
-        for (const pipeline of activePipelines) {
-          await this.rabbitmqService.enqueueDeltaCheck({
-            pipelineId: pipeline.id,
-            organizationId: pipeline.organizationId,
-          });
-        }
-      } catch (error) {
-        this.logger.error(`[POLLING] Error during polling: ${error}`);
-      }
-    }, 2 * 60 * 1000); // 2 minutes
+      },
+      2 * 60 * 1000,
+    ); // 2 minutes
 
     this.logger.log('✅ Polling consumer setup (runs every 2 minutes)');
   }
@@ -356,7 +361,7 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
       if (!pipelineWithSchema) {
         pipelineWithSchema = await this.pipelineRepository.findByIdForCDC(pipelineId);
       }
-      
+
       if (!pipelineWithSchema || !pipelineWithSchema.sourceSchema) {
         return false;
       }
@@ -368,19 +373,19 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
       );
 
       const checkpoint = (pipeline.checkpoint as any) || {};
-      
+
       // Call Python service delta-check endpoint
       const sourceType = this.normalizeSourceType(pipelineWithSchema.sourceSchema.sourceType);
       const response = await firstValueFrom(
         this.httpService.post(
           `${this.pythonServiceUrl}/delta-check/${sourceType}`,
-        {
-          connection_config: connectionConfig,
-          source_config: pipelineWithSchema.sourceSchema.sourceConfig || {},
-          table_name: pipelineWithSchema.sourceSchema.sourceTable,
-          schema_name: pipelineWithSchema.sourceSchema.sourceSchema,
-          checkpoint,
-        },
+          {
+            connection_config: connectionConfig,
+            source_config: pipelineWithSchema.sourceSchema.sourceConfig || {},
+            table_name: pipelineWithSchema.sourceSchema.sourceTable,
+            schema_name: pipelineWithSchema.sourceSchema.sourceSchema,
+            checkpoint,
+          },
           {
             timeout: 30000,
           },

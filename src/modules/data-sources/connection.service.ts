@@ -672,7 +672,7 @@ export class ConnectionService {
       // Get auth token from request context (we'll need to pass it)
       // For now, we'll call Python service directly - it will handle auth via JWT
       const sourceType = this.normalizeSourceTypeForPython(connection.connectionType);
-      
+
       // Build request payload for Python service
       const pythonRequest: any = {
         type: sourceType,
@@ -716,29 +716,29 @@ export class ConnectionService {
 
       // Call Python service
       this.logger.log(`Calling Python service to test ${sourceType} connection`);
-      
+
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
-      
+
       if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`;
       }
-      
+
       let pythonResponse;
       try {
         pythonResponse = await firstValueFrom(
-          this.httpService.post(
-            `${this.pythonServiceUrl}/test-connection`,
-            pythonRequest,
-            {
-              headers,
-              timeout: 30000,
-            },
-          ),
+          this.httpService.post(`${this.pythonServiceUrl}/test-connection`, pythonRequest, {
+            headers,
+            timeout: 30000,
+          }),
         );
       } catch (error: any) {
-        const errorMessage = error?.response?.data?.detail || error?.response?.data?.error || error?.message || 'Failed to connect to Python service';
+        const errorMessage =
+          error?.response?.data?.detail ||
+          error?.response?.data?.error ||
+          error?.message ||
+          'Failed to connect to Python service';
         this.logger.error(`Python service call failed: ${errorMessage}`, error?.stack);
         throw new BadRequestException(`Connection test failed: ${errorMessage}`);
       }
@@ -746,7 +746,8 @@ export class ConnectionService {
       // Map Python response to our format
       testResult = {
         success: pythonResponse.data.success || false,
-        message: pythonResponse.data.message || pythonResponse.data.error || 'Connection test completed',
+        message:
+          pythonResponse.data.message || pythonResponse.data.error || 'Connection test completed',
         details: pythonResponse.data.details || {
           version: pythonResponse.data.version,
           response_time_ms: pythonResponse.data.response_time_ms,
@@ -826,31 +827,31 @@ export class ConnectionService {
     config: Record<string, any>,
   ): Promise<{ success: boolean; message: string; details?: any }> {
     this.logger.log(`[testConnectionConfig] Testing connection type: ${connectionType}`);
-    
+
     switch (connectionType) {
       // SQL Databases
       case 'postgres':
       case 'pgvector':
         return this.testPostgresConnection(config as PostgresConfig);
-      
+
       case 'mysql':
         return this.testMySQLConnection(config as MySQLConfig);
-      
+
       case 'mongodb':
         return this.testMongoDBConnection(config as MongoDBConfig);
-      
+
       case 's3':
       case 's3-datalake':
         return this.testS3Connection(config as S3Config);
-      
+
       case 'api':
         return this.testAPIConnection(config as APIConfig);
-      
+
       // SQL databases that use similar connection pattern to postgres
       case 'redshift':
         // Redshift is PostgreSQL-compatible
         return this.testPostgresConnection(config as PostgresConfig);
-      
+
       case 'mssql':
       case 'clickhouse':
       case 'snowflake':
@@ -876,10 +877,12 @@ export class ConnectionService {
             configReceived: Object.keys(config),
           },
         };
-      
+
       default:
         this.logger.warn(`Unsupported connection type: ${connectionType}`);
-        throw new BadRequestException(`Unsupported connection type: ${connectionType}. Supported types: postgres, mysql, mongodb, s3, api, redshift, mssql, clickhouse, snowflake, bigquery, databricks, azure-blob-storage, pinecone, milvus, weaviate`);
+        throw new BadRequestException(
+          `Unsupported connection type: ${connectionType}. Supported types: postgres, mysql, mongodb, s3, api, redshift, mssql, clickhouse, snowflake, bigquery, databricks, azure-blob-storage, pinecone, milvus, weaviate`,
+        );
     }
   }
 
@@ -977,9 +980,10 @@ export class ConnectionService {
         this.logger.log(`Testing MongoDB connection with connection string`);
       } else if (config.host) {
         // Build connection string from individual parts
-        const auth = config.username && config.password 
-          ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
-          : '';
+        const auth =
+          config.username && config.password
+            ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
+            : '';
         const port = config.port || 27017;
         const authSource = config.auth_source ? `?authSource=${config.auth_source}` : '';
         connectionString = `mongodb://${auth}${config.host}:${port}/${config.database}${authSource}`;
@@ -1005,16 +1009,16 @@ export class ConnectionService {
 
       // Create client and connect
       const client = new MongoClient(connectionString, options);
-      
+
       await client.connect();
-      
+
       // Try to ping the database to verify connection
       const adminDb = client.db('admin');
       const result = await adminDb.command({ ping: 1 });
-      
+
       // Get server info
       const serverInfo = await adminDb.command({ serverStatus: 1 }).catch(() => null);
-      
+
       await client.close();
 
       return {
@@ -1029,7 +1033,7 @@ export class ConnectionService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`MongoDB connection test failed: ${errorMessage}`);
-      
+
       return {
         success: false,
         message: `Connection failed: ${errorMessage}`,
@@ -1264,9 +1268,7 @@ export class ConnectionService {
       const mongodb = await import('mongodb');
       MongoClient = mongodb.MongoClient;
     } catch {
-      throw new BadRequestException(
-        'MongoDB driver not installed. Run: npm install mongodb',
-      );
+      throw new BadRequestException('MongoDB driver not installed. Run: npm install mongodb');
     }
 
     let client: any = null;
@@ -1283,9 +1285,10 @@ export class ConnectionService {
         databaseName = dbMatch?.[1] || config.database;
         this.logger.log(`Discovering MongoDB schema using connection string`);
       } else if (config.host) {
-        const auth = config.username && config.password
-          ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
-          : '';
+        const auth =
+          config.username && config.password
+            ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
+            : '';
         const port = config.port || 27017;
         const authSource = config.auth_source ? `?authSource=${config.auth_source}` : '';
         databaseName = config.database;
@@ -1311,7 +1314,7 @@ export class ConnectionService {
 
       // Get database - use specified database or list all
       const adminDb = client.db('admin');
-      
+
       // Get list of databases
       const dbList = await adminDb.admin().listDatabases();
       this.logger.log(`Found ${dbList.databases.length} databases`);
@@ -1322,13 +1325,14 @@ export class ConnectionService {
       };
 
       // If a specific database is specified, only discover that one
-      const databasesToDiscover = databaseName && databaseName !== 'admin'
-        ? [{ name: databaseName }]
-        : dbList.databases.filter((db: any) => !['admin', 'local', 'config'].includes(db.name));
+      const databasesToDiscover =
+        databaseName && databaseName !== 'admin'
+          ? [{ name: databaseName }]
+          : dbList.databases.filter((db: any) => !['admin', 'local', 'config'].includes(db.name));
 
       for (const dbInfo of databasesToDiscover) {
         const db = client.db(dbInfo.name);
-        
+
         // Get collections
         const collections = await db.listCollections().toArray();
         this.logger.log(`Database '${dbInfo.name}': Found ${collections.length} collections`);
@@ -1337,7 +1341,7 @@ export class ConnectionService {
 
         for (const coll of collections) {
           const collection = db.collection(coll.name);
-          
+
           // Get sample documents to infer schema
           const sampleDocs = await collection.find({}).limit(10).toArray();
           const documentCount = await collection.countDocuments();
@@ -1393,13 +1397,13 @@ export class ConnectionService {
   ): void {
     for (const [key, value] of Object.entries(doc)) {
       const fieldName = prefix ? `${prefix}.${key}` : key;
-      
+
       if (!fieldsMap.has(fieldName)) {
         fieldsMap.set(fieldName, { types: new Set(), nullable: false });
       }
 
       const fieldInfo = fieldsMap.get(fieldName)!;
-      
+
       if (value === null || value === undefined) {
         fieldInfo.nullable = true;
         fieldInfo.types.add('null');

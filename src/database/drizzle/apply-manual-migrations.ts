@@ -28,9 +28,13 @@ async function applyManualMigrations() {
     console.log('🔄 Applying manual migrations (0016, 0017)...');
 
     // Read and apply migration 0016
-    const migration16Path = path.join(__dirname, 'migrations', '0016_pipeline_incremental_sync_fixes.sql');
+    const migration16Path = path.join(
+      __dirname,
+      'migrations',
+      '0016_pipeline_incremental_sync_fixes.sql',
+    );
     const migration16SQL = fs.readFileSync(migration16Path, 'utf-8');
-    
+
     console.log('📄 Applying migration 0016_pipeline_incremental_sync_fixes.sql...');
     await sql.unsafe(migration16SQL);
     console.log('✅ Migration 0016 applied successfully');
@@ -38,7 +42,7 @@ async function applyManualMigrations() {
     // Read and apply migration 0017
     const migration17Path = path.join(__dirname, 'migrations', '0017_add_polling_trigger_type.sql');
     const migration17SQL = fs.readFileSync(migration17Path, 'utf-8');
-    
+
     console.log('📄 Applying migration 0017_add_polling_trigger_type.sql...');
     await sql.unsafe(migration17SQL);
     console.log('✅ Migration 0017 applied successfully');
@@ -48,7 +52,7 @@ async function applyManualMigrations() {
     // Let's check the table structure first and use the appropriate type
     const migration16Hash = '0016_pipeline_incremental_sync_fixes';
     const migration17Hash = '0017_add_polling_trigger_type';
-    
+
     // Try to insert with timestamp, if that fails, use bigint
     try {
       await sql`
@@ -61,7 +65,9 @@ async function applyManualMigrations() {
     } catch (error: any) {
       // If the insert fails, it's OK - migrations might already be recorded
       // or the table structure might be different
-      console.log('Note: Could not record migrations in journal (this is OK if they were already applied)');
+      console.log(
+        'Note: Could not record migrations in journal (this is OK if they were already applied)',
+      );
     }
 
     console.log('✅ All manual migrations applied successfully!');

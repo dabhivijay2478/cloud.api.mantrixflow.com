@@ -66,10 +66,10 @@ export class PipelineResponseDto {
   @ApiProperty({ description: 'Updated timestamp' })
   updatedAt: Date;
 
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     description: 'Applied column mappings',
     type: [Object],
-    example: [{ sourcePath: 'email', destPath: 'user_email' }]
+    example: [{ sourcePath: 'email', destPath: 'user_email' }],
   })
   appliedMappings?: Array<{ sourcePath: string; destPath: string }>;
 }
@@ -157,10 +157,10 @@ export class DryRunResponseDto {
   @ApiPropertyOptional({ description: 'Sample transformed data' })
   transformedSample?: any[];
 
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     description: 'Applied column mappings',
     type: [Object],
-    example: [{ sourcePath: 'email', destPath: 'user_email' }]
+    example: [{ sourcePath: 'email', destPath: 'user_email' }],
   })
   appliedMappings?: Array<{ sourcePath: string; destPath: string }>;
 }

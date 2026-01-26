@@ -156,14 +156,17 @@ export class PipelineController {
     @Param('id', RequiredUUIDPipe) id: string,
   ) {
     try {
-      const pipelineWithSchemas = await this.pipelineService.findByIdWithSchemas(id, organizationId);
+      const pipelineWithSchemas = await this.pipelineService.findByIdWithSchemas(
+        id,
+        organizationId,
+      );
 
       if (!pipelineWithSchemas) {
         throw new NotFoundException(`Pipeline ${id} not found`);
       }
 
       const { pipeline } = pipelineWithSchemas;
-      
+
       // Transform script is now the source of truth for transformations
       // No need to extract mappings - the script handles all transformations
 
@@ -585,7 +588,10 @@ export class PipelineController {
         ),
       };
 
-      return createSuccessResponse(scheduleInfo, 'Pipeline schedule information retrieved successfully');
+      return createSuccessResponse(
+        scheduleInfo,
+        'Pipeline schedule information retrieved successfully',
+      );
     } catch (error) {
       this.handleError('get pipeline schedule info', error);
     }
@@ -597,7 +603,8 @@ export class PipelineController {
   @Get(':id/cdc-status')
   @ApiOperation({
     summary: 'Get CDC status and configuration',
-    description: 'Check if pipeline is properly configured for CDC/incremental sync and its current state.',
+    description:
+      'Check if pipeline is properly configured for CDC/incremental sync and its current state.',
   })
   @ApiParam({ name: 'organizationId', type: 'string' })
   @ApiParam({ name: 'id', type: 'string' })
@@ -618,41 +625,48 @@ export class PipelineController {
       const hasIncrementalColumn = !!pipeline.incrementalColumn;
       const hasCompletedFullSync = pipeline.lastRunStatus === 'success' && pipeline.lastSyncAt;
       const isInListingStatus = pipeline.status === 'listing';
-      
+
       // Get checkpoint info
       const checkpoint = pipeline.checkpoint as any;
       const hasCheckpoint = !!checkpoint?.lastSyncValue;
-      
+
       const cdcReadiness = {
         // Configuration checks
         isConfiguredForCdc: hasIncrementalMode && hasIncrementalColumn,
         syncMode: pipeline.syncMode,
         incrementalColumn: pipeline.incrementalColumn,
-        
+
         // State checks
         hasCompletedFullSync,
         isInListingStatus,
         hasCheckpoint,
         currentStatus: pipeline.status,
-        
+
         // Checkpoint details
-        checkpoint: checkpoint ? {
-          lastSyncValue: checkpoint.lastSyncValue,
-          watermarkField: checkpoint.watermarkField || pipeline.incrementalColumn,
-          lastSyncAt: checkpoint.lastSyncAt,
-          rowsProcessed: checkpoint.rowsProcessed,
-        } : null,
-        
+        checkpoint: checkpoint
+          ? {
+              lastSyncValue: checkpoint.lastSyncValue,
+              watermarkField: checkpoint.watermarkField || pipeline.incrementalColumn,
+              lastSyncAt: checkpoint.lastSyncAt,
+              rowsProcessed: checkpoint.rowsProcessed,
+            }
+          : null,
+
         // CDC readiness summary
-        cdcEnabled: hasIncrementalMode && hasIncrementalColumn && hasCompletedFullSync && isInListingStatus && hasCheckpoint,
-        
+        cdcEnabled:
+          hasIncrementalMode &&
+          hasIncrementalColumn &&
+          hasCompletedFullSync &&
+          isInListingStatus &&
+          hasCheckpoint,
+
         // Issues if not ready
         issues: [] as string[],
-        
+
         // Recommendations
         recommendations: [] as string[],
       };
-      
+
       // Add issues and recommendations
       if (!hasIncrementalMode) {
         cdcReadiness.issues.push('syncMode is not "incremental"');
@@ -660,26 +674,36 @@ export class PipelineController {
       }
       if (!hasIncrementalColumn) {
         cdcReadiness.issues.push('incrementalColumn is not set');
-        cdcReadiness.recommendations.push('Set incrementalColumn to a timestamp or auto-incrementing column (e.g., updated_at, id)');
+        cdcReadiness.recommendations.push(
+          'Set incrementalColumn to a timestamp or auto-incrementing column (e.g., updated_at, id)',
+        );
       }
       if (!hasCompletedFullSync) {
         cdcReadiness.issues.push('No successful full sync completed');
-        cdcReadiness.recommendations.push('Run the pipeline at least once to complete initial full sync');
+        cdcReadiness.recommendations.push(
+          'Run the pipeline at least once to complete initial full sync',
+        );
       }
       if (!isInListingStatus && hasCompletedFullSync) {
         cdcReadiness.issues.push(`Pipeline status is "${pipeline.status}" instead of "listing"`);
-        cdcReadiness.recommendations.push('After a successful full sync with incremental mode, status should be "listing" for CDC to work');
+        cdcReadiness.recommendations.push(
+          'After a successful full sync with incremental mode, status should be "listing" for CDC to work',
+        );
       }
       if (!hasCheckpoint) {
         cdcReadiness.issues.push('No checkpoint stored');
         cdcReadiness.recommendations.push('Complete a full sync to create the initial checkpoint');
       }
-      
+
       // Add pg_cron/PGMQ requirements note
       if (cdcReadiness.cdcEnabled) {
-        cdcReadiness.recommendations.push('✅ CDC is ready! Ensure pg_cron and PGMQ extensions are installed and the pipeline_polling_function is scheduled.');
+        cdcReadiness.recommendations.push(
+          '✅ CDC is ready! Ensure pg_cron and PGMQ extensions are installed and the pipeline_polling_function is scheduled.',
+        );
       } else {
-        cdcReadiness.recommendations.push('📌 For automatic CDC polling, ensure pg_cron and PGMQ extensions are installed in your database.');
+        cdcReadiness.recommendations.push(
+          '📌 For automatic CDC polling, ensure pg_cron and PGMQ extensions are installed in your database.',
+        );
       }
 
       return createSuccessResponse(cdcReadiness, 'CDC status retrieved successfully');
@@ -711,7 +735,15 @@ export class PipelineController {
         return `Daily at ${scheduleValue || '00:00'} (${timezone})`;
       case 'weekly': {
         const parts = (scheduleValue || '1:00:00').split(':');
-        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const dayNames = [
+          'Sunday',
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+        ];
         const day = parseInt(parts[0], 10);
         const time = parts.length > 1 ? `${parts[1]}:${parts[2] || '00'}` : '00:00';
         return `Every ${dayNames[day] || 'Monday'} at ${time} (${timezone})`;
@@ -750,22 +782,24 @@ export class PipelineController {
   private handleError(operation: string, error: unknown): never {
     let message = error instanceof Error ? error.message : String(error);
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
-    
+
     // Extract more detailed error information if available
     if (error instanceof Error) {
       // Log full error details including stack trace
       this.logger.error(`Failed to ${operation}: ${message}`, error.stack);
-      
+
       // Check for common database errors and provide actionable fixes
       if (message.includes('relation') && message.includes('does not exist')) {
-        message = `Database table does not exist. Please run migrations:\n` +
+        message =
+          `Database table does not exist. Please run migrations:\n` +
           `  cd apps/api && bun run db:migrate\n` +
           `Error: ${message}`;
         statusCode = HttpStatus.SERVICE_UNAVAILABLE;
       } else if (message.includes('column') && message.includes('does not exist')) {
         const columnMatch = message.match(/column "([^"]+)" does not exist/);
         const columnName = columnMatch ? columnMatch[1] : 'unknown';
-        message = `Database column "${columnName}" does not exist. This usually means migrations haven't been run.\n` +
+        message =
+          `Database column "${columnName}" does not exist. This usually means migrations haven't been run.\n` +
           `\nTo fix this, run:\n` +
           `  cd apps/api\n` +
           `  bun run db:migrate\n` +

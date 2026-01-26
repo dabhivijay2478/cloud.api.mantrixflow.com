@@ -92,7 +92,7 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Connecting to RabbitMQ...');
       const conn = await amqp.connect(this.rabbitmqUrl);
       this.connection = conn as any;
-      
+
       if (this.connection) {
         this.connection.on('error', (err: Error) => {
           this.logger.error(`RabbitMQ connection error: ${err.message}`);
@@ -181,14 +181,10 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       throw new Error('RabbitMQ channel not initialized');
     }
 
-    await this.channel.sendToQueue(
-      QUEUE_NAMES.FULL_SYNC,
-      Buffer.from(JSON.stringify(data)),
-      {
-        persistent: true,
-        priority: data.triggerType === 'manual' ? 10 : 5,
-      },
-    );
+    await this.channel.sendToQueue(QUEUE_NAMES.FULL_SYNC, Buffer.from(JSON.stringify(data)), {
+      persistent: true,
+      priority: data.triggerType === 'manual' ? 10 : 5,
+    });
 
     this.logger.debug(`Enqueued full sync job for pipeline ${data.pipelineId}`);
   }
@@ -221,13 +217,9 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
       throw new Error('RabbitMQ channel not initialized');
     }
 
-    await this.channel.sendToQueue(
-      QUEUE_NAMES.DELTA_CHECK,
-      Buffer.from(JSON.stringify(data)),
-      {
-        persistent: true,
-      },
-    );
+    await this.channel.sendToQueue(QUEUE_NAMES.DELTA_CHECK, Buffer.from(JSON.stringify(data)), {
+      persistent: true,
+    });
 
     this.logger.debug(`Enqueued delta check job for pipeline ${data.pipelineId}`);
   }
@@ -338,26 +330,18 @@ export class RabbitMQService implements OnModuleInit, OnModuleDestroy {
   /**
    * Schedule a delayed message (using RabbitMQ delayed message plugin)
    */
-  async scheduleDelayedMessage<T>(
-    queueName: string,
-    data: T,
-    delayMs: number,
-  ): Promise<void> {
+  async scheduleDelayedMessage<T>(queueName: string, data: T, delayMs: number): Promise<void> {
     if (!this.channel) {
       throw new Error('RabbitMQ channel not initialized');
     }
 
     // Requires rabbitmq-delayed-message-exchange plugin
-    await this.channel.sendToQueue(
-      queueName,
-      Buffer.from(JSON.stringify(data)),
-      {
-        persistent: true,
-        headers: {
-          'x-delay': delayMs,
-        },
+    await this.channel.sendToQueue(queueName, Buffer.from(JSON.stringify(data)), {
+      persistent: true,
+      headers: {
+        'x-delay': delayMs,
       },
-    );
+    });
 
     this.logger.debug(`Scheduled delayed message for queue ${queueName} (${delayMs}ms delay)`);
   }

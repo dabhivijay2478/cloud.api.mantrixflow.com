@@ -1,7 +1,7 @@
 /**
  * Pipeline Scheduler Service
  * Handles scheduling and unscheduling of automated pipeline runs
- * 
+ *
  * Note: This service stores schedule config in the database.
  * The ScheduledPipelineWorkerService polls for due pipelines and executes them.
  * Scheduling is handled via database polling and RabbitMQ.
@@ -35,9 +35,7 @@ export interface ScheduleInfo {
 export class PipelineSchedulerService {
   private readonly logger = new Logger(PipelineSchedulerService.name);
 
-  constructor(
-    private readonly activityLogService: ActivityLogService,
-  ) {}
+  constructor(private readonly activityLogService: ActivityLogService) {}
 
   /**
    * Schedule a pipeline for automatic runs
@@ -59,7 +57,7 @@ export class PipelineSchedulerService {
     // Scheduling is handled via database polling and RabbitMQ
     // Instead, we store the schedule config in the database and
     // the ScheduledPipelineWorkerService polls for due pipelines
-    
+
     // Calculate next run time
     const nextRunAt = this.calculateNextRunTime(cronExpression, timezone);
     const humanReadable = this.getHumanReadableSchedule(scheduleType, scheduleValue, timezone);
@@ -127,10 +125,7 @@ export class PipelineSchedulerService {
   /**
    * Generate cron expression from schedule configuration
    */
-  generateCronExpression(
-    scheduleType: ScheduleType,
-    scheduleValue?: string,
-  ): string | null {
+  generateCronExpression(scheduleType: ScheduleType, scheduleValue?: string): string | null {
     switch (scheduleType) {
       case ScheduleType.NONE:
         return null;
@@ -139,9 +134,7 @@ export class PipelineSchedulerService {
         // scheduleValue is the interval in minutes (e.g., "15" for every 15 minutes)
         const minutes = parseInt(scheduleValue || '30', 10);
         if (isNaN(minutes) || minutes < 1 || minutes > 59) {
-          throw new BadRequestException(
-            'Invalid minutes value. Must be between 1 and 59.',
-          );
+          throw new BadRequestException('Invalid minutes value. Must be between 1 and 59.');
         }
         return `*/${minutes} * * * *`;
       }
@@ -151,9 +144,7 @@ export class PipelineSchedulerService {
         // or specific minute (e.g., "30" for XX:30)
         const value = parseInt(scheduleValue || '1', 10);
         if (isNaN(value) || value < 1 || value > 23) {
-          throw new BadRequestException(
-            'Invalid hourly value. Must be between 1 and 23.',
-          );
+          throw new BadRequestException('Invalid hourly value. Must be between 1 and 23.');
         }
         return `0 */${value} * * *`;
       }
@@ -173,9 +164,7 @@ export class PipelineSchedulerService {
           timeStr ? `${timeStr}:${scheduleValue?.split(':')[2] || '00'}` : '00:00',
         );
         if (isNaN(day) || day < 0 || day > 6) {
-          throw new BadRequestException(
-            'Invalid weekly day value. Must be 0-6 (Sunday-Saturday).',
-          );
+          throw new BadRequestException('Invalid weekly day value. Must be 0-6 (Sunday-Saturday).');
         }
         return `${time.minute} ${time.hour} * * ${day}`;
       }
@@ -188,9 +177,7 @@ export class PipelineSchedulerService {
           parts.length > 1 ? `${parts[1]}:${parts[2] || '00'}` : '00:00',
         );
         if (isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
-          throw new BadRequestException(
-            'Invalid monthly day value. Must be 1-31.',
-          );
+          throw new BadRequestException('Invalid monthly day value. Must be 1-31.');
         }
         return `${time.minute} ${time.hour} ${dayOfMonth} * *`;
       }
@@ -245,13 +232,13 @@ export class PipelineSchedulerService {
     // This is a basic implementation that returns approximate next run
     const now = new Date();
     const parts = cronExpression.split(' ');
-    
+
     // Parse minute and hour if specified
     const minutePart = parts[0];
     const hourPart = parts[1];
-    
+
     let nextRun = new Date(now);
-    
+
     // Handle */N patterns for minutes
     if (minutePart.startsWith('*/')) {
       const interval = parseInt(minutePart.substring(2), 10);
@@ -268,7 +255,7 @@ export class PipelineSchedulerService {
       nextRun.setSeconds(0);
       nextRun.setMilliseconds(0);
     }
-    
+
     // Handle */N patterns for hours
     if (hourPart.startsWith('*/')) {
       const interval = parseInt(hourPart.substring(2), 10);
@@ -282,12 +269,15 @@ export class PipelineSchedulerService {
     } else if (hourPart !== '*') {
       // Specific hour
       const hour = parseInt(hourPart, 10);
-      if (hour < now.getHours() || (hour === now.getHours() && parseInt(minutePart, 10) <= now.getMinutes())) {
+      if (
+        hour < now.getHours() ||
+        (hour === now.getHours() && parseInt(minutePart, 10) <= now.getMinutes())
+      ) {
         nextRun.setDate(nextRun.getDate() + 1);
       }
       nextRun.setHours(hour);
     }
-    
+
     return nextRun;
   }
 
@@ -320,7 +310,15 @@ export class PipelineSchedulerService {
 
       case ScheduleType.WEEKLY: {
         const parts = (scheduleValue || '1:00:00').split(':');
-        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const dayNames = [
+          'Sunday',
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+        ];
         const day = parseInt(parts[0], 10);
         const time = parts.length > 1 ? `${parts[1]}:${parts[2] || '00'}` : '00:00';
         return `Every ${dayNames[day] || 'Monday'} at ${time} (${timezone})`;

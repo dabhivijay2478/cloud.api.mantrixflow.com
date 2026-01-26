@@ -162,13 +162,15 @@ export class PipelineService {
           organizationId,
           { scheduleType, scheduleValue, timezone: scheduleTimezone },
         );
-        
+
         // Update pipeline with next scheduled run time
         await this.pipelineRepository.update(pipeline.id, {
           nextScheduledRunAt: nextRunAt,
         });
-        
-        this.logger.log(`Pipeline ${pipeline.id} scheduled: ${this.schedulerService.getHumanReadableSchedule(scheduleType, scheduleValue, scheduleTimezone)}`);
+
+        this.logger.log(
+          `Pipeline ${pipeline.id} scheduled: ${this.schedulerService.getHumanReadableSchedule(scheduleType, scheduleValue, scheduleTimezone)}`,
+        );
       } catch (error) {
         this.logger.warn(`Failed to schedule pipeline ${pipeline.id}: ${error}`);
       }
@@ -253,12 +255,16 @@ export class PipelineService {
     }
 
     // Handle schedule updates
-    const scheduleType = (updates.scheduleType as ScheduleType) || (pipeline.scheduleType as ScheduleType) || ScheduleType.NONE;
-    const scheduleValue = updates.scheduleValue !== undefined ? updates.scheduleValue : pipeline.scheduleValue;
+    const scheduleType =
+      (updates.scheduleType as ScheduleType) ||
+      (pipeline.scheduleType as ScheduleType) ||
+      ScheduleType.NONE;
+    const scheduleValue =
+      updates.scheduleValue !== undefined ? updates.scheduleValue : pipeline.scheduleValue;
     const scheduleTimezone = updates.scheduleTimezone || pipeline.scheduleTimezone || 'UTC';
 
     // Check if schedule has changed
-    const scheduleChanged = 
+    const scheduleChanged =
       updates.scheduleType !== undefined ||
       updates.scheduleValue !== undefined ||
       updates.scheduleTimezone !== undefined;
@@ -280,7 +286,9 @@ export class PipelineService {
             { scheduleType, scheduleValue: scheduleValue || undefined, timezone: scheduleTimezone },
           );
           nextScheduledRunAt = nextRunAt;
-          this.logger.log(`Pipeline ${id} rescheduled: ${this.schedulerService.getHumanReadableSchedule(scheduleType, scheduleValue || undefined, scheduleTimezone)}`);
+          this.logger.log(
+            `Pipeline ${id} rescheduled: ${this.schedulerService.getHumanReadableSchedule(scheduleType, scheduleValue || undefined, scheduleTimezone)}`,
+          );
         } catch (error) {
           this.logger.warn(`Failed to reschedule pipeline ${id}: ${error}`);
           throw error;
@@ -306,7 +314,7 @@ export class PipelineService {
       PIPELINE_ACTIONS.UPDATED,
       id,
       updated.name,
-      { 
+      {
         changes: updates,
         scheduleType,
         scheduleValue,
@@ -436,13 +444,13 @@ export class PipelineService {
     // Determine sync mode - Python handles all CDC/incremental logic
     // NestJS only orchestrates: calls Python with sync mode and checkpoint
     let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
-    
+
     // Determine sync mode from pipeline configuration
     // Python will handle CDC detection, incremental logic, checkpoint management
     const syncMode = pipeline.syncMode || 'full';
     const isFullSync = syncMode === 'full' || !checkpoint;
     const syncType = isFullSync ? 'full' : 'incremental';
-    const syncReason = isFullSync 
+    const syncReason = isFullSync
       ? 'Full sync (Python handles all data collection)'
       : 'Incremental sync (Python handles CDC and checkpoint management)';
 
@@ -455,7 +463,9 @@ export class PipelineService {
     console.log(`   Sync Type:       ${syncType.toUpperCase()}`);
     console.log(`   Sync Reason:     ${syncReason}`);
     console.log(`   Batch Size:      ${options?.batchSize || DEFAULT_BATCH_SIZE}`);
-    console.log(`   Source:          ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`);
+    console.log(
+      `   Source:          ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`,
+    );
     console.log(`${'='.repeat(60)}\n`);
 
     // ROOT FIX: Publish starting status via Socket.io for real-time UI update
@@ -504,7 +514,7 @@ export class PipelineService {
 
       // Get transform script
       const transformScript = destinationSchema.transformScript;
-      
+
       if (!transformScript || !transformScript.trim()) {
         throw new BadRequestException('Transform script is required for destination schema');
       }
@@ -512,7 +522,7 @@ export class PipelineService {
       // Collect data with batching
       // Python handles all pagination, checkpoint management, and CDC logic
       let hasMore = true;
-      let offset = isFullSync ? 0 : (checkpoint?.offset || 0);
+      let offset = isFullSync ? 0 : checkpoint?.offset || 0;
       let cursor: string | undefined = isFullSync ? undefined : checkpoint?.cursor;
 
       // Log checkpoint restoration if applicable
@@ -555,7 +565,7 @@ export class PipelineService {
               offset,
               cursor,
             });
-            
+
             // Python returns updated checkpoint in metadata - use it for next batch and save it
             const resultMetadata = (sourceData as any).metadata;
             if (resultMetadata?.checkpoint) {
@@ -603,14 +613,18 @@ export class PipelineService {
         const primaryKeys = (destinationSchema.upsertKey as string[]) || [];
 
         // ROOT FIX: Determine write mode for CDC-friendly data preservation
-        // Priority: 
+        // Priority:
         // 1. If explicit upsertKey configured in destination, use UPSERT
         // 2. If primary keys mapped, use UPSERT (prevents duplicates on re-runs)
         // 3. Use destination schema writeMode (append/upsert/replace)
         // 4. Default to APPEND (never truncate by default)
-        const configuredWriteMode = destinationSchema.writeMode as 'append' | 'upsert' | 'replace' | undefined;
+        const configuredWriteMode = destinationSchema.writeMode as
+          | 'append'
+          | 'upsert'
+          | 'replace'
+          | undefined;
         const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
-        
+
         let effectiveWriteMode: 'append' | 'upsert' | 'replace' = 'append';
         let effectiveUpsertKey: string[] | undefined = configuredUpsertKey;
 
@@ -618,7 +632,9 @@ export class PipelineService {
         if (configuredUpsertKey && configuredUpsertKey.length > 0) {
           // Explicit upsert key configured - use UPSERT
           effectiveWriteMode = 'upsert';
-          this.logger.log(`Using UPSERT mode with configured key: ${configuredUpsertKey.join(', ')}`);
+          this.logger.log(
+            `Using UPSERT mode with configured key: ${configuredUpsertKey.join(', ')}`,
+          );
         } else if (primaryKeys.length > 0) {
           // Primary keys from column mappings - use UPSERT for data integrity
           effectiveWriteMode = 'upsert';
@@ -715,15 +731,19 @@ export class PipelineService {
         hasMore = sourceData.hasMore === true || sourceData.rows.length === batchSize;
         offset += sourceData.rows.length; // Use actual rows collected, not batchSize
         cursor = sourceData.nextCursor;
-        
+
         // Debug: log pagination state
-        console.log(`   🔄 Pagination: hasMore=${hasMore}, nextOffset=${offset}, cursor=${cursor || 'none'}, rowsThisBatch=${sourceData.rows.length}, batchSize=${batchSize}, sourceHasMore=${sourceData.hasMore}`);
-        
+        console.log(
+          `   🔄 Pagination: hasMore=${hasMore}, nextOffset=${offset}, cursor=${cursor || 'none'}, rowsThisBatch=${sourceData.rows.length}, batchSize=${batchSize}, sourceHasMore=${sourceData.hasMore}`,
+        );
+
         // Safety check: If we got fewer rows than batchSize, we've likely reached the end
         // But trust the collector's hasMore flag if it's explicitly set
         if (sourceData.rows.length < batchSize && sourceData.hasMore !== true) {
           hasMore = false;
-          console.log(`   ✓ End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`);
+          console.log(
+            `   ✓ End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`,
+          );
         }
 
         // Python returns updated checkpoint in metadata - save it
@@ -790,27 +810,27 @@ export class PipelineService {
 
       // Get the final checkpoint (Python may have updated it)
       const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
-      
+
       // ROOT FIX: Always set status to 'idle' after completion so pipeline can run again
       // Previously was 'completed' which prevented scheduled runs
       const targetStatus = PipelineStatus.IDLE;
-      
+
       // Update totalRowsProcessed - cumulative across all runs
       const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;
-      
+
       // Calculate next scheduled run time based on pipeline schedule configuration
       // Default to 2 minutes for CDC/incremental polling if no schedule configured
       let nextScheduledRunAt: Date | null = null;
       const scheduleType = pipeline.scheduleType || 'none';
       const scheduleValue = pipeline.scheduleValue || '';
-      
+
       if (scheduleType !== 'none') {
         nextScheduledRunAt = this.calculateNextScheduledRun(scheduleType, scheduleValue);
       } else if (pipeline.syncMode === 'incremental') {
         // Default 2-minute polling for incremental/CDC mode
         nextScheduledRunAt = new Date(Date.now() + 2 * 60 * 1000);
       }
-      
+
       // Update pipeline with final checkpoint from Python
       await this.pipelineRepository.update(pipeline.id, {
         lastRunAt: new Date(),
@@ -827,7 +847,7 @@ export class PipelineService {
         nextScheduledRunAt: nextScheduledRunAt,
         nextSyncAt: nextScheduledRunAt,
       });
-      
+
       // Log completion summary
       console.log(`\n${'='.repeat(60)}`);
       console.log(`✅ PIPELINE COMPLETED: ${pipeline.name}`);
@@ -840,7 +860,7 @@ export class PipelineService {
       console.log(`   Duration:        ${durationSeconds}s`);
       console.log(`   Final Status:    ${targetStatus}`);
       console.log(`${'='.repeat(60)}\n`);
-      
+
       this.logger.log(`Pipeline ${pipeline.id} status set to ${targetStatus} after completion`);
 
       // Log activity
@@ -950,10 +970,14 @@ export class PipelineService {
 
     // Update checkpoint with pause timestamp
     if (checkpoint) {
-      await this.lifecycleService.saveCheckpoint(pipelineId, {
-        ...checkpoint,
-        pauseTimestamp,
-      }, userId);
+      await this.lifecycleService.saveCheckpoint(
+        pipelineId,
+        {
+          ...checkpoint,
+          pauseTimestamp,
+        },
+        userId,
+      );
     }
 
     const updated = await this.pipelineRepository.update(pipelineId, {
@@ -993,20 +1017,22 @@ export class PipelineService {
     // Recalculate next scheduled run time if the pipeline has a schedule
     let nextScheduledRunAt: Date | null = null;
     const scheduleType = pipeline.scheduleType as string;
-    
+
     if (scheduleType && scheduleType !== 'none') {
       try {
         const result = await this.schedulerService.schedulePipeline(
           pipelineId,
           pipeline.organizationId,
-          { 
-            scheduleType: scheduleType as any, 
-            scheduleValue: pipeline.scheduleValue || undefined, 
-            timezone: pipeline.scheduleTimezone || 'UTC' 
+          {
+            scheduleType: scheduleType as any,
+            scheduleValue: pipeline.scheduleValue || undefined,
+            timezone: pipeline.scheduleTimezone || 'UTC',
           },
         );
         nextScheduledRunAt = result.nextRunAt;
-        this.logger.log(`Pipeline ${pipelineId} rescheduled on resume: next run at ${nextScheduledRunAt?.toISOString()}`);
+        this.logger.log(
+          `Pipeline ${pipelineId} rescheduled on resume: next run at ${nextScheduledRunAt?.toISOString()}`,
+        );
       } catch (error) {
         this.logger.warn(`Failed to reschedule pipeline ${pipelineId} on resume: ${error}`);
       }
@@ -1129,7 +1155,7 @@ export class PipelineService {
 
     // Transform sample data
     const transformScript = destinationSchema.transformScript;
-    
+
     if (!transformScript || !transformScript.trim()) {
       throw new BadRequestException('Transform script is required for destination schema');
     }
@@ -1142,7 +1168,9 @@ export class PipelineService {
 
     // Log sample transformed data
     if (transformedSample.length > 0) {
-      this.logger.log(`Dry run sample transformed data: ${JSON.stringify(transformedSample[0], null, 2)}`);
+      this.logger.log(
+        `Dry run sample transformed data: ${JSON.stringify(transformedSample[0], null, 2)}`,
+      );
     }
 
     return {
@@ -1231,7 +1259,7 @@ export class PipelineService {
   /**
    * Execute a pipeline with bidirectional transformation support
    * Handles complex transformations between NoSQL and SQL sources
-   * 
+   *
    * Use this for:
    * - MongoDB → PostgreSQL (flattening nested documents)
    * - PostgreSQL → MongoDB (embedding related data)
@@ -1265,9 +1293,17 @@ export class PipelineService {
     }
 
     // Determine schema types
-    const relationalTypes = ['postgres', 'postgresql', 'mysql', 'mariadb', 'sqlite', 'mssql', 'oracle'];
+    const relationalTypes = [
+      'postgres',
+      'postgresql',
+      'mysql',
+      'mariadb',
+      'sqlite',
+      'mssql',
+      'oracle',
+    ];
     const isRelational = (type: string) => relationalTypes.includes(type?.toLowerCase());
-    
+
     const sourceSchemaInfo: SchemaInfo = {
       columns: [],
       primaryKeys: [],
@@ -1286,7 +1322,7 @@ export class PipelineService {
 
     this.logger.log(
       `Bidirectional pipeline: ${sourceDataSource.sourceType} (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'}) → ` +
-      `${destDataSource.sourceType} (${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`
+        `${destDataSource.sourceType} (${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`,
     );
 
     // Create run record
@@ -1364,7 +1400,7 @@ export class PipelineService {
 
       // Collect all data (for simplicity, batching can be added later)
       console.log(`\n📦 Collecting data from ${sourceSchemaInfo.sourceType}...`);
-      
+
       const sourceData = await this.pythonETLService.collect({
         sourceSchema,
         connectionConfig: sourceConnectionConfig,
@@ -1391,16 +1427,18 @@ export class PipelineService {
       console.log(`   📥 Collected ${totalRowsRead.toLocaleString()} rows`);
 
       // Transform using Python service
-      console.log(`\n🔄 Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})...`);
-      
+      console.log(
+        `\n🔄 Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})...`,
+      );
+
       const transformResult = await this.pythonETLService.transform({
         rows: sourceData.rows,
         transformScript: transformScript || '',
       });
-      
+
       // Group by entity if needed (simplified - assumes single entity for now)
       const transformedData: Record<string, any[]> = {
-        default: transformResult.transformedRows
+        default: transformResult.transformedRows,
       };
 
       // Log transformation results
@@ -1410,13 +1448,13 @@ export class PipelineService {
 
       // Emit to destination
       console.log(`\n📤 Writing to ${destSchemaInfo.sourceType}...`);
-      
+
       const destConnectionConfig = await this.connectionService.getDecryptedConnection(
         pipeline.organizationId,
         destinationSchema.dataSourceId!,
         userId,
       );
-      
+
       const writeResults: Record<string, WriteResult> = {};
       for (const [entity, rows] of Object.entries(transformedData)) {
         const result = await this.pythonETLService.emit({
@@ -1438,7 +1476,9 @@ export class PipelineService {
       }
 
       const duration = Date.now() - startTime;
-      console.log(`\n✅ Pipeline completed: ${totalRowsWritten.toLocaleString()} rows written in ${(duration / 1000).toFixed(1)}s\n`);
+      console.log(
+        `\n✅ Pipeline completed: ${totalRowsWritten.toLocaleString()} rows written in ${(duration / 1000).toFixed(1)}s\n`,
+      );
 
       // Update run as success
       await this.pipelineRepository.updateRun(runId, {
@@ -1455,7 +1495,6 @@ export class PipelineService {
         lastRunStatus: 'success',
         lastRunAt: new Date(),
       });
-
     } catch (error) {
       const duration = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1481,7 +1520,6 @@ export class PipelineService {
       });
     }
   }
-
 
   // ============================================================================
   // AUTHORIZATION HELPERS
@@ -1554,5 +1592,4 @@ export class PipelineService {
         return new Date(now.getTime() + 2 * 60 * 1000);
     }
   }
-
 }

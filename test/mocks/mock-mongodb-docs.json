@@ -13,7 +13,7 @@
     "orders": [
       {
         "order_id": "ORD-001",
-        "amount": 125.50,
+        "amount": 125.5,
         "items": ["item1", "item2"]
       },
       {
@@ -39,7 +39,7 @@
     "orders": [
       {
         "order_id": "ORD-003",
-        "amount": 250.00,
+        "amount": 250.0,
         "items": ["item4", "item5", "item6"]
       }
     ],

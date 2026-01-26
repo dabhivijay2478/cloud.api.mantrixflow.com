@@ -126,16 +126,16 @@ export const pipelines = pgTable('pipelines', {
   // ============================================================================
   /** Schedule type: none, minutes, hourly, daily, weekly, monthly, custom_cron */
   scheduleType: scheduleTypeEnum('schedule_type').default('none'),
-  
+
   /** Schedule value: e.g. "15" for minutes, "14:30" for daily, "0 3 * * *" for cron */
   scheduleValue: varchar('schedule_value', { length: 255 }),
-  
+
   /** Timezone for schedule (e.g. America/New_York, Asia/Kolkata) */
   scheduleTimezone: varchar('schedule_timezone', { length: 50 }).default('UTC'),
-  
+
   /** Timestamp of last scheduled run */
   lastScheduledRunAt: timestamp('last_scheduled_run_at'),
-  
+
   /** Calculated next scheduled run time */
   nextScheduledRunAt: timestamp('next_scheduled_run_at'),
 

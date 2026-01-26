@@ -1,7 +1,7 @@
 /**
  * Schema Validation Service
  * Validates that database schema matches code expectations
- * 
+ *
  * ROOT FIX: Detects missing columns/tables and provides actionable error messages
  */
 
@@ -81,14 +81,14 @@ export class SchemaValidationService implements OnModuleInit {
         const errorMessage = `Missing required columns in pipelines table: ${missingColumns.join(', ')}. Please run migrations: bun run db:migrate`;
         this.logger.warn(
           `\n${'='.repeat(80)}\n` +
-          `⚠️  SCHEMA VALIDATION WARNING\n` +
-          `${'='.repeat(80)}\n` +
-          `${errorMessage}\n` +
-          `\nTo fix this, run:\n` +
-          `  cd apps/api\n` +
-          `  bun run db:migrate\n` +
-          `\nThis will apply all pending migrations.\n` +
-          `${'='.repeat(80)}\n`,
+            `⚠️  SCHEMA VALIDATION WARNING\n` +
+            `${'='.repeat(80)}\n` +
+            `${errorMessage}\n` +
+            `\nTo fix this, run:\n` +
+            `  cd apps/api\n` +
+            `  bun run db:migrate\n` +
+            `\nThis will apply all pending migrations.\n` +
+            `${'='.repeat(80)}\n`,
         );
         throw new Error(errorMessage);
       }
@@ -112,24 +112,24 @@ export class SchemaValidationService implements OnModuleInit {
       this.logger.log('✅ Schema validation passed - all required columns exist');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
+
       // If it's a schema validation error, provide actionable message
       if (errorMessage.includes('does not exist') || errorMessage.includes('Missing required')) {
         this.logger.error(
           `\n${'='.repeat(80)}\n` +
-          `❌ SCHEMA VALIDATION FAILED\n` +
-          `${'='.repeat(80)}\n` +
-          `${errorMessage}\n` +
-          `\nTo fix this, run:\n` +
-          `  cd apps/api\n` +
-          `  bun run db:migrate\n` +
-          `\nThis will apply all pending migrations including:\n` +
-          `  - 0016_pipeline_incremental_sync_fixes.sql (adds pause_timestamp)\n` +
-          `  - 0017_add_polling_trigger_type.sql (adds polling to trigger_type enum)\n` +
-          `${'='.repeat(80)}\n`,
+            `❌ SCHEMA VALIDATION FAILED\n` +
+            `${'='.repeat(80)}\n` +
+            `${errorMessage}\n` +
+            `\nTo fix this, run:\n` +
+            `  cd apps/api\n` +
+            `  bun run db:migrate\n` +
+            `\nThis will apply all pending migrations including:\n` +
+            `  - 0016_pipeline_incremental_sync_fixes.sql (adds pause_timestamp)\n` +
+            `  - 0017_add_polling_trigger_type.sql (adds polling to trigger_type enum)\n` +
+            `${'='.repeat(80)}\n`,
         );
       }
-      
+
       throw error;
     }
   }

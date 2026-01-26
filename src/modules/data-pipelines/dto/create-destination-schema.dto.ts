@@ -60,7 +60,8 @@ export class CreateDestinationSchemaDto {
 
   @ApiPropertyOptional({
     description: 'Custom Python transform script (defines transform(record) function)',
-    example: 'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
+    example:
+      'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
   })
   @IsOptional()
   @IsString()

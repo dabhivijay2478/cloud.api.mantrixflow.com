@@ -30,7 +30,10 @@ async function runSchedulingMigration() {
     `;
 
     if (existingColumns.length > 0) {
-      console.log('✅ Scheduling columns already exist:', existingColumns.map((c: { column_name: string }) => c.column_name).join(', '));
+      console.log(
+        '✅ Scheduling columns already exist:',
+        existingColumns.map((c: { column_name: string }) => c.column_name).join(', '),
+      );
       await sql.end();
       return;
     }

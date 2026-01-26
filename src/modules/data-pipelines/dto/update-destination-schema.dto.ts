@@ -4,14 +4,7 @@
  */
 
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsString,
-  IsOptional,
-  IsArray,
-  IsEnum,
-  MaxLength,
-  IsBoolean,
-} from 'class-validator';
+import { IsString, IsOptional, IsArray, IsEnum, MaxLength, IsBoolean } from 'class-validator';
 import { WriteMode } from './create-destination-schema.dto';
 
 export class UpdateDestinationSchemaDto {
@@ -47,7 +40,8 @@ export class UpdateDestinationSchemaDto {
 
   @ApiPropertyOptional({
     description: 'Custom Python transform script (defines transform(record) function)',
-    example: 'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
+    example:
+      'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
   })
   @IsOptional()
   @IsString()

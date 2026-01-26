@@ -7,7 +7,7 @@
  * - MySQL (relational database)
  * - MongoDB (document database)
  *
- * Architecture: 
+ * Architecture:
  * - NestJS: Orchestration, CRUD, user/org management, activity logging
  * - Python FastAPI: ETL operations (collect, transform, emit)
  * - RabbitMQ: Job queuing, scheduling, CDC polling

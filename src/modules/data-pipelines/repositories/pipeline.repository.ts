@@ -119,7 +119,7 @@ export class PipelineRepository {
       // Extract the actual database error from postgres-js/Drizzle
       let actualError: string = error?.message || String(error);
       let postgresError: any = null;
-      
+
       // Try to extract the underlying PostgreSQL error
       if (error?.cause) {
         postgresError = error.cause;
@@ -128,30 +128,34 @@ export class PipelineRepository {
         postgresError = error.originalError;
         actualError = postgresError?.message || postgresError?.detail || actualError;
       }
-      
+
       // Log the full error structure for debugging
       this.logger.error(
         `[findByOrganization] Database error details:`,
-        JSON.stringify({
-          message: error?.message,
-          cause: error?.cause,
-          code: postgresError?.code,
-          detail: postgresError?.detail,
-          hint: postgresError?.hint,
-          table: postgresError?.table,
-          column: postgresError?.column,
-        }, null, 2),
+        JSON.stringify(
+          {
+            message: error?.message,
+            cause: error?.cause,
+            code: postgresError?.code,
+            detail: postgresError?.detail,
+            hint: postgresError?.hint,
+            table: postgresError?.table,
+            column: postgresError?.column,
+          },
+          null,
+          2,
+        ),
       );
-      
+
       // Create enhanced error with actual database error
       const enhancedError = new Error(
         `Failed to query pipelines for organization ${organizationId}: ${actualError}${postgresError?.code ? ` [PostgreSQL Error Code: ${postgresError.code}]` : ''}`,
       );
-      
+
       if (error instanceof Error && error.stack) {
         enhancedError.stack = error.stack;
       }
-      
+
       throw enhancedError;
     }
   }
@@ -419,9 +423,9 @@ export class PipelineRepository {
   async findDuePipelines(now: Date = new Date()): Promise<Pipeline[]> {
     // Convert date to ISO string for proper PostgreSQL compatibility
     const nowIso = now.toISOString();
-    
+
     this.logger.debug(`[findDuePipelines] Checking for pipelines due before: ${nowIso}`);
-    
+
     try {
       const results = await this.db
         .select()
@@ -435,10 +439,7 @@ export class PipelineRepository {
             // Either has explicit schedule OR is incremental/CDC mode (syncMode = 'incremental')
             or(
               // Explicit schedule configured
-              and(
-                isNotNull(pipelines.scheduleType),
-                ne(pipelines.scheduleType, 'none'),
-              ),
+              and(isNotNull(pipelines.scheduleType), ne(pipelines.scheduleType, 'none')),
               // OR incremental/CDC mode with nextScheduledRunAt set (auto 2-min polling)
               eq(pipelines.syncMode, 'incremental'),
             ),
@@ -455,7 +456,7 @@ export class PipelineRepository {
           ),
         )
         .orderBy(pipelines.nextScheduledRunAt);
-      
+
       // Log debug info about why pipelines might not be found
       if (results.length === 0) {
         // Check if there are any scheduled pipelines at all
@@ -475,30 +476,32 @@ export class PipelineRepository {
               ne(pipelines.scheduleType, 'none'),
             ),
           );
-        
+
         if (allScheduled.length > 0) {
           for (const p of allScheduled) {
-            const nextRunAt = p.nextScheduledRunAt ? new Date(p.nextScheduledRunAt).toISOString() : 'NOT SET';
+            const nextRunAt = p.nextScheduledRunAt
+              ? new Date(p.nextScheduledRunAt).toISOString()
+              : 'NOT SET';
             const isDue = p.nextScheduledRunAt && new Date(p.nextScheduledRunAt) <= now;
             const statusOk = ['idle', 'listing', 'completed', 'failed'].includes(p.status || '');
             this.logger.debug(
               `[findDuePipelines] Pipeline "${p.name}" (${p.id}): ` +
-              `scheduleType=${p.scheduleType}, nextRunAt=${nextRunAt}, ` +
-              `status=${p.status}, isDue=${isDue}, statusOk=${statusOk}`
+                `scheduleType=${p.scheduleType}, nextRunAt=${nextRunAt}, ` +
+                `status=${p.status}, isDue=${isDue}, statusOk=${statusOk}`,
             );
           }
         } else {
           this.logger.debug(`[findDuePipelines] No scheduled pipelines found in the database`);
         }
       }
-      
+
       return results;
     } catch (error: any) {
       // Extract the actual database error from postgres-js/Drizzle
       // postgres-js errors have a 'cause' property with the actual PostgreSQL error
       let actualError: string = error?.message || String(error);
       let postgresError: any = null;
-      
+
       // Try to extract the underlying PostgreSQL error
       if (error?.cause) {
         postgresError = error.cause;
@@ -507,40 +510,44 @@ export class PipelineRepository {
         postgresError = error.originalError;
         actualError = postgresError?.message || postgresError?.detail || actualError;
       }
-      
+
       // Log the full error structure for debugging
       this.logger.error(
         `[findDuePipelines] Database error details:`,
-        JSON.stringify({
-          message: error?.message,
-          cause: error?.cause,
-          code: postgresError?.code,
-          detail: postgresError?.detail,
-          hint: postgresError?.hint,
-          position: postgresError?.position,
-          internalPosition: postgresError?.internalPosition,
-          internalQuery: postgresError?.internalQuery,
-          where: postgresError?.where,
-          schema: postgresError?.schema,
-          table: postgresError?.table,
-          column: postgresError?.column,
-          dataType: postgresError?.dataType,
-          constraint: postgresError?.constraint,
-          file: postgresError?.file,
-          line: postgresError?.line,
-          routine: postgresError?.routine,
-        }, null, 2),
+        JSON.stringify(
+          {
+            message: error?.message,
+            cause: error?.cause,
+            code: postgresError?.code,
+            detail: postgresError?.detail,
+            hint: postgresError?.hint,
+            position: postgresError?.position,
+            internalPosition: postgresError?.internalPosition,
+            internalQuery: postgresError?.internalQuery,
+            where: postgresError?.where,
+            schema: postgresError?.schema,
+            table: postgresError?.table,
+            column: postgresError?.column,
+            dataType: postgresError?.dataType,
+            constraint: postgresError?.constraint,
+            file: postgresError?.file,
+            line: postgresError?.line,
+            routine: postgresError?.routine,
+          },
+          null,
+          2,
+        ),
       );
-      
+
       // Create enhanced error with actual database error
       const enhancedError = new Error(
         `Failed to query due pipelines (checking for pipelines due before ${nowIso}): ${actualError}${postgresError?.code ? ` [PostgreSQL Error Code: ${postgresError.code}]` : ''}`,
       );
-      
+
       if (error instanceof Error && error.stack) {
         enhancedError.stack = error.stack;
       }
-      
+
       throw enhancedError;
     }
   }
@@ -626,7 +633,9 @@ export class PipelineRepository {
           ),
         );
 
-      this.logger.debug(`[findActivePipelinesForPolling] Found ${result.length} active pipeline(s) for polling`);
+      this.logger.debug(
+        `[findActivePipelinesForPolling] Found ${result.length} active pipeline(s) for polling`,
+      );
       return result;
     } catch (error) {
       this.logger.error(`[findActivePipelinesForPolling] Error: ${error}`);
@@ -639,9 +648,7 @@ export class PipelineRepository {
    * Used for delta checks and incremental sync operations
    * NOTE: Different from findByIdWithSchemas which returns structured object
    */
-  async findByIdForCDC(
-    id: string,
-  ): Promise<
+  async findByIdForCDC(id: string): Promise<
     | (Pipeline & {
         sourceSchema: PipelineSourceSchema | null;
         destinationSchema: PipelineDestinationSchema | null;
@@ -719,8 +726,25 @@ export class PipelineRepository {
    */
   async updateStatusAtomic(
     pipelineId: string,
-    newStatus: 'idle' | 'initializing' | 'running' | 'listing' | 'listening' | 'paused' | 'failed' | 'completed',
-    allowedFromStatuses: ('idle' | 'initializing' | 'running' | 'listing' | 'listening' | 'paused' | 'failed' | 'completed')[],
+    newStatus:
+      | 'idle'
+      | 'initializing'
+      | 'running'
+      | 'listing'
+      | 'listening'
+      | 'paused'
+      | 'failed'
+      | 'completed',
+    allowedFromStatuses: (
+      | 'idle'
+      | 'initializing'
+      | 'running'
+      | 'listing'
+      | 'listening'
+      | 'paused'
+      | 'failed'
+      | 'completed'
+    )[],
   ): Promise<boolean> {
     try {
       await this.db
@@ -729,12 +753,7 @@ export class PipelineRepository {
           status: newStatus,
           updatedAt: new Date(),
         })
-        .where(
-          and(
-            eq(pipelines.id, pipelineId),
-            inArray(pipelines.status, allowedFromStatuses),
-          ),
-        );
+        .where(and(eq(pipelines.id, pipelineId), inArray(pipelines.status, allowedFromStatuses)));
 
       // Drizzle doesn't directly return rowCount, check if update was successful
       // by verifying the new status

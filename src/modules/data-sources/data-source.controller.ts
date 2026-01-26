@@ -1,18 +1,18 @@
 /**
  * Data Source Controller
  * REST API endpoints for data source management
- * 
+ *
  * Architecture:
  * - NestJS: Handles listing (GET) and deletion (DELETE) of data sources
  * - Python FastAPI: Handles connection operations (create, update, test), collector/emitter/transformations
- * 
+ *
  * Available Endpoints:
  * - GET / - List all data sources (NestJS)
  * - GET /types - Get supported data source types (NestJS)
  * - GET /:id - Get data source by ID (NestJS)
  * - DELETE /:id - Delete data source (NestJS)
  * - GET /:sourceId/connection - Get connection metadata (read-only, NestJS)
- * 
+ *
  * Python FastAPI Endpoints:
  * - POST /connections - Create/update connection
  * - POST /test-connection - Test connection config
@@ -239,5 +239,4 @@ export class DataSourceController {
 
     return createSuccessResponse({ deletedId: sourceId }, 'Connection deleted successfully');
   }
-
 }

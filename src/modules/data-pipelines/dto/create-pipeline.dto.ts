@@ -143,7 +143,8 @@ export class CreatePipelineDto {
   scheduleType?: ScheduleType;
 
   @ApiPropertyOptional({
-    description: 'Schedule value: "15" for every 15 mins, "14:30" for daily at 14:30, "0 3 * * *" for cron',
+    description:
+      'Schedule value: "15" for every 15 mins, "14:30" for daily at 14:30, "0 3 * * *" for cron',
     example: '09:00',
   })
   @IsOptional()
@@ -161,4 +162,3 @@ export class CreatePipelineDto {
   @MaxLength(50)
   scheduleTimezone?: string;
 }
-

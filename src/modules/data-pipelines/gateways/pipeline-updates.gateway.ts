@@ -1,12 +1,12 @@
 /**
  * Pipeline Updates WebSocket Gateway
  * Handles real-time updates via Socket.io
- * 
+ *
  * Architecture:
  * - Listens to Postgres NOTIFY events ('pipeline_updates', 'pipeline_run_updates')
  * - Forwards notifications to Socket.io clients
  * - Clients join room: pipeline_{pipelineId} to receive updates
- * 
+ *
  * ROOT FIX: Real-time updates for status, row counts, progress
  */
 
@@ -122,7 +122,9 @@ export class PipelineUpdatesGateway
         this.handlePostgresNotification(msg.channel, msg.payload);
       });
 
-      this.logger.log('Postgres NOTIFY listeners set up for pipeline_updates and pipeline_run_updates');
+      this.logger.log(
+        'Postgres NOTIFY listeners set up for pipeline_updates and pipeline_run_updates',
+      );
 
       // Store listeners for cleanup
       this.notifyListeners = [
@@ -267,10 +269,7 @@ export class PipelineUpdatesGateway
    * Join pipeline run room
    */
   @SubscribeMessage('join_run')
-  handleJoinRun(
-    @MessageBody() data: { runId: string },
-    @ConnectedSocket() client: Socket,
-  ) {
+  handleJoinRun(@MessageBody() data: { runId: string }, @ConnectedSocket() client: Socket) {
     const { runId } = data;
 
     if (runId) {

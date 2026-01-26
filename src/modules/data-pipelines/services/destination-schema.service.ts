@@ -21,10 +21,7 @@ import { ConnectionService } from '../../data-sources/connection.service';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
 import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
 import { WriteMode } from '../dto/create-destination-schema.dto';
-import type {
-  SchemaValidationResult,
-  ValidationResult,
-} from '../types/common.types';
+import type { SchemaValidationResult, ValidationResult } from '../types/common.types';
 
 /**
  * Internal DTO with organization context
@@ -159,7 +156,6 @@ export class DestinationSchemaService {
 
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
-
 
     // Validate upsert configuration
     const newWriteMode = updates.writeMode || schema.writeMode;

@@ -6,7 +6,7 @@
 /**
  * Supported data source types
  * Only PostgreSQL, MySQL, and MongoDB are supported
- * 
+ *
  * Guide: To add a new source:
  * 1. Add enum value here
  * 2. Create connector in Python service: etl-service/connectors/{source-name}.py
@@ -32,7 +32,7 @@ export interface ColumnMapping {
   isPrimaryKey?: boolean;
   defaultValue?: string;
   maxLength?: number;
-  
+
   // Enhanced mapping for NoSQL ↔ SQL
   /** Source entity (table/collection name) */
   sourceEntity?: string;
@@ -59,22 +59,22 @@ export interface ColumnMapping {
  */
 export type ColumnTransformationType =
   | 'none'
-  | 'flattenObject'      // Flatten nested object: { a: { b: 1 } } → { a_b: 1 }
-  | 'flattenArray'       // Flatten array into separate rows
-  | 'embedObject'        // Embed into nested object (SQL → NoSQL)
-  | 'embedArray'         // Embed as array element
-  | 'jsonStringify'      // Convert to JSON string
-  | 'jsonParse'          // Parse JSON string to object
-  | 'toISODate'          // Convert to ISO date string
-  | 'toTimestamp'        // Convert to timestamp
-  | 'objectIdToUuid'     // MongoDB ObjectId to UUID string
-  | 'uuidToObjectId'     // UUID to MongoDB ObjectId
-  | 'toNumber'           // Convert to number
-  | 'toString'           // Convert to string
-  | 'toBoolean'          // Convert to boolean
-  | 'trim'               // Trim whitespace
-  | 'lowercase'          // Lowercase string
-  | 'uppercase';         // Uppercase string
+  | 'flattenObject' // Flatten nested object: { a: { b: 1 } } → { a_b: 1 }
+  | 'flattenArray' // Flatten array into separate rows
+  | 'embedObject' // Embed into nested object (SQL → NoSQL)
+  | 'embedArray' // Embed as array element
+  | 'jsonStringify' // Convert to JSON string
+  | 'jsonParse' // Parse JSON string to object
+  | 'toISODate' // Convert to ISO date string
+  | 'toTimestamp' // Convert to timestamp
+  | 'objectIdToUuid' // MongoDB ObjectId to UUID string
+  | 'uuidToObjectId' // UUID to MongoDB ObjectId
+  | 'toNumber' // Convert to number
+  | 'toString' // Convert to string
+  | 'toBoolean' // Convert to boolean
+  | 'trim' // Trim whitespace
+  | 'lowercase' // Lowercase string
+  | 'uppercase'; // Uppercase string
 
 /**
  * Data transformation configuration

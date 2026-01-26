@@ -10,10 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
-import type {
-  WriteResult,
-  ColumnInfo,
-} from '../types/common.types';
+import type { WriteResult, ColumnInfo } from '../types/common.types';
 import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../database/schemas';
 
 @Injectable()
@@ -31,7 +28,7 @@ export class PythonETLService {
       this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
       this.configService.get<string>('PYTHON_SERVICE_URL') ||
       'http://localhost:8001';
-    
+
     this.logger.log(`Python ETL Service URL: ${this.pythonServiceUrl}`);
   }
 
@@ -49,10 +46,10 @@ export class PythonETLService {
     estimatedRowCount?: number;
   }> {
     const { sourceSchema, connectionConfig } = options;
-    
+
     try {
       const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
-      
+
       const response = await firstValueFrom(
         this.httpService.post(
           `${this.pythonServiceUrl}/discover-schema/${sourceType}`,
@@ -101,11 +98,19 @@ export class PythonETLService {
     hasMore?: boolean;
     metadata?: any;
   }> {
-    const { sourceSchema, connectionConfig, limit = 500, offset = 0, cursor, syncMode = 'full', checkpoint } = options;
-    
+    const {
+      sourceSchema,
+      connectionConfig,
+      limit = 500,
+      offset = 0,
+      cursor,
+      syncMode = 'full',
+      checkpoint,
+    } = options;
+
     try {
       const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
-      
+
       const response = await firstValueFrom(
         this.httpService.post(
           `${this.pythonServiceUrl}/collect/${sourceType}`,
@@ -148,15 +153,12 @@ export class PythonETLService {
   /**
    * Transform data using custom Python script
    */
-  async transform(options: {
-    rows: any[];
-    transformScript: string;
-  }): Promise<{
+  async transform(options: { rows: any[]; transformScript: string }): Promise<{
     transformedRows: any[];
     errors: any[];
   }> {
     const { rows, transformScript } = options;
-    
+
     if (!transformScript || !transformScript.trim()) {
       this.logger.warn('Empty transform script provided, returning rows as-is');
       return {
@@ -164,7 +166,7 @@ export class PythonETLService {
         errors: [],
       };
     }
-    
+
     try {
       const response = await firstValueFrom(
         this.httpService.post(
@@ -202,12 +204,12 @@ export class PythonETLService {
     upsertKey?: string[];
   }): Promise<WriteResult> {
     const { destinationSchema, connectionConfig, rows, writeMode, upsertKey } = options;
-    
+
     try {
       // Get destination data source type
       const destDataSource = await this.getDataSourceType(destinationSchema.dataSourceId!);
       const destType = this.normalizeSourceType(destDataSource);
-      
+
       const response = await firstValueFrom(
         this.httpService.post(
           `${this.pythonServiceUrl}/emit/${destType}`,

@@ -27,7 +27,7 @@ async function applyTransformMigrations() {
     // Read and apply migration 0018
     const migration18Path = path.join(__dirname, 'migrations', '0018_add_transform_script.sql');
     const migration18SQL = fs.readFileSync(migration18Path, 'utf-8');
-    
+
     console.log('📄 Applying migration 0018_add_transform_script.sql...');
     await sql.unsafe(migration18SQL);
     console.log('✅ Migration 0018 applied successfully');
@@ -35,7 +35,7 @@ async function applyTransformMigrations() {
     // Read and apply migration 0019
     const migration19Path = path.join(__dirname, 'migrations', '0019_remove_column_mappings.sql');
     const migration19SQL = fs.readFileSync(migration19Path, 'utf-8');
-    
+
     console.log('📄 Applying migration 0019_remove_column_mappings.sql...');
     await sql.unsafe(migration19SQL);
     console.log('✅ Migration 0019 applied successfully');
