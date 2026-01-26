@@ -126,8 +126,14 @@ async function bootstrap() {
         return callback(null, origin);
       }
 
-      // Allow production domain (mantrixflow.com)
-      if (origin === 'https://mantrixflow.com' || origin === 'http://mantrixflow.com') {
+      // Allow production domain (mantrixflow.com and cloud subdomains)
+      if (
+        origin === 'https://mantrixflow.com' ||
+        origin === 'http://mantrixflow.com' ||
+        origin.includes('cloud.mantrixflow.com') ||
+        origin.includes('cloud.api.mantrixflow.com') ||
+        origin.includes('cloud.api.etl.server.mantrixflow.com')
+      ) {
         return callback(null, origin);
       }
 
