@@ -29,14 +29,14 @@ async function createApp(): Promise<INestApplication> {
     }),
   );
 
-  // Get environment variables
-  const nodeEnv = configService.get<string>('NODE_ENV', 'development');
+  // Get environment variables (no NODE_ENV – local/hosted use different env vars)
   const apiUrl = configService.get<string>('API_URL');
-  const devServerUrl = configService.get<string>('DEV_SERVER_URL', 'http://localhost:8000');
+  const devServerUrl = configService.get<string>('DEV_SERVER_URL');
   const frontendUrl = configService.get<string>('FRONTEND_URL');
   const nextPublicAppUrl = configService.get<string>('APP_URL');
   const allowedOriginsEnv = configService.get<string>('ALLOWED_ORIGINS');
   const defaultDevOrigin = configService.get<string>('DEFAULT_DEV_ORIGIN', 'http://localhost:3000');
+  const allowLocalhost = configService.get<string>('ALLOW_LOCALHOST') === 'true';
 
   // Swagger/OpenAPI Configuration
   const swaggerConfig = new DocumentBuilder()
@@ -56,8 +56,8 @@ async function createApp(): Promise<INestApplication> {
       'JWT-auth',
     );
 
-  // Add servers based on environment
-  if (nodeEnv === 'development') {
+  // Add servers from env (dev and/or prod)
+  if (devServerUrl) {
     swaggerConfig.addServer(devServerUrl, 'Development server');
   }
   if (apiUrl) {
@@ -97,12 +97,11 @@ async function createApp(): Promise<INestApplication> {
     allowedOrigins.push(apiUrl);
   }
 
-  // In development, add default localhost origins
-  if (nodeEnv === 'development') {
+  // Add default localhost origins when ALLOW_LOCALHOST is set (e.g. local)
+  if (allowLocalhost) {
     if (!allowedOrigins.includes(defaultDevOrigin)) {
       allowedOrigins.push(defaultDevOrigin);
     }
-    // Add localhost:3001 for development
     const devOrigin2 = 'http://localhost:3001';
     if (!allowedOrigins.includes(devOrigin2)) {
       allowedOrigins.push(devOrigin2);
@@ -145,8 +144,8 @@ async function createApp(): Promise<INestApplication> {
         return callback(null, origin);
       }
 
-      // In development, allow localhost with any port
-      if (nodeEnv === 'development' && origin.startsWith('http://localhost:')) {
+      // Allow localhost when ALLOW_LOCALHOST is set (e.g. local)
+      if (allowLocalhost && origin.startsWith('http://localhost:')) {
         return callback(null, origin);
       }
 
