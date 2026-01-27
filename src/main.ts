@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import type { Application, Request, Response } from 'express';
 import { AppModule } from './app.module';
 
 let cachedApp: INestApplication | null = null;
@@ -166,6 +167,18 @@ async function createApp(): Promise<INestApplication> {
   });
 
   await app.init();
+
+  // Fallback for unmatched API routes: small "running" response (no error)
+  const expressInstance = app.getHttpAdapter().getInstance() as Application;
+  expressInstance.use((_req: Request, res: Response) => {
+    if (!res.headersSent) {
+      res.status(200).json({
+        message: 'MantrixFlow API is running',
+        docs: '/api/docs',
+      });
+    }
+  });
+
   cachedApp = app;
   logger.log('Nest application initialized');
   return app;
@@ -193,9 +206,9 @@ function isServerless(): boolean {
  * Serverless handler for Vercel / AWS Lambda.
  * Exported so the runtime finds "exports" and does not throw "No exports found in module".
  */
-async function handler(req: import('express').Request, res: import('express').Response): Promise<void> {
+async function handler(req: Request, res: Response): Promise<void> {
   const app = await createApp();
-  const expressInstance = app.getHttpAdapter().getInstance();
+  const expressInstance = app.getHttpAdapter().getInstance() as Application;
   expressInstance(req, res);
 }
 
