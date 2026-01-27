@@ -12,6 +12,7 @@ import { DataSourceRepository } from '../../data-sources/repositories/data-sourc
 import { ConnectionService } from '../../data-sources/connection.service';
 import type { WriteResult, ColumnInfo } from '../types/common.types';
 import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../database/schemas';
+import { getEtlServiceUrl } from '../../../common/config/etl-url.util';
 
 @Injectable()
 export class PythonETLService {
@@ -24,11 +25,7 @@ export class PythonETLService {
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly connectionService: ConnectionService,
   ) {
-    this.pythonServiceUrl =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
-      this.configService.get<string>('PYTHON_SERVICE_URL') ||
-      'http://localhost:8001';
-
+    this.pythonServiceUrl = getEtlServiceUrl(this.configService);
     this.logger.log(`Python ETL Service URL: ${this.pythonServiceUrl}`);
   }
 

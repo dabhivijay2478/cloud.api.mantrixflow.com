@@ -25,6 +25,7 @@ import {
   DeltaCheckJobData,
   StatusUpdateEventData,
 } from '../../queue/rabbitmq.service';
+import { getEtlServiceUrl } from '../../../common/config/etl-url.util';
 
 @Injectable()
 export class RabbitMQJobHandlerService implements OnModuleInit {
@@ -39,10 +40,7 @@ export class RabbitMQJobHandlerService implements OnModuleInit {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.pythonServiceUrl =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
-      this.configService.get<string>('PYTHON_SERVICE_URL') ||
-      'http://localhost:8001';
+    this.pythonServiceUrl = getEtlServiceUrl(this.configService);
   }
 
   private readonly pythonServiceUrl: string;

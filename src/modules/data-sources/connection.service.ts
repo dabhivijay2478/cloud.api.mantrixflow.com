@@ -31,6 +31,7 @@ import type {
   S3Config,
   SnowflakeConfig,
 } from '../../database/schemas/data-sources/data-source-connections.schema';
+import { getEtlServiceUrl } from '../../common/config/etl-url.util';
 
 export interface CreateConnectionDto {
   connectionType: string;
@@ -56,10 +57,7 @@ export class ConnectionService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.pythonServiceUrl =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
-      this.configService.get<string>('PYTHON_SERVICE_URL') ||
-      'http://localhost:8001';
+    this.pythonServiceUrl = getEtlServiceUrl(this.configService);
   }
 
   /**
