@@ -1,10 +1,17 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
-async function bootstrap() {
+let cachedApp: INestApplication | null = null;
+
+async function createApp(): Promise<INestApplication> {
+  if (cachedApp) {
+    return cachedApp;
+  }
+
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
   const logger = new Logger('Bootstrap');
@@ -158,10 +165,47 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
+  await app.init();
+  cachedApp = app;
+  logger.log('Nest application initialized');
+  return app;
+}
+
+async function bootstrap() {
+  const app = await createApp();
+  const configService = app.get(ConfigService);
+  const logger = new Logger('Bootstrap');
   const port = configService.get<number>('PORT', 5000);
   await app.listen(port, '0.0.0.0');
   logger.log(`🚀 Application is running on: http://localhost:${port}`);
   logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
 }
 
-bootstrap();
+function isServerless(): boolean {
+  return !!(
+    process.env.VERCEL ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.LAMBDA_TASK_ROOT
+  );
+}
+
+/**
+ * Serverless handler for Vercel / AWS Lambda.
+ * Exported so the runtime finds "exports" and does not throw "No exports found in module".
+ */
+async function handler(req: import('express').Request, res: import('express').Response): Promise<void> {
+  const app = await createApp();
+  const expressInstance = app.getHttpAdapter().getInstance();
+  expressInstance(req, res);
+}
+
+export default handler;
+export { handler };
+
+// When run directly (e.g. node dist/main.js or bun dist/main), start HTTP server
+if (!isServerless() && require.main === module) {
+  bootstrap().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
