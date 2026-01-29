@@ -1,10 +1,9 @@
 /**
  * Scheduled Pipeline Worker Service
- * Handles scheduled pipeline execution using RabbitMQ
+ * Handles scheduled pipeline execution using BullMQ + Redis
  *
- * Uses RabbitMQ for reliable scheduling with:
- * - Message queuing for scheduled runs
- * - Delayed messages for scheduling
+ * Uses BullMQ for reliable scheduling with:
+ * - Message queuing for scheduled runs (pipeline-jobs queue)
  * - Automatic retry on failure
  * - Priority queues for urgent vs routine runs
  *
@@ -17,7 +16,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { RabbitMQService } from '../../queue/rabbitmq.service';
+import { PipelineQueueService } from '../../queue/pipeline-queue.service';
 
 // Default batch size for scheduled runs
 const DEFAULT_BATCH_SIZE = 500;
@@ -34,7 +33,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
   constructor(
     private readonly pipelineRepository: PipelineRepository,
     readonly _schedulerService: PipelineSchedulerService,
-    private readonly rabbitmqService: RabbitMQService,
+    private readonly pipelineQueueService: PipelineQueueService,
   ) {}
 
   /**
@@ -46,22 +45,21 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     this.logger.log(`   Poll Interval: ${POLL_INTERVAL_MS / 1000} seconds`);
     this.logger.log(`   Default Batch Size: ${DEFAULT_BATCH_SIZE} records`);
     this.logger.log('════════════════════════════════════════════════════════');
-    this.logger.log('📌 Using RabbitMQ for job management:');
-    this.logger.log('   - Message queuing for scheduled runs');
-    this.logger.log('   - Delayed messages for scheduling');
+    this.logger.log('📌 Using BullMQ + Redis for job management:');
+    this.logger.log('   - Message queuing for scheduled runs (pipeline-jobs)');
     this.logger.log('   - Automatic retries');
     this.logger.log('   - Priority queues (high: manual, normal: scheduled)');
     this.logger.log('════════════════════════════════════════════════════════');
 
-    // Wait for RabbitMQ to initialize
+    // Wait for Redis/queue to be ready
     let retries = 0;
-    while (!this.rabbitmqService.isReady() && retries < 10) {
+    while (!this.pipelineQueueService.isReady() && retries < 10) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       retries++;
     }
 
-    if (!this.rabbitmqService.isReady()) {
-      this.logger.warn('RabbitMQ not ready, will retry');
+    if (!this.pipelineQueueService.isReady()) {
+      this.logger.warn('BullMQ/Redis not ready, will retry');
       setTimeout(() => this.onModuleInit(), 5000);
       return;
     }
@@ -172,15 +170,15 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
 
       this.logger.log(`[SCHEDULER] Found ${duePipelines.length} pipeline(s) due to run`);
 
-      // Enqueue each pipeline as a RabbitMQ job
+      // Enqueue each pipeline as a BullMQ job
       for (const pipeline of duePipelines) {
-        if (!this.rabbitmqService.isReady()) {
-          this.logger.warn('[SCHEDULER] RabbitMQ not ready, cannot enqueue job');
+        if (!this.pipelineQueueService.isReady()) {
+          this.logger.warn('[SCHEDULER] BullMQ/Redis not ready, cannot enqueue job');
           continue;
         }
 
         // Enqueue the scheduled run as a full sync job
-        await this.rabbitmqService.enqueueFullSync({
+        await this.pipelineQueueService.enqueueFullSync({
           pipelineId: pipeline.id,
           organizationId: pipeline.organizationId,
           userId: pipeline.createdBy || 'system',

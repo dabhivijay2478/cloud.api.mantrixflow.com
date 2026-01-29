@@ -1,7 +1,7 @@
 /**
  * Queue Module
- * Exports all RabbitMQ-related functionality
+ * Exports BullMQ + Redis queue functionality for pipeline jobs and real-time events.
  */
 
-export * from './rabbitmq.module';
-export * from './rabbitmq.service';
+export * from './bullmq.module';
+export * from './pipeline-queue.service';

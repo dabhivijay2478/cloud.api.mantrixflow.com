@@ -10,14 +10,14 @@
  * Architecture:
  * - NestJS: Orchestration, CRUD, user/org management, activity logging
  * - Python FastAPI: ETL operations (collect, transform, emit)
- * - RabbitMQ: Job queuing, scheduling, CDC polling
+ * - BullMQ + Redis: Job queuing, scheduling, CDC polling, real-time pub/sub
  * - Socket.io: Real-time updates
  *
  * Features:
  * - Incremental sync with checkpoint tracking (WAL CDC for PostgreSQL)
- * - RabbitMQ for job queuing (message queues, topic exchange for pub/sub)
- * - Polling-based CDC (checks for changes every 2 minutes)
- * - Socket.io for real-time updates
+ * - BullMQ queues: pipeline-jobs, incremental-sync, polling-checks
+ * - Polling-based CDC (delta check every 5 min via repeatable job)
+ * - Redis pub/sub for status/progress → Socket.io gateway
  *
  * Guide: To add a new data source type:
  * 1. Add connector in Python service: etl-service/connectors/{source-name}.py
@@ -47,11 +47,15 @@ import { PipelineLifecycleService } from './services/pipeline-lifecycle.service'
 import { PipelineSchedulerService } from './services/pipeline-scheduler.service';
 import { ScheduledPipelineWorkerService } from './services/scheduled-pipeline-worker.service';
 import { SchemaValidationService } from './services/schema-validation.service';
+import {
+  PipelineJobsProcessor,
+  IncrementalSyncProcessor,
+  PollingChecksProcessor,
+} from './services/pipeline-job-processor.service';
 
-// RabbitMQ Services
-import { RabbitMQModule } from '../queue/rabbitmq.module';
-import { RabbitMQService } from '../queue/rabbitmq.service';
-import { RabbitMQJobHandlerService } from './services/rabbitmq-job-handler.service';
+// Queue (BullMQ + Redis)
+import { BullmqModule } from '../queue/bullmq.module';
+import { PipelineQueueService } from '../queue/pipeline-queue.service';
 
 // Gateways
 import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
@@ -73,8 +77,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
 
-    // RabbitMQ module for job queuing and scheduling
-    RabbitMQModule.forRoot(),
+    // BullMQ + Redis for job queuing, scheduling, and real-time pub/sub
+    BullmqModule,
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
@@ -112,11 +116,10 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     // Python ETL Service - HTTP client for Python FastAPI microservice
     PythonETLService, // Handles collect, transform, emit via Python service
 
-    // RabbitMQ Services - Job queue and handlers
-    // RabbitMQ provides: message queuing, topic exchange for pub/sub,
-    // delayed messages for scheduling, polling consumers for CDC
-    RabbitMQService, // Core RabbitMQ service for job management
-    RabbitMQJobHandlerService, // Job handlers for sync operations
+    // BullMQ job processors (workers for pipeline-jobs, incremental-sync, polling-checks)
+    PipelineJobsProcessor,
+    IncrementalSyncProcessor,
+    PollingChecksProcessor,
 
     // Schema Validation
     SchemaValidationService, // Validates database schema on startup
@@ -132,7 +135,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     PipelineLifecycleService,
     PipelineSchedulerService,
     PythonETLService,
-    RabbitMQService,
+    PipelineQueueService,
 
     // Export repositories for advanced use cases
     PipelineRepository,

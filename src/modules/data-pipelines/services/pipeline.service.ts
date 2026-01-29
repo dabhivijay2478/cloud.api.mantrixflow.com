@@ -44,7 +44,7 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { RabbitMQService } from '../../queue/rabbitmq.service';
+import { PipelineQueueService } from '../../queue/pipeline-queue.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -77,7 +77,7 @@ export class PipelineService {
     private readonly roleService: OrganizationRoleService,
     private readonly lifecycleService: PipelineLifecycleService,
     private readonly schedulerService: PipelineSchedulerService,
-    private readonly rabbitmqService: RabbitMQService,
+    private readonly pipelineQueueService: PipelineQueueService,
     private readonly connectionService: ConnectionService,
   ) {}
 
@@ -469,8 +469,8 @@ export class PipelineService {
     console.log(`${'='.repeat(60)}\n`);
 
     // ROOT FIX: Publish starting status via Socket.io for real-time UI update
-    if (this.rabbitmqService.isReady()) {
-      await this.rabbitmqService.publishStatusUpdate({
+    if (this.pipelineQueueService.isReady()) {
+      await this.pipelineQueueService.publishStatusUpdate({
         pipelineId: pipeline.id,
         organizationId: pipeline.organizationId,
         status: 'running',
@@ -720,8 +720,8 @@ export class PipelineService {
             console.log(`   📈 PROGRESS: ${totalRowsWritten.toLocaleString()} rows written so far`);
 
             // ROOT FIX: Publish real-time progress update via Socket.io
-            if (this.rabbitmqService.isReady()) {
-              await this.rabbitmqService.publishStatusUpdate({
+            if (this.pipelineQueueService.isReady()) {
+              await this.pipelineQueueService.publishStatusUpdate({
                 pipelineId: pipeline.id,
                 organizationId: pipeline.organizationId,
                 status: 'running',
@@ -932,8 +932,8 @@ export class PipelineService {
 
       // ROOT FIX: Publish completion status via Socket.io for real-time UI update
       // Use newTotalRowsProcessed to show cumulative total in UI
-      if (this.rabbitmqService.isReady()) {
-        await this.rabbitmqService.publishStatusUpdate({
+      if (this.pipelineQueueService.isReady()) {
+        await this.pipelineQueueService.publishStatusUpdate({
           pipelineId: pipeline.id,
           organizationId: pipeline.organizationId,
           status: targetStatus,
@@ -981,8 +981,8 @@ export class PipelineService {
       this.logger.error(`Pipeline ${pipeline.id} run ${runId} failed: ${errorMessage}`);
 
       // ROOT FIX: Publish failure status via Socket.io for real-time UI update
-      if (this.rabbitmqService.isReady()) {
-        await this.rabbitmqService.publishStatusUpdate({
+      if (this.pipelineQueueService.isReady()) {
+        await this.pipelineQueueService.publishStatusUpdate({
           pipelineId: pipeline.id,
           organizationId: pipeline.organizationId,
           status: 'failed',
