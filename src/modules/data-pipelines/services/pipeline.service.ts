@@ -855,9 +855,10 @@ export class PipelineService {
       // Get the final checkpoint (Python may have updated it)
       const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
 
-      // ROOT FIX: Always set status to 'idle' after completion so pipeline can run again
-      // Previously was 'completed' which prevented scheduled runs
-      const targetStatus = PipelineStatus.IDLE;
+      // ROOT FIX: For incremental/CDC pipelines, set status to 'listing' so CDC polling picks them up
+      // every 5 min (regardless of schedule). For full-only pipelines, use 'idle'.
+      const targetStatus =
+        pipeline.syncMode === 'incremental' ? PipelineStatus.LISTING : PipelineStatus.IDLE;
 
       // Update totalRowsProcessed - cumulative across all runs
       const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;

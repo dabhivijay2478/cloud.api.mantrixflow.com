@@ -8,6 +8,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
+import { normalizeEtlBaseUrl } from '../../../common/utils/etl-url';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
 import type { WriteResult, ColumnInfo } from '../types/common.types';
@@ -24,12 +25,39 @@ export class PythonETLService {
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly connectionService: ConnectionService,
   ) {
-    this.pythonServiceUrl =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
-      this.configService.get<string>('PYTHON_SERVICE_URL') ||
-      'http://localhost:8001';
-
+    const raw = this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
+      this.configService.get<string>('PYTHON_SERVICE_URL');
+    this.pythonServiceUrl = normalizeEtlBaseUrl(raw);
+    if (!this.pythonServiceUrl) {
+      const hint = raw != null && String(raw).trim().length > 0
+        ? ` Value was normalized to an invalid URL (e.g. missing host). Set a valid base URL like http://localhost:8001 in apps/api/.env (from the api directory so .env is loaded).`
+        : ' Set ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL in apps/api/.env and run the API from the api directory so .env is loaded.';
+      throw new Error(
+        `ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be a valid URL with host.${hint}`,
+      );
+    }
     this.logger.log(`Python ETL Service URL: ${this.pythonServiceUrl}`);
+  }
+
+  /**
+   * Ensures the request URL is valid before passing to axios (avoids "Invalid URL" from axios).
+   */
+  private assertValidRequestUrl(url: string, label: string): void {
+    if (!url || typeof url !== 'string') {
+      throw new Error(
+        `Python ETL ${label}: request URL is missing. Check ETL_PYTHON_SERVICE_URL (e.g. http://localhost:8001) and run the API from apps/api so .env is loaded.`,
+      );
+    }
+    try {
+      const parsed = new URL(url);
+      if (!parsed.host) {
+        throw new Error('URL has no host');
+      }
+    } catch (err: any) {
+      throw new Error(
+        `Python ETL ${label}: invalid URL "${url}". ${err?.message ?? ''} Set ETL_PYTHON_SERVICE_URL in apps/api/.env to a valid base URL (e.g. http://localhost:8001).`,
+      );
+    }
   }
 
   /**
@@ -49,10 +77,12 @@ export class PythonETLService {
 
     try {
       const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
+      const discoverUrl = `${this.pythonServiceUrl}/discover-schema/${sourceType}`;
+      this.assertValidRequestUrl(discoverUrl, 'discover-schema');
 
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.pythonServiceUrl}/discover-schema/${sourceType}`,
+          discoverUrl,
           {
             source_type: sourceType,
             connection_config: connectionConfig,
@@ -110,10 +140,12 @@ export class PythonETLService {
 
     try {
       const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
+      const collectUrl = `${this.pythonServiceUrl}/collect/${sourceType}`;
+      this.assertValidRequestUrl(collectUrl, 'collect');
 
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.pythonServiceUrl}/collect/${sourceType}`,
+          collectUrl,
           {
             source_type: sourceType,
             connection_config: connectionConfig,
@@ -168,9 +200,12 @@ export class PythonETLService {
     }
 
     try {
+      const transformUrl = `${this.pythonServiceUrl}/transform`;
+      this.assertValidRequestUrl(transformUrl, 'transform');
+
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.pythonServiceUrl}/transform`,
+          transformUrl,
           {
             rows,
             transform_script: transformScript,
@@ -209,10 +244,12 @@ export class PythonETLService {
       // Get destination data source type
       const destDataSource = await this.getDataSourceType(destinationSchema.dataSourceId!);
       const destType = this.normalizeSourceType(destDataSource);
+      const emitUrl = `${this.pythonServiceUrl}/emit/${destType}`;
+      this.assertValidRequestUrl(emitUrl, 'emit');
 
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.pythonServiceUrl}/emit/${destType}`,
+          emitUrl,
           {
             destination_type: destType,
             connection_config: connectionConfig,

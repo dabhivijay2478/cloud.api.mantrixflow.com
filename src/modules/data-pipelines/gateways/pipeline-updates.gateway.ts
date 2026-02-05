@@ -53,36 +53,16 @@ interface PipelineRunUpdatePayload {
 @WebSocketGateway({
   cors: {
     origin: (() => {
-      // Parse allowed origins from environment
-      const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || '';
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      const nodeEnv = process.env.NODE_ENV || 'development';
-      
-      // Build allowed origins array
+      // Only from environment (apps/api/.env): ALLOWED_ORIGINS, FRONTEND_URL
+      const allowedOriginsEnv = process.env.ALLOWED_ORIGINS ?? '';
+      const frontendUrl = process.env.FRONTEND_URL ?? '';
       const allowedOrigins: string[] = [];
-      
-      // Add origins from ALLOWED_ORIGINS env var
       if (allowedOriginsEnv) {
-        allowedOrigins.push(...allowedOriginsEnv.split(',').map((o) => o.trim()));
+        allowedOrigins.push(...allowedOriginsEnv.split(',').map((o) => o.trim()).filter(Boolean));
       }
-      
-      // Add frontend URL
-      if (frontendUrl) {
+      if (frontendUrl && !allowedOrigins.includes(frontendUrl)) {
         allowedOrigins.push(frontendUrl);
       }
-      
-      // Add cloud.mantrixflow.com domains
-      allowedOrigins.push(
-        'https://cloud.mantrixflow.com',
-        'https://cloud.api.mantrixflow.com',
-        'https://cloud.api.etl.server.mantrixflow.com',
-      );
-      
-      // In development, add localhost origins
-      if (nodeEnv === 'development') {
-        allowedOrigins.push('http://localhost:3000', 'http://localhost:3001');
-      }
-      
       return allowedOrigins;
     })(),
     credentials: true,

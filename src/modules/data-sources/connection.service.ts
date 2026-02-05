@@ -15,6 +15,7 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { Pool } from 'pg';
+import { normalizeEtlBaseUrl } from '../../common/utils/etl-url';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import type { DataSourceConnection } from '../../database/schemas/data-sources';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
@@ -56,10 +57,15 @@ export class ConnectionService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.pythonServiceUrl =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
-      this.configService.get<string>('PYTHON_SERVICE_URL') ||
-      'http://localhost:8001';
+    this.pythonServiceUrl = normalizeEtlBaseUrl(
+      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
+        this.configService.get<string>('PYTHON_SERVICE_URL'),
+    );
+    if (!this.pythonServiceUrl) {
+      throw new Error(
+        'ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be set in environment (e.g. in apps/api/.env)',
+      );
+    }
   }
 
   /**

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { join } from 'path';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
@@ -15,7 +16,10 @@ import { UserModule } from './modules/users/user.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      envFilePath: [
+        join(process.cwd(), 'apps/api/.env'),
+        join(process.cwd(), '.env'),
+      ],
       cache: true,
     }),
 

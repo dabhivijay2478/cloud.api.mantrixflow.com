@@ -8,14 +8,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { PipelineQueueService } from './pipeline-queue.service';
+import { QUEUE_NAMES } from './queue.constants';
 
-export const QUEUE_NAMES = {
-  PIPELINE_JOBS: 'pipeline-jobs',
-  INCREMENTAL_SYNC: 'incremental-sync',
-  POLLING_CHECKS: 'polling-checks',
-} as const;
-
-export const REDIS_PUBSUB_CHANNEL = 'pipeline-updates';
+export { QUEUE_NAMES, REDIS_PUBSUB_CHANNEL } from './queue.constants';
 
 @Module({
   imports: [

@@ -21,16 +21,13 @@ async function bootstrap() {
     }),
   );
 
-  // Get environment variables
-  const nodeEnv = configService.get<string>('NODE_ENV', 'development');
+  // All URLs and origins from environment (apps/api/.env) — no hardcoded URLs
   const apiUrl = configService.get<string>('API_URL');
-  const devServerUrl = configService.get<string>('DEV_SERVER_URL', 'http://localhost:8000');
+  const devServerUrl = configService.get<string>('DEV_SERVER_URL');
   const frontendUrl = configService.get<string>('FRONTEND_URL');
-  const nextPublicAppUrl = configService.get<string>('APP_URL');
+  const appUrl = configService.get<string>('APP_URL');
   const allowedOriginsEnv = configService.get<string>('ALLOWED_ORIGINS');
-  const defaultDevOrigin = configService.get<string>('DEFAULT_DEV_ORIGIN', 'http://localhost:3000');
 
-  // Swagger/OpenAPI Configuration
   const swaggerConfig = new DocumentBuilder()
     .setTitle('MantrixFlow PostgreSQL Connector API')
     .setDescription(
@@ -48,13 +45,8 @@ async function bootstrap() {
       'JWT-auth',
     );
 
-  // Add servers based on environment
-  if (nodeEnv === 'development') {
-    swaggerConfig.addServer(devServerUrl, 'Development server');
-  }
-  if (apiUrl) {
-    swaggerConfig.addServer(apiUrl, 'Production server');
-  }
+  if (devServerUrl) swaggerConfig.addServer(devServerUrl, 'Development server');
+  if (apiUrl) swaggerConfig.addServer(apiUrl, 'Production server');
 
   const document = SwaggerModule.createDocument(app, swaggerConfig.build());
   SwaggerModule.setup('api/docs', app, document, {
@@ -68,86 +60,22 @@ async function bootstrap() {
     ],
   });
 
-  // Enable CORS for API access
+  // CORS: only origins from env (ALLOWED_ORIGINS, FRONTEND_URL, APP_URL, API_URL)
   const allowedOrigins: string[] = [];
-
-  // Add origins from ALLOWED_ORIGINS env var (comma-separated)
   if (allowedOriginsEnv) {
     allowedOrigins.push(...allowedOriginsEnv.split(',').map((origin) => origin.trim()));
   }
+  if (frontendUrl && !allowedOrigins.includes(frontendUrl)) allowedOrigins.push(frontendUrl);
+  if (appUrl && !allowedOrigins.includes(appUrl)) allowedOrigins.push(appUrl);
+  if (apiUrl && !allowedOrigins.includes(apiUrl)) allowedOrigins.push(apiUrl);
 
-  // Add individual origin env vars
-  if (frontendUrl) {
-    allowedOrigins.push(frontendUrl);
-  }
-  if (nextPublicAppUrl) {
-    allowedOrigins.push(nextPublicAppUrl);
-  }
-
-  // Add API URL itself (for same-origin requests)
-  if (apiUrl) {
-    allowedOrigins.push(apiUrl);
-  }
-
-  // In development, add default localhost origins
-  if (nodeEnv === 'development') {
-    if (!allowedOrigins.includes(defaultDevOrigin)) {
-      allowedOrigins.push(defaultDevOrigin);
-    }
-    // Add localhost:3001 for development
-    const devOrigin2 = 'http://localhost:3001';
-    if (!allowedOrigins.includes(devOrigin2)) {
-      allowedOrigins.push(devOrigin2);
-    }
-  }
-
-  // CORS configuration
   app.enableCors({
     origin: (
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean | string) => void,
     ) => {
-      // Allow requests with no origin (direct browser access, Postman, curl, etc.)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // Check if origin is in allowed list
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, origin);
-      }
-
-      // Allow Vercel domains (production and preview)
-      if (
-        origin.includes('.vercel.app') ||
-        origin.includes('.vercel.sh') ||
-        origin.startsWith('https://vercel.live')
-      ) {
-        return callback(null, origin);
-      }
-
-      // Allow production domain (mantrixflow.com and cloud subdomains)
-      if (
-        origin === 'https://mantrixflow.com' ||
-        origin === 'http://mantrixflow.com' ||
-        origin.includes('cloud.mantrixflow.com') ||
-        origin.includes('cloud.api.mantrixflow.com') ||
-        origin.includes('cloud.api.etl.server.mantrixflow.com')
-      ) {
-        return callback(null, origin);
-      }
-
-      // In development, allow localhost with any port
-      if (nodeEnv === 'development' && origin.startsWith('http://localhost:')) {
-        return callback(null, origin);
-      }
-
-      // Allow same-origin requests (when origin matches API URL)
-      if (apiUrl && origin === apiUrl) {
-        return callback(null, origin);
-      }
-
-      // Reject all other origins
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, origin);
       return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -158,10 +86,19 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  const port = configService.get<number>('PORT', 5000);
+  const port = configService.get<number>('PORT');
+  if (port == null || port === 0) {
+    throw new Error('PORT must be set in environment (e.g. in apps/api/.env)');
+  }
   await app.listen(port, '0.0.0.0');
-  logger.log(`🚀 Application is running on: http://localhost:${port}`);
-  logger.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  const appUrlLog = configService.get<string>('APP_URL');
+  if (appUrlLog) {
+    logger.log(`🚀 Application is running on: ${appUrlLog}`);
+    logger.log(`📚 Swagger documentation: ${appUrlLog}/api/docs`);
+  } else {
+    logger.log(`🚀 Application listening on port ${port} (set APP_URL in .env for full URL)`);
+    logger.log(`📚 Swagger: /api/docs`);
+  }
 }
 
 bootstrap();

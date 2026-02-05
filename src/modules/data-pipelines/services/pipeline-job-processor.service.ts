@@ -10,6 +10,7 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { Job } from 'bullmq';
+import { normalizeEtlBaseUrl } from '../../../common/utils/etl-url';
 import { PipelineService } from './pipeline.service';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PythonETLService } from './python-etl.service';
@@ -160,10 +161,15 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
     private readonly configService: ConfigService,
   ) {
     super();
-    this.pythonServiceUrl =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ||
-      this.configService.get<string>('PYTHON_SERVICE_URL') ||
-      'http://localhost:8001';
+    this.pythonServiceUrl = normalizeEtlBaseUrl(
+      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
+        this.configService.get<string>('PYTHON_SERVICE_URL'),
+    );
+    if (!this.pythonServiceUrl) {
+      throw new Error(
+        'ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be set in environment (e.g. in apps/api/.env)',
+      );
+    }
   }
 
   async onModuleInit(): Promise<void> {

@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
-import { QUEUE_NAMES, REDIS_PUBSUB_CHANNEL } from './bullmq.module';
+import { QUEUE_NAMES, REDIS_PUBSUB_CHANNEL } from './queue.constants';
 
 export interface FullSyncJobData {
   pipelineId: string;

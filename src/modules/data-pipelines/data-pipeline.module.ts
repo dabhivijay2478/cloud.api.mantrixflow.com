@@ -55,7 +55,6 @@ import {
 
 // Queue (BullMQ + Redis)
 import { BullmqModule } from '../queue/bullmq.module';
-import { PipelineQueueService } from '../queue/pipeline-queue.service';
 
 // Gateways
 import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
@@ -129,13 +128,13 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
   ],
   exports: [
     // Export services for use in other modules
+    // (PipelineQueueService is from BullmqModule; import BullmqModule where needed.)
     PipelineService,
     SourceSchemaService,
     DestinationSchemaService,
     PipelineLifecycleService,
     PipelineSchedulerService,
     PythonETLService,
-    PipelineQueueService,
 
     // Export repositories for advanced use cases
     PipelineRepository,
