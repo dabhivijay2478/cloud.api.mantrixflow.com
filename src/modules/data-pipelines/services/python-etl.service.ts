@@ -115,8 +115,9 @@ export class PythonETLService {
         estimatedRowCount: response.data.estimated_row_count,
       };
     } catch (error: any) {
-      this.logger.error(`Schema discovery failed: ${error.message}`, error.stack);
-      throw new Error(`Schema discovery failed: ${error.message}`);
+      const detail = this.extractPythonError(error, 'Schema discovery');
+      this.logger.error(`Schema discovery failed: ${detail}`, error.stack);
+      throw new Error(`Schema discovery failed: ${detail}`);
     }
   }
 
@@ -187,8 +188,9 @@ export class PythonETLService {
         },
       };
     } catch (error: any) {
-      this.logger.error(`Collection failed: ${error.message}`, error.stack);
-      throw new Error(`Collection failed: ${error.message}`);
+      const detail = this.extractPythonError(error, 'Collection');
+      this.logger.error(`Collection failed: ${detail}`, error.stack);
+      throw new Error(`Collection failed: ${detail}`);
     }
   }
 
@@ -226,8 +228,9 @@ export class PythonETLService {
         checkpoint: response.data?.checkpoint,
       };
     } catch (error: any) {
-      this.logger.error(`Delta check failed: ${error.message}`, error.stack);
-      throw new Error(`Delta check failed: ${error.message}`);
+      const detail = this.extractPythonError(error, 'Delta check');
+      this.logger.error(`Delta check failed: ${detail}`, error.stack);
+      throw new Error(`Delta check failed: ${detail}`);
     }
   }
 
@@ -324,8 +327,9 @@ export class PythonETLService {
         errors: response.data.errors || [],
       };
     } catch (error: any) {
-      this.logger.error(`Emission failed: ${error.message}`, error.stack);
-      throw new Error(`Emission failed: ${error.message}`);
+      const detail = this.extractPythonError(error, 'Emission');
+      this.logger.error(`Emission failed: ${detail}`, error.stack);
+      throw new Error(`Emission failed: ${detail}`);
     }
   }
 
@@ -351,6 +355,35 @@ export class PythonETLService {
       sourceSchema.dataSourceId,
       'system', // System user for internal calls
     );
+  }
+
+  /**
+   * Extract the actual error detail from a Python FastAPI error response.
+   * FastAPI returns { "detail": "..." } in the body, but Axios only shows the status code.
+   */
+  private extractPythonError(error: any, operation: string): string {
+    // FastAPI error body: { detail: "Singer collect failed: ..." }
+    const pythonDetail =
+      error?.response?.data?.detail ||
+      error?.response?.data?.message ||
+      error?.response?.data?.error;
+
+    if (pythonDetail) {
+      const status = error?.response?.status || 'unknown';
+      return `${operation} failed (HTTP ${status}): ${pythonDetail}`;
+    }
+
+    // Axios timeout
+    if (error?.code === 'ECONNABORTED') {
+      return `${operation} timed out — Python ETL service did not respond in time`;
+    }
+
+    // Connection refused (Python service not running)
+    if (error?.code === 'ECONNREFUSED') {
+      return `${operation} failed — Python ETL service is not running at ${this.pythonServiceUrl}`;
+    }
+
+    return error?.message || `${operation} failed with unknown error`;
   }
 
   /**
