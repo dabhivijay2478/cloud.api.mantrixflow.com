@@ -1,13 +1,20 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // Buffer logs during startup so Pino captures everything
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+
+  // Use Pino as the global NestJS logger (replaces console / built-in Logger)
+  const pinoLogger = app.get(Logger);
+  app.useLogger(pinoLogger);
+
   const configService = app.get(ConfigService);
-  const logger = new Logger('Bootstrap');
+  const logger = pinoLogger;
 
   // Set global API prefix
   app.setGlobalPrefix('api');

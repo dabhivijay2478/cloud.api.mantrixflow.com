@@ -26,6 +26,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ActivityLoggerService } from '../../common/logger';
 import type { Request as ExpressRequest } from 'express';
 import {
   ApiBearerAuth,
@@ -66,7 +67,10 @@ type ExpressRequestType = ExpressRequest;
 export class PipelineController {
   private readonly logger = new Logger(PipelineController.name);
 
-  constructor(private readonly pipelineService: PipelineService) {}
+  constructor(
+    private readonly pipelineService: PipelineService,
+    private readonly activity: ActivityLoggerService,
+  ) {}
 
   // ============================================================================
   // PIPELINE CRUD OPERATIONS
@@ -102,6 +106,10 @@ export class PipelineController {
         ...dto,
         organizationId,
         userId,
+      });
+
+      this.activity.info('pipeline.created', `Pipeline created: ${pipeline.name}`, {
+        pipelineId: pipeline.id, organizationId, userId,
       });
 
       return createSuccessResponse(pipeline, 'Pipeline created successfully', HttpStatus.CREATED);
@@ -298,6 +306,11 @@ export class PipelineController {
         dto?.triggerType || 'manual',
         dto?.batchSize ? { batchSize: dto.batchSize } : undefined,
       );
+
+      this.activity.info('pipeline.started', `Pipeline run started: ${id}`, {
+        pipelineId: id, runId: run.id, userId,
+        metadata: { triggerType: dto?.triggerType || 'manual' },
+      });
 
       return createSuccessResponse(run, 'Pipeline run started successfully');
     } catch (error) {

@@ -22,6 +22,7 @@ import { Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { ActivityLoggerService } from '../../../common/logger';
 import { REDIS_PUBSUB_CHANNEL } from '../../queue/bullmq.module';
 
 interface PipelineUpdatePayload {
@@ -80,7 +81,10 @@ export class PipelineUpdatesGateway
   private redisSub: Redis | null = null;
   private notifyListeners: Array<{ channel: string; handler: (payload: string) => void }> = [];
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly activity: ActivityLoggerService,
+  ) {}
 
   async onModuleInit() {
     this.logger.log('Initializing Pipeline Updates Gateway...');
@@ -292,14 +296,18 @@ export class PipelineUpdatesGateway
    * Handle client connection
    */
   handleConnection(client: Socket) {
-    this.logger.log(`Client connected: ${client.id}`);
+    this.activity.info('ws.client_connected', `Client connected: ${client.id}`, {
+      metadata: { clientId: client.id },
+    });
   }
 
   /**
    * Handle client disconnection
    */
   handleDisconnect(client: Socket) {
-    this.logger.log(`Client disconnected: ${client.id}`);
+    this.activity.info('ws.client_disconnected', `Client disconnected: ${client.id}`, {
+      metadata: { clientId: client.id },
+    });
   }
 
   /**
@@ -319,12 +327,13 @@ export class PipelineUpdatesGateway
 
     // Join pipeline room
     client.join(`pipeline_${pipelineId}`);
-    this.logger.log(`Client ${client.id} joined pipeline_${pipelineId}`);
+    this.activity.info('ws.room_joined', `Client ${client.id} joined pipeline_${pipelineId}`, {
+      pipelineId, organizationId, metadata: { clientId: client.id, room: `pipeline_${pipelineId}` },
+    });
 
     // Also join organization room if provided
     if (organizationId) {
       client.join(`org_${organizationId}`);
-      this.logger.log(`Client ${client.id} joined org_${organizationId}`);
     }
 
     client.emit('joined', { pipelineId, organizationId });
@@ -342,7 +351,9 @@ export class PipelineUpdatesGateway
 
     if (pipelineId) {
       client.leave(`pipeline_${pipelineId}`);
-      this.logger.log(`Client ${client.id} left pipeline_${pipelineId}`);
+      this.activity.info('ws.room_left', `Client ${client.id} left pipeline_${pipelineId}`, {
+        pipelineId, metadata: { clientId: client.id },
+      });
     }
 
     client.emit('left', { pipelineId });
@@ -357,7 +368,9 @@ export class PipelineUpdatesGateway
 
     if (runId) {
       client.join(`run_${runId}`);
-      this.logger.log(`Client ${client.id} joined run_${runId}`);
+      this.activity.debug('ws.room_joined', `Client ${client.id} joined run_${runId}`, {
+        runId, metadata: { clientId: client.id },
+      });
       client.emit('joined_run', { runId });
     }
   }

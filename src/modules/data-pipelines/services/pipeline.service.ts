@@ -13,6 +13,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ActivityLoggerService } from '../../../common/logger';
 import type {
   PipelineDestinationSchema,
   PipelineSourceSchema,
@@ -79,6 +80,7 @@ export class PipelineService {
     private readonly schedulerService: PipelineSchedulerService,
     private readonly pipelineQueueService: PipelineQueueService,
     private readonly connectionService: ConnectionService,
+    private readonly activity: ActivityLoggerService,
   ) {}
 
   /**
@@ -455,18 +457,23 @@ export class PipelineService {
       : 'Incremental sync (Python handles CDC and checkpoint management)';
 
     // Log startup with detailed sync info
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`🚀 STARTING PIPELINE: ${pipeline.name}`);
-    console.log(`${'='.repeat(60)}`);
-    console.log(`   Run ID:          ${runId}`);
-    console.log(`   Sync Mode:       ${pipeline.syncMode}`);
-    console.log(`   Sync Type:       ${syncType.toUpperCase()}`);
-    console.log(`   Sync Reason:     ${syncReason}`);
-    console.log(`   Batch Size:      ${options?.batchSize || DEFAULT_BATCH_SIZE}`);
-    console.log(
-      `   Source:          ${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`,
+    this.activity.info(
+      syncType === 'full' ? 'sync.full_started' : 'sync.incremental_started',
+      `Pipeline started: ${pipeline.name}`,
+      {
+        pipelineId: pipeline.id,
+        runId,
+        organizationId: pipeline.organizationId,
+        userId,
+        metadata: {
+          syncMode: pipeline.syncMode,
+          syncType,
+          syncReason,
+          batchSize: options?.batchSize || DEFAULT_BATCH_SIZE,
+          source: `${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`,
+        },
+      },
     );
-    console.log(`${'='.repeat(60)}\n`);
 
     // ROOT FIX: Publish starting status via Socket.io for real-time UI update
     if (this.pipelineQueueService.isReady()) {
@@ -527,11 +534,9 @@ export class PipelineService {
 
       // Log checkpoint restoration if applicable
       if (!isFullSync && checkpoint?.rowsProcessed) {
-        console.log(
-          `📂 Resuming from checkpoint: ${checkpoint.rowsProcessed.toLocaleString()} rows already processed`,
-        );
-      } else if (isFullSync) {
-        console.log(`🔄 Full sync: Starting from beginning`);
+        this.activity.info('sync.collect', `Resuming from checkpoint: ${checkpoint.rowsProcessed} rows already processed`, {
+          pipelineId: pipeline.id, runId, metadata: { checkpoint },
+        });
       }
 
       while (hasMore) {
@@ -541,7 +546,9 @@ export class PipelineService {
         // STEP 1: Collect data from source (with retry)
         let sourceData: { rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean };
 
-        console.log(`\n📦 Batch ${batchCount}: Collecting data...`);
+        this.activity.debug('sync.collect', `Batch ${batchCount}: Collecting data`, {
+          pipelineId: pipeline.id, runId, metadata: { batchCount, offset },
+        });
 
         // Get connection config for source
         const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
@@ -584,16 +591,15 @@ export class PipelineService {
             if (attempt === retryAttempts - 1) {
               throw error;
             }
-            console.log(
-              `   ⚠️  Collect attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms...`,
-            );
-            this.logger.warn(`Collect attempt ${attempt + 1} failed, retrying...`);
+            this.activity.warn('sync.retry', `Collect attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms`, {
+              pipelineId: pipeline.id, runId, metadata: { attempt: attempt + 1, phase: 'collect' },
+            });
             await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
           }
         }
 
         if (!sourceData! || sourceData!.rows.length === 0) {
-          console.log(`   ✓ No more data to process`);
+          this.activity.info('sync.collect', 'No more data to process', { pipelineId: pipeline.id, runId });
           break;
         }
 
@@ -601,22 +607,19 @@ export class PipelineService {
         // Python returns total_rows which is the actual total in source
         if (sourceData.totalRows && (!estimatedTotalRows || estimatedTotalRows !== sourceData.totalRows)) {
           estimatedTotalRows = sourceData.totalRows;
-          console.log(`   📊 Total rows in source: ${estimatedTotalRows.toLocaleString()}`);
         }
         
         // Also check checkpoint for total_records from Python bookmarks (more authoritative)
         const resultMetadataForTotal = (sourceData as any).metadata;
         if (resultMetadataForTotal?.checkpoint) {
           const pythonCheckpoint = resultMetadataForTotal.checkpoint as any;
-          // Python stores total_records in bookmarks.stream_id.total_records
           if (pythonCheckpoint?.bookmarks) {
             const bookmarks = pythonCheckpoint.bookmarks;
-            const streamId = Object.keys(bookmarks)[0]; // Get first stream
+            const streamId = Object.keys(bookmarks)[0];
             if (streamId && bookmarks[streamId]?.total_records) {
               const pythonTotalRecords = bookmarks[streamId].total_records;
               if (pythonTotalRecords && (!estimatedTotalRows || estimatedTotalRows !== pythonTotalRecords)) {
                 estimatedTotalRows = pythonTotalRecords;
-                console.log(`   📊 Total rows from checkpoint: ${pythonTotalRecords.toLocaleString()}`);
               }
             }
           }
@@ -629,9 +632,10 @@ export class PipelineService {
           ? Math.min(100, Math.round((totalRowsRead / estimatedTotalRows) * 100))
           : undefined;
 
-        console.log(
-          `   📥 Collected ${sourceData.rows.length.toLocaleString()} rows (Total: ${totalRowsRead.toLocaleString()}${estimatedTotalRows ? `/${estimatedTotalRows.toLocaleString()}` : ''}${percentage ? ` - ${percentage}%` : ''})`,
-        );
+        this.activity.info('sync.collect', `Collected ${sourceData.rows.length} rows`, {
+          pipelineId: pipeline.id, runId,
+          metadata: { batchCount, rowsThisBatch: sourceData.rows.length, totalRowsRead, estimatedTotalRows, percentage },
+        });
 
         // Primary keys are determined from destination schema upsertKey if available
         const primaryKeys = (destinationSchema.upsertKey as string[]) || [];
@@ -675,9 +679,9 @@ export class PipelineService {
         }
         // else: default remains 'append' - safest default for data preservation
 
-        console.log(
-          `   📤 Writing ${sourceData.rows.length.toLocaleString()} rows (mode: ${effectiveWriteMode})...`,
-        );
+        this.activity.debug('sync.emit', `Writing ${sourceData.rows.length} rows (mode: ${effectiveWriteMode})`, {
+          pipelineId: pipeline.id, runId, metadata: { writeMode: effectiveWriteMode, rowCount: sourceData.rows.length },
+        });
 
         // STEP 2: Emit data to destination (with internal transformation)
         // Get connection config for destination
@@ -714,10 +718,14 @@ export class PipelineService {
               writeResult.rowsWritten / Math.max(parseFloat(batchDuration), 0.1)
             ).toFixed(0);
 
-            console.log(
-              `   ✅ Written: ${writeResult.rowsWritten.toLocaleString()} | Skipped: ${writeResult.rowsSkipped} | Failed: ${writeResult.rowsFailed} | ${batchDuration}s (${rate} rows/sec)`,
-            );
-            console.log(`   📈 PROGRESS: ${totalRowsWritten.toLocaleString()} rows written so far`);
+            this.activity.info('sync.progress', `Batch ${batchCount} written: ${writeResult.rowsWritten} rows (${rate} rows/sec)`, {
+              pipelineId: pipeline.id, runId,
+              metadata: {
+                batchCount, batchDurationSec: parseFloat(batchDuration), rowsPerSec: parseInt(rate, 10),
+                written: writeResult.rowsWritten, skipped: writeResult.rowsSkipped, failed: writeResult.rowsFailed,
+                totalWritten: totalRowsWritten,
+              },
+            });
 
             // ROOT FIX: Publish real-time progress update via Socket.io
             if (this.pipelineQueueService.isReady()) {
@@ -732,7 +740,9 @@ export class PipelineService {
             }
 
             if (writeResult.errors && writeResult.errors.length > 0) {
-              console.log(`   ⚠️  ${writeResult.errors.length} errors in batch`);
+              this.activity.warn('sync.emit', `${writeResult.errors.length} errors in batch ${batchCount}`, {
+                pipelineId: pipeline.id, runId, metadata: { errorCount: writeResult.errors.length },
+              });
               allErrors.push(...writeResult.errors);
             }
             break;
@@ -740,10 +750,9 @@ export class PipelineService {
             if (attempt === retryAttempts - 1) {
               throw error;
             }
-            console.log(
-              `   ⚠️  Emit attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms...`,
-            );
-            this.logger.warn(`Emit attempt ${attempt + 1} failed, retrying...`);
+            this.activity.warn('sync.retry', `Emit attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms`, {
+              pipelineId: pipeline.id, runId, metadata: { attempt: attempt + 1, phase: 'emit' },
+            });
             await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
           }
         }
@@ -756,18 +765,13 @@ export class PipelineService {
         offset += sourceData.rows.length; // Use actual rows collected, not batchSize
         cursor = sourceData.nextCursor;
 
-        // Debug: log pagination state
-        console.log(
-          `   🔄 Pagination: hasMore=${hasMore}, nextOffset=${offset}, cursor=${cursor || 'none'}, rowsThisBatch=${sourceData.rows.length}, batchSize=${batchSize}, sourceHasMore=${sourceData.hasMore}`,
-        );
-
         // Safety check: If we got fewer rows than batchSize, we've likely reached the end
         // But trust the collector's hasMore flag if it's explicitly set
         if (sourceData.rows.length < batchSize && sourceData.hasMore !== true) {
           hasMore = false;
-          console.log(
-            `   ✓ End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`,
-          );
+          this.activity.debug('sync.collect', `End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`, {
+            pipelineId: pipeline.id, runId,
+          });
         }
 
         // Python returns updated checkpoint in metadata - save it
@@ -894,19 +898,14 @@ export class PipelineService {
       });
 
       // Log completion summary
-      console.log(`\n${'='.repeat(60)}`);
-      console.log(`✅ PIPELINE COMPLETED: ${pipeline.name}`);
-      console.log(`${'='.repeat(60)}`);
-      console.log(`   Sync Type:       ${syncType.toUpperCase()}`);
-      console.log(`   Rows Read:       ${totalRowsRead.toLocaleString()}`);
-      console.log(`   Rows Written:    ${totalRowsWritten.toLocaleString()}`);
-      console.log(`   Rows Skipped:    ${totalRowsSkipped.toLocaleString()}`);
-      console.log(`   Rows Failed:     ${totalRowsFailed.toLocaleString()}`);
-      console.log(`   Duration:        ${durationSeconds}s`);
-      console.log(`   Final Status:    ${targetStatus}`);
-      console.log(`${'='.repeat(60)}\n`);
-
-      this.logger.log(`Pipeline ${pipeline.id} status set to ${targetStatus} after completion`);
+      this.activity.info('pipeline.completed', `Pipeline completed: ${pipeline.name}`, {
+        pipelineId: pipeline.id, runId, organizationId: pipeline.organizationId, userId,
+        metadata: {
+          syncType, rowsRead: totalRowsRead, rowsWritten: totalRowsWritten,
+          rowsSkipped: totalRowsSkipped, rowsFailed: totalRowsFailed,
+          durationSeconds, finalStatus: targetStatus,
+        },
+      });
 
       // Log activity
       await this.activityLogService.logPipelineRunAction(
@@ -1444,7 +1443,7 @@ export class PipelineService {
       );
 
       // Collect all data (for simplicity, batching can be added later)
-      console.log(`\n📦 Collecting data from ${sourceSchemaInfo.sourceType}...`);
+      this.activity.info('sync.collect', `Collecting data from ${sourceSchemaInfo.sourceType}`, { pipelineId: pipeline.id, runId });
 
       const sourceData = await this.pythonETLService.collect({
         sourceSchema,
@@ -1456,7 +1455,7 @@ export class PipelineService {
       });
 
       if (!sourceData || sourceData.rows.length === 0) {
-        console.log(`   ✓ No data to transform`);
+        this.activity.info('sync.collect', 'No data to transform', { pipelineId: pipeline.id, runId });
         await this.pipelineRepository.updateRun(runId, {
           status: 'success',
           jobState: 'completed',
@@ -1469,12 +1468,12 @@ export class PipelineService {
       }
 
       totalRowsRead = sourceData.rows.length;
-      console.log(`   📥 Collected ${totalRowsRead.toLocaleString()} rows`);
+      this.activity.info('sync.collect', `Collected ${totalRowsRead} rows`, { pipelineId: pipeline.id, runId });
 
       // Transform using Python service
-      console.log(
-        `\n🔄 Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})...`,
-      );
+      this.activity.info('sync.transform', `Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`, {
+        pipelineId: pipeline.id, runId,
+      });
 
       const transformResult = await this.pythonETLService.transform({
         rows: sourceData.rows,
@@ -1486,13 +1485,8 @@ export class PipelineService {
         default: transformResult.transformedRows,
       };
 
-      // Log transformation results
-      for (const [entity, rows] of Object.entries(transformedData)) {
-        console.log(`   📋 Entity '${entity}': ${rows.length} rows`);
-      }
-
       // Emit to destination
-      console.log(`\n📤 Writing to ${destSchemaInfo.sourceType}...`);
+      this.activity.info('sync.emit', `Writing to ${destSchemaInfo.sourceType}`, { pipelineId: pipeline.id, runId });
 
       const destConnectionConfig = await this.connectionService.getDecryptedConnection(
         pipeline.organizationId,
@@ -1515,15 +1509,15 @@ export class PipelineService {
       }
 
       // Calculate totals
-      for (const [entity, result] of Object.entries(writeResults)) {
+      for (const [_entity, result] of Object.entries(writeResults)) {
         totalRowsWritten += result.rowsWritten;
-        console.log(`   ✓ ${entity}: ${result.rowsWritten} rows written`);
       }
 
       const duration = Date.now() - startTime;
-      console.log(
-        `\n✅ Pipeline completed: ${totalRowsWritten.toLocaleString()} rows written in ${(duration / 1000).toFixed(1)}s\n`,
-      );
+      this.activity.info('pipeline.completed', `Bidirectional pipeline completed: ${totalRowsWritten} rows written in ${(duration / 1000).toFixed(1)}s`, {
+        pipelineId: pipeline.id, runId, organizationId: pipeline.organizationId,
+        metadata: { totalRowsRead, totalRowsWritten, durationMs: duration },
+      });
 
       // Update run as success
       await this.pipelineRepository.updateRun(runId, {
@@ -1544,8 +1538,10 @@ export class PipelineService {
       const duration = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      console.log(`\n❌ Pipeline failed: ${errorMessage}\n`);
-      this.logger.error(`Bidirectional pipeline failed: ${errorMessage}`);
+      this.activity.error('pipeline.failed', `Bidirectional pipeline failed: ${errorMessage}`, {
+        pipelineId: pipeline.id, runId, organizationId: pipeline.organizationId,
+        metadata: { errorMessage, totalRowsRead, totalRowsWritten, durationMs: duration },
+      });
 
       // Update run as failed
       await this.pipelineRepository.updateRun(runId, {

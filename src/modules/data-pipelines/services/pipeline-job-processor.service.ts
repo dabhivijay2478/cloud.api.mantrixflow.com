@@ -9,6 +9,7 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Job } from 'bullmq';
+import { ActivityLoggerService } from '../../../common/logger';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineService } from './pipeline.service';
 import { PythonETLService } from './python-etl.service';
@@ -32,13 +33,16 @@ export class PipelineJobsProcessor extends WorkerHost {
     private readonly pipelineService: PipelineService,
     private readonly pipelineRepository: PipelineRepository,
     private readonly pipelineQueueService: PipelineQueueService,
+    private readonly activity: ActivityLoggerService,
   ) {
     super();
   }
 
   async process(job: Job<FullSyncJobData, unknown, string>): Promise<void> {
     const { pipelineId, organizationId, userId, triggerType, batchSize } = job.data;
-    this.logger.log(`[FULL-SYNC] Starting job for pipeline ${pipelineId}`);
+    this.activity.info('job.full_sync', `Starting full sync job for pipeline ${pipelineId}`, {
+      pipelineId, organizationId, userId, metadata: { triggerType, batchSize, jobId: job.id },
+    });
 
     try {
       const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -117,13 +121,16 @@ export class IncrementalSyncProcessor extends WorkerHost {
     private readonly pipelineService: PipelineService,
     private readonly pipelineRepository: PipelineRepository,
     private readonly pipelineQueueService: PipelineQueueService,
+    private readonly activity: ActivityLoggerService,
   ) {
     super();
   }
 
   async process(job: Job<IncrementalSyncJobData, unknown, string>): Promise<void> {
     const { pipelineId, organizationId, userId, triggerType, batchSize } = job.data;
-    this.logger.log(`[INCREMENTAL-SYNC] Starting job for pipeline ${pipelineId}`);
+    this.activity.info('job.incremental_sync', `Starting incremental sync job for pipeline ${pipelineId}`, {
+      pipelineId, organizationId, userId, metadata: { triggerType, batchSize, jobId: job.id },
+    });
 
     try {
       const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -211,6 +218,7 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
     private readonly pipelineRepository: PipelineRepository,
     private readonly pipelineQueueService: PipelineQueueService,
     private readonly pythonETLService: PythonETLService,
+    private readonly activity: ActivityLoggerService,
   ) {
     super();
   }
