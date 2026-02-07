@@ -87,25 +87,32 @@ export class PipelineQueueService implements OnModuleInit, OnModuleDestroy {
   async enqueueFullSync(data: FullSyncJobData): Promise<void> {
     await this.pipelineJobsQueue.add('full-sync', data, {
       priority: data.triggerType === 'manual' ? 1 : 5,
-      attempts: 3,
+      attempts: 5,
       backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: { count: 2000 },
+      removeOnFail: { count: 5000 },
     });
     this.logger.debug(`Enqueued full sync job for pipeline ${data.pipelineId}`);
   }
 
   async enqueueIncrementalSync(data: IncrementalSyncJobData): Promise<void> {
     await this.incrementalSyncQueue.add('incremental-sync', data, {
+      jobId: `incremental:${data.pipelineId}`,
       priority: data.triggerType === 'manual' ? 1 : 5,
-      attempts: 3,
+      attempts: 5,
       backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: { count: 2000 },
+      removeOnFail: { count: 5000 },
     });
     this.logger.debug(`Enqueued incremental sync job for pipeline ${data.pipelineId}`);
   }
 
   async enqueueDeltaCheck(data: DeltaCheckJobData): Promise<void> {
     await this.pollingChecksQueue.add('delta-check', data, {
+      jobId: `delta:${data.pipelineId}`,
       attempts: 1,
       removeOnComplete: { count: 1000 },
+      removeOnFail: { count: 3000 },
     });
     this.logger.debug(`Enqueued delta check job for pipeline ${data.pipelineId}`);
   }

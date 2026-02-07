@@ -18,6 +18,7 @@ import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../d
 export class PythonETLService {
   private readonly logger = new Logger(PythonETLService.name);
   private readonly pythonServiceUrl: string;
+  private readonly pythonServiceAuthToken: string;
 
   constructor(
     private readonly httpService: HttpService,
@@ -28,6 +29,10 @@ export class PythonETLService {
     const raw = this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
       this.configService.get<string>('PYTHON_SERVICE_URL');
     this.pythonServiceUrl = normalizeEtlBaseUrl(raw);
+    this.pythonServiceAuthToken =
+      this.configService.get<string>('ETL_PYTHON_SERVICE_TOKEN') ||
+      this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ||
+      'internal-etl-service';
     if (!this.pythonServiceUrl) {
       const hint = raw != null && String(raw).trim().length > 0
         ? ` Value was normalized to an invalid URL (e.g. missing host). Set a valid base URL like http://localhost:8001 in apps/api/.env (from the api directory so .env is loaded).`
@@ -37,6 +42,15 @@ export class PythonETLService {
       );
     }
     this.logger.log(`Python ETL Service URL: ${this.pythonServiceUrl}`);
+  }
+
+  private buildRequestConfig(timeout: number) {
+    return {
+      timeout,
+      headers: {
+        Authorization: `Bearer ${this.pythonServiceAuthToken}`,
+      },
+    };
   }
 
   /**
@@ -91,9 +105,7 @@ export class PythonETLService {
             schema_name: sourceSchema.sourceSchema,
             query: sourceSchema.sourceQuery,
           },
-          {
-            timeout: 30000,
-          },
+          this.buildRequestConfig(30000),
         ),
       );
 
@@ -159,9 +171,7 @@ export class PythonETLService {
             offset,
             cursor: cursor || null,
           },
-          {
-            timeout: 300000, // 5 minutes for collection (was 60s)
-          },
+          this.buildRequestConfig(300000), // 5 minutes for collection (was 60s)
         ),
       );
 
@@ -179,6 +189,45 @@ export class PythonETLService {
     } catch (error: any) {
       this.logger.error(`Collection failed: ${error.message}`, error.stack);
       throw new Error(`Collection failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delta check for incremental polling.
+   */
+  async deltaCheck(options: {
+    sourceSchema: PipelineSourceSchema;
+    connectionConfig: any;
+    checkpoint?: any;
+  }): Promise<{ hasChanges: boolean; checkpoint?: any }> {
+    const { sourceSchema, connectionConfig, checkpoint } = options;
+    const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
+    const deltaUrl = `${this.pythonServiceUrl}/delta-check/${sourceType}`;
+    this.assertValidRequestUrl(deltaUrl, 'delta-check');
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post(
+          deltaUrl,
+          {
+            connection_config: connectionConfig,
+            source_config: sourceSchema.sourceConfig || {},
+            table_name: sourceSchema.sourceTable,
+            schema_name: sourceSchema.sourceSchema,
+            query: sourceSchema.sourceQuery,
+            checkpoint: checkpoint || null,
+          },
+          this.buildRequestConfig(60000),
+        ),
+      );
+
+      return {
+        hasChanges: !!response.data?.has_changes,
+        checkpoint: response.data?.checkpoint,
+      };
+    } catch (error: any) {
+      this.logger.error(`Delta check failed: ${error.message}`, error.stack);
+      throw new Error(`Delta check failed: ${error.message}`);
     }
   }
 
@@ -210,9 +259,7 @@ export class PythonETLService {
             rows,
             transform_script: transformScript,
           },
-          {
-            timeout: 300000, // 5 minutes for transformation (was 30s)
-          },
+          this.buildRequestConfig(300000), // 5 minutes for transformation (was 30s)
         ),
       );
 
@@ -221,8 +268,14 @@ export class PythonETLService {
         errors: response.data.errors || [],
       };
     } catch (error: any) {
-      this.logger.error(`Transformation failed: ${error.message}`, error.stack);
-      throw new Error(`Transformation failed: ${error.message}`);
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        error?.message ||
+        'Unknown transform error';
+      this.logger.error(`Transformation failed: ${detail}`, error?.stack);
+      throw new Error(`Transformation failed: ${detail}`);
     }
   }
 
@@ -260,9 +313,7 @@ export class PythonETLService {
             write_mode: writeMode,
             upsert_key: upsertKey || [],
           },
-          {
-            timeout: 300000, // 5 minutes for emission (was 60s)
-          },
+          this.buildRequestConfig(300000), // 5 minutes for emission (was 60s)
         ),
       );
 

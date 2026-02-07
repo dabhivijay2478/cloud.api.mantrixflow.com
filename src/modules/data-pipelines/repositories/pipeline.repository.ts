@@ -688,8 +688,43 @@ export class PipelineRepository {
   }
 
   /**
-   * Update pipeline checkpoint atomically
-   * ROOT FIX: Ensures checkpoint is always updated in a transaction
+   * Persist checkpoint atomically (single transaction).
+   */
+  async saveCheckpointStateAtomic(
+    pipelineId: string,
+    checkpoint: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.db.transaction(async (tx) => {
+        const checkpointValue = checkpoint as Record<string, unknown>;
+        const lastSyncValue = checkpointValue.lastSyncValue;
+        const lastSyncAtRaw = checkpointValue.lastSyncAt;
+        const lastSyncAt =
+          typeof lastSyncAtRaw === 'string' || lastSyncAtRaw instanceof Date
+            ? new Date(lastSyncAtRaw)
+            : new Date();
+
+        await tx
+          .update(pipelines)
+          .set({
+            checkpoint: checkpointValue as any,
+            lastSyncValue:
+              lastSyncValue === undefined || lastSyncValue === null
+                ? null
+                : String(lastSyncValue),
+            lastSyncAt,
+            updatedAt: new Date(),
+          })
+          .where(eq(pipelines.id, pipelineId));
+      });
+    } catch (error) {
+      this.logger.error(`[saveCheckpointStateAtomic] Error updating checkpoint: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Backward-compatible alias.
    */
   async updateCheckpointAtomic(
     pipelineId: string,
@@ -698,26 +733,10 @@ export class PipelineRepository {
       lastSyncValue: string | number;
       lastSyncAt: string;
       rowsProcessed: number;
+      [key: string]: unknown;
     },
   ): Promise<void> {
-    try {
-      await this.db
-        .update(pipelines)
-        .set({
-          checkpoint: checkpoint,
-          lastSyncValue: String(checkpoint.lastSyncValue),
-          lastSyncAt: new Date(checkpoint.lastSyncAt),
-          updatedAt: new Date(),
-        })
-        .where(eq(pipelines.id, pipelineId));
-
-      this.logger.debug(
-        `[updateCheckpointAtomic] Updated checkpoint for pipeline ${pipelineId}: ${checkpoint.watermarkField} = ${checkpoint.lastSyncValue}`,
-      );
-    } catch (error) {
-      this.logger.error(`[updateCheckpointAtomic] Error updating checkpoint: ${error}`);
-      throw error;
-    }
+    await this.saveCheckpointStateAtomic(pipelineId, checkpoint);
   }
 
   /**

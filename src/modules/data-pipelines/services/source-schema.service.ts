@@ -41,6 +41,18 @@ export class SourceSchemaService {
   ) {}
 
   /**
+   * Normalize source type aliases to canonical form.
+   * e.g. "postgres" | "pg" | "pgvector" | "redshift" → "postgresql"
+   */
+  private normalizeSourceType(type: string): string {
+    const t = type.toLowerCase().trim();
+    if (t === 'postgres' || t === 'pg' || t === 'pgvector' || t === 'redshift' || t === 'postgresql') {
+      return 'postgresql';
+    }
+    return t;
+  }
+
+  /**
    * Create source schema
    */
   async create(dto: CreateSourceSchemaInput, userId: string): Promise<PipelineSourceSchema> {
@@ -58,8 +70,8 @@ export class SourceSchemaService {
       if (dataSource.organizationId !== organizationId) {
         throw new ForbiddenException('Data source does not belong to this organization');
       }
-      // Validate source type matches data source type
-      if (dataSource.sourceType !== sourceType) {
+      // Validate source type matches data source type (normalize aliases like "postgres" → "postgresql")
+      if (this.normalizeSourceType(dataSource.sourceType) !== this.normalizeSourceType(sourceType)) {
         throw new BadRequestException(
           `Source type '${sourceType}' does not match data source type '${dataSource.sourceType}'`,
         );

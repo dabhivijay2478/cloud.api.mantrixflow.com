@@ -1,26 +1,27 @@
 /**
- * Pipeline Job Processor Service
- * BullMQ workers for pipeline-jobs, incremental-sync, and polling-checks queues.
- * Replaces RabbitMQ job handlers. Uses Redis pub/sub for real-time status (handled by gateway).
+ * BullMQ workers for full sync, incremental sync, and polling checks.
+ *
+ * Important behavior:
+ * - Workers wait for pipeline run completion before marking the BullMQ job done.
+ * - Polling checks call Python delta-check and atomically persist returned checkpoint.
  */
 
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
 import { Job } from 'bullmq';
-import { normalizeEtlBaseUrl } from '../../../common/utils/etl-url';
-import { PipelineService } from './pipeline.service';
 import { PipelineRepository } from '../repositories/pipeline.repository';
+import { PipelineService } from './pipeline.service';
 import { PythonETLService } from './python-etl.service';
 import {
-  PipelineQueueService,
+  DeltaCheckJobData,
   FullSyncJobData,
   IncrementalSyncJobData,
-  DeltaCheckJobData,
+  PipelineQueueService,
 } from '../../queue/pipeline-queue.service';
 import { QUEUE_NAMES } from '../../queue/bullmq.module';
+
+const RUN_POLL_INTERVAL_MS = 2_000;
+const RUN_WAIT_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 @Injectable()
 @Processor(QUEUE_NAMES.PIPELINE_JOBS)
@@ -36,33 +37,41 @@ export class PipelineJobsProcessor extends WorkerHost {
   }
 
   async process(job: Job<FullSyncJobData, unknown, string>): Promise<void> {
-    const data = job.data;
-    const { pipelineId, organizationId, userId, triggerType, batchSize } = data;
-
+    const { pipelineId, organizationId, userId, triggerType, batchSize } = job.data;
     this.logger.log(`[FULL-SYNC] Starting job for pipeline ${pipelineId}`);
 
     try {
       const pipeline = await this.pipelineRepository.findById(pipelineId);
-      if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found`);
+      if (!pipeline) {
+        throw new Error(`Pipeline ${pipelineId} not found`);
+      }
       if (pipeline.status === 'running') {
-        this.logger.warn(`[FULL-SYNC] Pipeline ${pipelineId} is already running, skipping`);
+        this.logger.warn(`[FULL-SYNC] Pipeline ${pipelineId} already running, skipping job`);
         return;
       }
 
-      await this.pipelineService.runPipeline(pipelineId, userId || 'system', triggerType, {
+      const run = await this.pipelineService.runPipeline(pipelineId, userId || 'system', triggerType, {
         batchSize: batchSize || 500,
       });
+      const completedRun = await this.waitForRunCompletion(run.id);
 
-      this.logger.log(`[FULL-SYNC] Completed job for pipeline ${pipelineId}`);
+      if (completedRun.status !== 'success') {
+        throw new Error(
+          completedRun.errorMessage || `Pipeline run ${completedRun.id} ended with status ${completedRun.status}`,
+        );
+      }
+
       await this.pipelineQueueService.publishStatusUpdate({
         pipelineId,
         organizationId,
         status: 'completed',
+        rowsProcessed: completedRun.rowsWritten || 0,
         timestamp: new Date().toISOString(),
       });
+      this.logger.log(`[FULL-SYNC] Completed job for pipeline ${pipelineId}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[FULL-SYNC] Job failed: ${errorMsg}`);
+      this.logger.error(`[FULL-SYNC] Job failed for ${pipelineId}: ${errorMsg}`);
       await this.pipelineQueueService.publishStatusUpdate({
         pipelineId,
         organizationId,
@@ -72,6 +81,23 @@ export class PipelineJobsProcessor extends WorkerHost {
       });
       throw error;
     }
+  }
+
+  private async waitForRunCompletion(runId: string) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt <= RUN_WAIT_TIMEOUT_MS) {
+      const run = await this.pipelineRepository.findRunById(runId);
+      if (!run) {
+        throw new Error(`Pipeline run ${runId} not found while waiting for completion`);
+      }
+      if (['success', 'failed', 'cancelled'].includes(run.status || '')) {
+        return run;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RUN_POLL_INTERVAL_MS));
+    }
+
+    throw new Error(`Timed out waiting for run ${runId} completion`);
   }
 
   @OnWorkerEvent('failed')
@@ -96,38 +122,50 @@ export class IncrementalSyncProcessor extends WorkerHost {
   }
 
   async process(job: Job<IncrementalSyncJobData, unknown, string>): Promise<void> {
-    const data = job.data;
-    const { pipelineId, organizationId, userId, triggerType, batchSize } = data;
-
+    const { pipelineId, organizationId, userId, triggerType, batchSize } = job.data;
     this.logger.log(`[INCREMENTAL-SYNC] Starting job for pipeline ${pipelineId}`);
 
     try {
       const pipeline = await this.pipelineRepository.findById(pipelineId);
-      if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found`);
-      if (!['listing', 'idle', 'completed'].includes(pipeline.status || '')) {
+      if (!pipeline) {
+        throw new Error(`Pipeline ${pipelineId} not found`);
+      }
+
+      if (!['listing', 'idle', 'completed', 'failed'].includes(pipeline.status || '')) {
         this.logger.warn(
           `[INCREMENTAL-SYNC] Pipeline ${pipelineId} is in ${pipeline.status} status, skipping`,
         );
         return;
       }
 
-      await this.pipelineService.runPipeline(
+      const mappedTriggerType =
+        triggerType === 'polling' ? 'polling' : triggerType === 'resume' ? 'manual' : 'scheduled';
+
+      const run = await this.pipelineService.runPipeline(
         pipelineId,
         userId || pipeline.createdBy || 'system',
-        triggerType === 'polling' ? 'polling' : triggerType === 'resume' ? 'manual' : 'scheduled',
+        mappedTriggerType,
         { batchSize: batchSize || 500 },
       );
+      const completedRun = await this.waitForRunCompletion(run.id);
 
-      this.logger.log(`[INCREMENTAL-SYNC] Completed job for pipeline ${pipelineId}`);
+      if (completedRun.status !== 'success') {
+        throw new Error(
+          completedRun.errorMessage || `Pipeline run ${completedRun.id} ended with status ${completedRun.status}`,
+        );
+      }
+
       await this.pipelineQueueService.publishStatusUpdate({
         pipelineId,
         organizationId,
         status: 'listing',
+        rowsProcessed: completedRun.rowsWritten || 0,
         timestamp: new Date().toISOString(),
       });
+      this.logger.log(`[INCREMENTAL-SYNC] Completed job for pipeline ${pipelineId}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[INCREMENTAL-SYNC] Job failed: ${errorMsg}`);
+      this.logger.error(`[INCREMENTAL-SYNC] Job failed for ${pipelineId}: ${errorMsg}`);
       await this.pipelineQueueService.publishStatusUpdate({
         pipelineId,
         organizationId,
@@ -137,6 +175,23 @@ export class IncrementalSyncProcessor extends WorkerHost {
       });
       throw error;
     }
+  }
+
+  private async waitForRunCompletion(runId: string) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt <= RUN_WAIT_TIMEOUT_MS) {
+      const run = await this.pipelineRepository.findRunById(runId);
+      if (!run) {
+        throw new Error(`Pipeline run ${runId} not found while waiting for completion`);
+      }
+      if (['success', 'failed', 'cancelled'].includes(run.status || '')) {
+        return run;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RUN_POLL_INTERVAL_MS));
+    }
+
+    throw new Error(`Timed out waiting for run ${runId} completion`);
   }
 
   @OnWorkerEvent('failed')
@@ -151,34 +206,19 @@ export class IncrementalSyncProcessor extends WorkerHost {
 @Processor(QUEUE_NAMES.POLLING_CHECKS)
 export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
   private readonly logger = new Logger(PollingChecksProcessor.name);
-  private pythonServiceUrl: string;
 
   constructor(
     private readonly pipelineRepository: PipelineRepository,
     private readonly pipelineQueueService: PipelineQueueService,
     private readonly pythonETLService: PythonETLService,
-    private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
   ) {
     super();
-    this.pythonServiceUrl = normalizeEtlBaseUrl(
-      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
-        this.configService.get<string>('PYTHON_SERVICE_URL'),
-    );
-    if (!this.pythonServiceUrl) {
-      throw new Error(
-        'ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be set in environment (e.g. in apps/api/.env)',
-      );
-    }
   }
 
   async onModuleInit(): Promise<void> {
     await this.schedulePollCycle();
   }
 
-  /**
-   * Schedule repeatable job: every 5 min enqueue delta-check jobs for all active pipelines.
-   */
   private async schedulePollCycle(): Promise<void> {
     const queue = this.pipelineQueueService.getPollingChecksQueue();
     try {
@@ -190,9 +230,9 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
           removeOnComplete: { count: 100 },
         },
       );
-      this.logger.log('CDC polling scheduled (every 5 minutes)');
+      this.logger.log('[POLLING] CDC poll cycle scheduled every 5 minutes');
     } catch (error) {
-      this.logger.error(`Failed to schedule poll-cycle: ${error}`);
+      this.logger.error(`[POLLING] Failed to schedule poll-cycle: ${error}`);
     }
   }
 
@@ -202,10 +242,8 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
       return;
     }
 
-    const data = job.data as DeltaCheckJobData;
-    const { pipelineId, organizationId } = data;
-
-    this.logger.debug(`[DELTA-CHECK] Checking pipeline ${pipelineId} for changes`);
+    const { pipelineId, organizationId } = job.data as DeltaCheckJobData;
+    this.logger.debug(`[DELTA-CHECK] Checking pipeline ${pipelineId}`);
 
     try {
       const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -215,37 +253,43 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
       }
       if (pipeline.status !== 'listing') {
         this.logger.debug(
-          `[DELTA-CHECK] Pipeline ${pipelineId} not eligible (status: ${pipeline.status})`,
+          `[DELTA-CHECK] Pipeline ${pipelineId} skipped because status=${pipeline.status}`,
         );
         return;
       }
 
-      const hasChanges = await this.checkForChanges(pipelineId, pipeline);
-      if (hasChanges) {
-        this.logger.log(
-          `[DELTA-CHECK] Changes detected for pipeline ${pipelineId}, enqueuing incremental sync`,
-        );
-        const checkpoint = (pipeline.checkpoint as Record<string, unknown>) || {};
-        await this.pipelineQueueService.enqueueIncrementalSync({
-          pipelineId,
-          organizationId,
-          userId: pipeline.createdBy || 'system',
-          triggerType: 'polling',
-          checkpoint: checkpoint as IncrementalSyncJobData['checkpoint'],
-          batchSize: 500,
-        });
+      const result = await this.checkForChanges(pipelineId, pipeline.checkpoint as Record<string, unknown>);
+
+      if (result.checkpoint) {
+        await this.pipelineRepository.saveCheckpointStateAtomic(pipelineId, result.checkpoint);
       }
+
+      if (!result.hasChanges) {
+        return;
+      }
+
+      this.logger.log(`[DELTA-CHECK] Changes detected for pipeline ${pipelineId}`);
+      await this.pipelineQueueService.enqueueIncrementalSync({
+        pipelineId,
+        organizationId,
+        userId: pipeline.createdBy || 'system',
+        triggerType: 'polling',
+        checkpoint: ((result.checkpoint || pipeline.checkpoint || {}) as Record<string, unknown>) as IncrementalSyncJobData['checkpoint'],
+        batchSize: 500,
+      });
     } catch (error) {
-      this.logger.error(`[DELTA-CHECK] Error checking pipeline ${pipelineId}: ${error}`);
+      this.logger.error(`[DELTA-CHECK] Error for pipeline ${pipelineId}: ${error}`);
     }
   }
 
   private async runPollCycle(): Promise<void> {
     try {
       const activePipelines = await this.pipelineRepository.findActivePipelinesForPolling();
-      if (activePipelines.length === 0) return;
+      if (activePipelines.length === 0) {
+        return;
+      }
 
-      this.logger.log(`[POLLING] Found ${activePipelines.length} pipeline(s) to check`);
+      this.logger.log(`[POLLING] ${activePipelines.length} pipeline(s) eligible for delta-check`);
       for (const pipeline of activePipelines) {
         await this.pipelineQueueService.enqueueDeltaCheck({
           pipelineId: pipeline.id,
@@ -253,51 +297,39 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
         });
       }
     } catch (error) {
-      this.logger.error(`[POLLING] Error during poll cycle: ${error}`);
+      this.logger.error(`[POLLING] Poll cycle error: ${error}`);
     }
   }
 
   private async checkForChanges(
     pipelineId: string,
-    pipeline: { checkpoint?: unknown },
-    pipelineWithSchema?: Awaited<ReturnType<PipelineRepository['findByIdForCDC']>>,
-  ): Promise<boolean> {
+    checkpoint: Record<string, unknown> | null,
+  ): Promise<{ hasChanges: boolean; checkpoint?: Record<string, unknown> }> {
     try {
-      if (!pipelineWithSchema) {
-        pipelineWithSchema = await this.pipelineRepository.findByIdForCDC(pipelineId);
+      const pipeline = await this.pipelineRepository.findByIdForCDC(pipelineId);
+      if (!pipeline?.sourceSchema) {
+        return { hasChanges: false };
       }
-      if (!pipelineWithSchema?.sourceSchema) return false;
 
       const connectionConfig = await this.pythonETLService.getConnectionConfig(
-        pipelineWithSchema.sourceSchema,
-        pipelineWithSchema.organizationId,
+        pipeline.sourceSchema,
+        pipeline.organizationId,
       );
-      const checkpoint = (pipeline.checkpoint as Record<string, unknown>) || {};
-      const sourceType = this.normalizeSourceType(pipelineWithSchema.sourceSchema.sourceType);
 
-      const response = await firstValueFrom(
-        this.httpService.post(
-          `${this.pythonServiceUrl}/delta-check/${sourceType}`,
-          {
-            connection_config: connectionConfig,
-            source_config: pipelineWithSchema.sourceSchema.sourceConfig || {},
-            table_name: pipelineWithSchema.sourceSchema.sourceTable,
-            schema_name: pipelineWithSchema.sourceSchema.sourceSchema,
-            checkpoint,
-          },
-          { timeout: 30000 },
-        ),
-      );
-      return response.data?.has_changes ?? false;
+      const result = await this.pythonETLService.deltaCheck({
+        sourceSchema: pipeline.sourceSchema,
+        connectionConfig,
+        checkpoint: checkpoint || {},
+      });
+
+      return {
+        hasChanges: result.hasChanges,
+        checkpoint: result.checkpoint,
+      };
     } catch (error) {
-      this.logger.warn(`[DELTA-CHECK] Error checking for changes: ${error}`);
-      return false;
+      this.logger.warn(`[DELTA-CHECK] Failed delta-check for ${pipelineId}: ${error}`);
+      return { hasChanges: false };
     }
-  }
-
-  private normalizeSourceType(sourceType: string): string {
-    const normalized = sourceType.toLowerCase();
-    return normalized === 'postgres' ? 'postgresql' : normalized;
   }
 
   @OnWorkerEvent('failed')

@@ -10,6 +10,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
@@ -44,7 +45,7 @@ export interface UpdateConnectionDto {
 }
 
 @Injectable()
-export class ConnectionService {
+export class ConnectionService implements OnModuleInit {
   private readonly logger = new Logger(ConnectionService.name);
   private readonly pythonServiceUrl: string;
 
@@ -66,6 +67,11 @@ export class ConnectionService {
         'ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be set in environment (e.g. in apps/api/.env)',
       );
     }
+  }
+
+  onModuleInit(): void {
+    // Best-effort background migration for legacy plaintext credentials.
+    void this.migrateLegacyConnectionConfigs();
   }
 
   /**
@@ -136,9 +142,241 @@ export class ConnectionService {
     return encrypted;
   }
 
+  private maybeDecryptIncomingEncrypted(value: unknown): unknown {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    if (!this.isEncryptedFormat(value)) {
+      return value;
+    }
+
+    try {
+      return this.encryptionService.decrypt(value);
+    } catch (error) {
+      this.logger.warn(
+        `Received encrypted-looking value that could not be decrypted: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return value;
+    }
+  }
+
+  /**
+   * Normalize incoming payload so create/update remains idempotent even if
+   * clients accidentally post already-encrypted fields.
+   */
+  private normalizeIncomingConfig(
+    connectionType: string,
+    config: Record<string, any>,
+  ): Record<string, any> {
+    const normalized = { ...config };
+
+    switch (connectionType) {
+      case 'postgres':
+      case 'mysql':
+        if (normalized.password) {
+          normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
+        }
+        if (normalized.ssl?.ca_cert) {
+          normalized.ssl.ca_cert = this.maybeDecryptIncomingEncrypted(normalized.ssl.ca_cert);
+        }
+        if (normalized.ssl?.client_cert) {
+          normalized.ssl.client_cert = this.maybeDecryptIncomingEncrypted(normalized.ssl.client_cert);
+        }
+        if (normalized.ssl?.client_key) {
+          normalized.ssl.client_key = this.maybeDecryptIncomingEncrypted(normalized.ssl.client_key);
+        }
+        if (normalized.ssh_tunnel?.private_key) {
+          normalized.ssh_tunnel.private_key = this.maybeDecryptIncomingEncrypted(
+            normalized.ssh_tunnel.private_key,
+          );
+        }
+        break;
+      case 'mongodb':
+        if (normalized.connection_string) {
+          normalized.connection_string = this.maybeDecryptIncomingEncrypted(
+            normalized.connection_string,
+          );
+        }
+        if (normalized.password) {
+          normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
+        }
+        break;
+      case 's3':
+        if (normalized.access_key_id) {
+          normalized.access_key_id = this.maybeDecryptIncomingEncrypted(normalized.access_key_id);
+        }
+        if (normalized.secret_access_key) {
+          normalized.secret_access_key = this.maybeDecryptIncomingEncrypted(
+            normalized.secret_access_key,
+          );
+        }
+        break;
+      case 'api':
+        if (normalized.auth_token) {
+          normalized.auth_token = this.maybeDecryptIncomingEncrypted(normalized.auth_token);
+        }
+        if (normalized.api_key) {
+          normalized.api_key = this.maybeDecryptIncomingEncrypted(normalized.api_key);
+        }
+        break;
+      case 'bigquery':
+        if (normalized.credentials?.private_key) {
+          normalized.credentials.private_key = this.maybeDecryptIncomingEncrypted(
+            normalized.credentials.private_key,
+          );
+        }
+        break;
+      case 'snowflake':
+        if (normalized.password) {
+          normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
+        }
+        break;
+    }
+
+    return normalized;
+  }
+
   /**
    * Decrypt sensitive fields in config based on connection type
    */
+  private decryptFieldWithLegacySupport(
+    value: unknown,
+    connectionType: string,
+    fieldPath: string,
+  ): unknown {
+    if (typeof value !== 'string' || value.length === 0) {
+      return value;
+    }
+
+    try {
+      return this.encryptionService.decrypt(value);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Backward compatibility: older/alternate writers stored plaintext values.
+      if (errorMessage.includes('Invalid encryption format')) {
+        this.logger.warn(
+          `Using plaintext fallback for ${connectionType}.${fieldPath}. Consider re-saving this connection to re-encrypt credentials.`,
+        );
+        return value;
+      }
+
+      throw error;
+    }
+  }
+
+  private isEncryptedFormat(value: unknown): boolean {
+    if (typeof value !== 'string' || value.length === 0) {
+      return false;
+    }
+
+    const parts = value.split(':');
+    if (parts.length !== 4) {
+      return false;
+    }
+
+    try {
+      const [saltB64, ivB64, tagB64, ciphertextB64] = parts;
+      const salt = Buffer.from(saltB64, 'base64');
+      const iv = Buffer.from(ivB64, 'base64');
+      const tag = Buffer.from(tagB64, 'base64');
+      const ciphertext = Buffer.from(ciphertextB64, 'base64');
+
+      if (salt.length !== 64) return false;
+      if (iv.length !== 16) return false;
+      if (tag.length !== 16) return false;
+      if (ciphertext.length === 0) return false;
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private hasLegacySensitiveValues(connectionType: string, config: Record<string, any>): boolean {
+    const checks: unknown[] = [];
+    switch (connectionType) {
+      case 'postgres':
+      case 'mysql':
+        checks.push(
+          config.password,
+          config.ssl?.ca_cert,
+          config.ssl?.client_cert,
+          config.ssl?.client_key,
+          config.ssh_tunnel?.private_key,
+        );
+        break;
+      case 'mongodb':
+        checks.push(config.connection_string, config.password);
+        break;
+      case 's3':
+        checks.push(config.access_key_id, config.secret_access_key);
+        break;
+      case 'api':
+        checks.push(config.auth_token, config.api_key);
+        break;
+      case 'bigquery':
+        checks.push(config.credentials?.private_key);
+        break;
+      case 'snowflake':
+        checks.push(config.password);
+        break;
+      default:
+        return false;
+    }
+
+    return checks.some((value) => {
+      if (typeof value !== 'string' || value.length === 0) {
+        return false;
+      }
+      return !this.isEncryptedFormat(value);
+    });
+  }
+
+  private async migrateLegacyConnectionConfigs(): Promise<void> {
+    try {
+      const allConnections = await this.connectionRepository.findAll();
+      if (allConnections.length === 0) {
+        return;
+      }
+
+      let migratedCount = 0;
+
+      for (const connection of allConnections) {
+        const rawConfig = connection.config as Record<string, any> | null;
+        if (!rawConfig || typeof rawConfig !== 'object') {
+          continue;
+        }
+
+        if (!this.hasLegacySensitiveValues(connection.connectionType, rawConfig)) {
+          continue;
+        }
+
+        try {
+          const decryptedConfig = this.decryptConfig(connection.connectionType, rawConfig);
+          const encryptedConfig = this.encryptConfig(connection.connectionType, decryptedConfig);
+          await this.connectionRepository.update(connection.id, {
+            config: encryptedConfig,
+          });
+          migratedCount += 1;
+        } catch (error) {
+          this.logger.warn(
+            `Skipping legacy credential migration for connection ${connection.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+
+      if (migratedCount > 0) {
+        this.logger.log(`Migrated ${migratedCount} connection(s) with legacy plaintext credentials`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to run legacy credential migration on startup: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   private decryptConfig(connectionType: string, config: Record<string, any>): Record<string, any> {
     const decrypted = { ...config };
 
@@ -147,61 +385,105 @@ export class ConnectionService {
         case 'postgres':
         case 'mysql':
           if (decrypted.password) {
-            decrypted.password = this.encryptionService.decrypt(decrypted.password);
+            decrypted.password = this.decryptFieldWithLegacySupport(
+              decrypted.password,
+              connectionType,
+              'password',
+            );
           }
           if (decrypted.ssl?.ca_cert) {
-            decrypted.ssl.ca_cert = this.encryptionService.decrypt(decrypted.ssl.ca_cert);
+            decrypted.ssl.ca_cert = this.decryptFieldWithLegacySupport(
+              decrypted.ssl.ca_cert,
+              connectionType,
+              'ssl.ca_cert',
+            );
           }
           if (decrypted.ssl?.client_cert) {
-            decrypted.ssl.client_cert = this.encryptionService.decrypt(decrypted.ssl.client_cert);
+            decrypted.ssl.client_cert = this.decryptFieldWithLegacySupport(
+              decrypted.ssl.client_cert,
+              connectionType,
+              'ssl.client_cert',
+            );
           }
           if (decrypted.ssl?.client_key) {
-            decrypted.ssl.client_key = this.encryptionService.decrypt(decrypted.ssl.client_key);
+            decrypted.ssl.client_key = this.decryptFieldWithLegacySupport(
+              decrypted.ssl.client_key,
+              connectionType,
+              'ssl.client_key',
+            );
           }
           if (decrypted.ssh_tunnel?.private_key) {
-            decrypted.ssh_tunnel.private_key = this.encryptionService.decrypt(
+            decrypted.ssh_tunnel.private_key = this.decryptFieldWithLegacySupport(
               decrypted.ssh_tunnel.private_key,
+              connectionType,
+              'ssh_tunnel.private_key',
             );
           }
           break;
         case 'mongodb':
           if (decrypted.connection_string) {
-            decrypted.connection_string = this.encryptionService.decrypt(
+            decrypted.connection_string = this.decryptFieldWithLegacySupport(
               decrypted.connection_string,
+              connectionType,
+              'connection_string',
             );
           }
           if (decrypted.password) {
-            decrypted.password = this.encryptionService.decrypt(decrypted.password);
+            decrypted.password = this.decryptFieldWithLegacySupport(
+              decrypted.password,
+              connectionType,
+              'password',
+            );
           }
           break;
         case 's3':
           if (decrypted.access_key_id) {
-            decrypted.access_key_id = this.encryptionService.decrypt(decrypted.access_key_id);
+            decrypted.access_key_id = this.decryptFieldWithLegacySupport(
+              decrypted.access_key_id,
+              connectionType,
+              'access_key_id',
+            );
           }
           if (decrypted.secret_access_key) {
-            decrypted.secret_access_key = this.encryptionService.decrypt(
+            decrypted.secret_access_key = this.decryptFieldWithLegacySupport(
               decrypted.secret_access_key,
+              connectionType,
+              'secret_access_key',
             );
           }
           break;
         case 'api':
           if (decrypted.auth_token) {
-            decrypted.auth_token = this.encryptionService.decrypt(decrypted.auth_token);
+            decrypted.auth_token = this.decryptFieldWithLegacySupport(
+              decrypted.auth_token,
+              connectionType,
+              'auth_token',
+            );
           }
           if (decrypted.api_key) {
-            decrypted.api_key = this.encryptionService.decrypt(decrypted.api_key);
+            decrypted.api_key = this.decryptFieldWithLegacySupport(
+              decrypted.api_key,
+              connectionType,
+              'api_key',
+            );
           }
           break;
         case 'bigquery':
           if (decrypted.credentials?.private_key) {
-            decrypted.credentials.private_key = this.encryptionService.decrypt(
+            decrypted.credentials.private_key = this.decryptFieldWithLegacySupport(
               decrypted.credentials.private_key,
+              connectionType,
+              'credentials.private_key',
             );
           }
           break;
         case 'snowflake':
           if (decrypted.password) {
-            decrypted.password = this.encryptionService.decrypt(decrypted.password);
+            decrypted.password = this.decryptFieldWithLegacySupport(
+              decrypted.password,
+              connectionType,
+              'password',
+            );
           }
           break;
       }
@@ -405,8 +687,8 @@ export class ConnectionService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Verify connection type matches data source type
-    if (dto.connectionType !== dataSource.sourceType) {
+    // Verify connection type matches data source type (normalize aliases like "postgres" → "postgresql")
+    if (this.normalizeSourceTypeForPython(dto.connectionType) !== this.normalizeSourceTypeForPython(dataSource.sourceType)) {
       throw new BadRequestException(
         `Connection type "${dto.connectionType}" does not match data source type "${dataSource.sourceType}"`,
       );
@@ -418,11 +700,14 @@ export class ConnectionService {
       throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can configure connections');
     }
 
+    // Normalize any encrypted-looking input to avoid double-encryption writes.
+    const normalizedConfig = this.normalizeIncomingConfig(dto.connectionType, dto.config);
+
     // Validate config structure
-    this.validateConnectionConfig(dto.connectionType, dto.config);
+    this.validateConnectionConfig(dto.connectionType, normalizedConfig);
 
     // Encrypt sensitive fields
-    const encryptedConfig = this.encryptConfig(dto.connectionType, dto.config);
+    const encryptedConfig = this.encryptConfig(dto.connectionType, normalizedConfig);
 
     // Check if connection already exists
     const existing = await this.connectionRepository.findByDataSourceId(dataSourceId);
@@ -525,6 +810,28 @@ export class ConnectionService {
       throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can view connection credentials');
     }
 
+    // Return decrypted credentials for sensitive consumers (schema discovery, test connection, etc.).
+    const rawConfig = connection.config as Record<string, any>;
+    const hasLegacyPlaintext = this.hasLegacySensitiveValues(connection.connectionType, rawConfig);
+    const decryptedConfig = this.decryptConfig(connection.connectionType, rawConfig);
+
+    // Auto-migrate legacy plaintext to encrypted format.
+    if (hasLegacyPlaintext) {
+      try {
+        const encryptedConfig = this.encryptConfig(connection.connectionType, decryptedConfig);
+        await this.connectionRepository.updateByDataSourceId(dataSourceId, {
+          config: encryptedConfig,
+        });
+        this.logger.log(
+          `Migrated legacy plaintext credentials to encrypted format for data source ${dataSourceId}`,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to auto-migrate legacy plaintext credentials for ${dataSourceId}: ${error}`,
+        );
+      }
+    }
+
     // Log activity
     try {
       await this.activityLogService.logConnectionAction(
@@ -541,7 +848,10 @@ export class ConnectionService {
       );
     }
 
-    return connection;
+    return {
+      ...connection,
+      config: decryptedConfig,
+    } as DataSourceConnection;
   }
 
   /**
@@ -608,8 +918,7 @@ export class ConnectionService {
       throw new NotFoundException('Connection not found for this data source');
     }
 
-    // Decrypt config
-    return this.decryptConfig(connection.connectionType, connection.config as any);
+    return (connection.config as Record<string, any>) || {};
   }
 
   /**
