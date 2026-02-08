@@ -142,6 +142,22 @@ export class DestinationSchemaService {
   }
 
   /**
+   * Get destination schemas by organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    userId: string | undefined,
+    limit: number = 20,
+    offset: number = 0,
+  ) {
+    if (userId) {
+      await this.checkViewPermission(userId, organizationId);
+    }
+
+    return this.destinationSchemaRepository.findByOrganizationPaginated(organizationId, limit, offset);
+  }
+
+  /**
    * Update destination schema
    */
   async update(

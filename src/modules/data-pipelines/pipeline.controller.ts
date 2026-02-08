@@ -124,23 +124,35 @@ export class PipelineController {
   @Get()
   @ApiOperation({
     summary: 'List all pipelines',
-    description: 'Get all data pipelines for the organization.',
+    description: 'Get all data pipelines for the organization with pagination.',
   })
   @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20, max: 100)' })
+  @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Items to skip (default: 0)' })
   @ApiResponse({ status: 200, description: 'List of pipelines' })
   async listPipelines(
     @Param('organizationId', RequiredUUIDPipe) organizationId: string,
     @Request() req: ExpressRequestType,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     try {
       const userId = this.extractUserId(req);
-      const pipelines = await this.pipelineService.findByOrganization(organizationId, userId);
+      const limitNum = Math.min(Math.max(parseInt(limit || '20', 10) || 20, 1), 100);
+      const offsetNum = Math.max(parseInt(offset || '0', 10) || 0, 0);
 
-      return createListResponse(pipelines, `Found ${pipelines.length} pipeline(s)`, {
-        total: pipelines.length,
-        limit: pipelines.length,
-        offset: 0,
-        hasMore: false,
+      const result = await this.pipelineService.findByOrganizationPaginated(
+        organizationId,
+        userId,
+        limitNum,
+        offsetNum,
+      );
+
+      return createListResponse(result.data, `Found ${result.total} pipeline(s)`, {
+        total: result.total,
+        limit: limitNum,
+        offset: offsetNum,
+        hasMore: offsetNum + limitNum < result.total,
       });
     } catch (error) {
       this.handleError('list pipelines', error);

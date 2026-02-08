@@ -180,6 +180,18 @@ export class OrganizationMemberService {
   }
 
   /**
+   * List members with pagination
+   */
+  async listMembersPaginated(organizationId: string, limit: number = 20, offset: number = 0) {
+    const organization = await this.organizationRepository.findById(organizationId);
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
+    }
+
+    return this.memberRepository.findByOrganizationIdPaginated(organizationId, limit, offset);
+  }
+
+  /**
    * Get member by ID
    */
   async getMember(id: string): Promise<OrganizationMember> {

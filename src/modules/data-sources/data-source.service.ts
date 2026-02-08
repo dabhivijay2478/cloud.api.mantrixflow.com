@@ -174,6 +174,24 @@ export class DataSourceService {
   }
 
   /**
+   * List data sources with pagination
+   */
+  async listDataSourcesPaginated(
+    organizationId: string,
+    userId: string,
+    filters?: { sourceType?: string; isActive?: boolean },
+    limit: number = 20,
+    offset: number = 0,
+  ) {
+    const canView = await this.roleService.canViewOrganization(userId, organizationId);
+    if (!canView) {
+      throw new ForbiddenException('You are not a member of this organization');
+    }
+
+    return this.dataSourceRepository.findByOrganizationPaginated(organizationId, limit, offset, filters);
+  }
+
+  /**
    * Get data source by ID
    */
   async getDataSourceById(

@@ -4,8 +4,9 @@
  */
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, count as drizzleCount, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { PaginatedResult } from '../../../common/dto/pagination-query.dto';
 import type {
   NewPipeline,
   NewPipelineRun,
@@ -158,6 +159,56 @@ export class PipelineRepository {
 
       throw enhancedError;
     }
+  }
+
+  /**
+   * Find pipelines by organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<
+    PaginatedResult<
+      Pipeline & {
+        sourceSchema?: PipelineSourceSchema | null;
+        destinationSchema?: PipelineDestinationSchema | null;
+      }
+    >
+  > {
+    const conditions = [eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)];
+
+    const [countResult, rows] = await Promise.all([
+      this.db
+        .select({ count: drizzleCount() })
+        .from(pipelines)
+        .where(and(...conditions)),
+      this.db
+        .select({
+          pipeline: pipelines,
+          sourceSchema: pipelineSourceSchemas,
+          destinationSchema: pipelineDestinationSchemas,
+        })
+        .from(pipelines)
+        .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+        .leftJoin(
+          pipelineDestinationSchemas,
+          eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+        )
+        .where(and(...conditions))
+        .orderBy(desc(pipelines.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return {
+      data: rows.map((row) => ({
+        ...row.pipeline,
+        sourceSchema: row.sourceSchema,
+        destinationSchema: row.destinationSchema,
+      })),
+      total: Number(countResult[0]?.count || 0),
+    };
   }
 
   /**

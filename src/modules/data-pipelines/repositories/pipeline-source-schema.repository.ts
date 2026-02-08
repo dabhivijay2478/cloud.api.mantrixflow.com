@@ -4,8 +4,9 @@
  */
 
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, count as drizzleCount, desc, eq, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { PaginatedResult } from '../../../common/dto/pagination-query.dto';
 import type { NewPipelineSourceSchema, PipelineSourceSchema } from '../../../database/schemas';
 import { pipelineSourceSchemas } from '../../../database/schemas';
 
@@ -50,6 +51,39 @@ export class PipelineSourceSchemaRepository {
           isNull(pipelineSourceSchemas.deletedAt),
         ),
       );
+  }
+
+  /**
+   * Find by organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<PaginatedResult<PipelineSourceSchema>> {
+    const conditions = [
+      eq(pipelineSourceSchemas.organizationId, organizationId),
+      isNull(pipelineSourceSchemas.deletedAt),
+    ];
+
+    const [countResult, data] = await Promise.all([
+      this.db
+        .select({ count: drizzleCount() })
+        .from(pipelineSourceSchemas)
+        .where(and(...conditions)),
+      this.db
+        .select()
+        .from(pipelineSourceSchemas)
+        .where(and(...conditions))
+        .orderBy(desc(pipelineSourceSchemas.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return {
+      data,
+      total: Number(countResult[0]?.count || 0),
+    };
   }
 
   /**

@@ -129,6 +129,8 @@ export class DataSourceController {
     @Request() req: ExpressRequestType,
     @Query('sourceType') sourceType?: string,
     @Query('isActive') isActive?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     const userId = req.user?.id;
     if (!userId) {
@@ -139,13 +141,23 @@ export class DataSourceController {
     if (sourceType) filters.sourceType = sourceType;
     if (isActive !== undefined) filters.isActive = isActive === 'true';
 
-    const dataSources = await this.dataSourceService.listDataSources(
+    const limitNum = Math.min(Math.max(parseInt(limit || '20', 10) || 20, 1), 100);
+    const offsetNum = Math.max(parseInt(offset || '0', 10) || 0, 0);
+
+    const result = await this.dataSourceService.listDataSourcesPaginated(
       organizationId,
       userId,
       filters,
+      limitNum,
+      offsetNum,
     );
 
-    return createListResponse(dataSources);
+    return createListResponse(result.data, undefined, {
+      total: result.total,
+      limit: limitNum,
+      offset: offsetNum,
+      hasMore: offsetNum + limitNum < result.total,
+    });
   }
 
   /**

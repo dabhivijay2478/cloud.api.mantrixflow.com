@@ -155,6 +155,22 @@ export class SourceSchemaService {
   }
 
   /**
+   * Get source schemas by organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    userId: string | undefined,
+    limit: number = 20,
+    offset: number = 0,
+  ) {
+    if (userId) {
+      await this.checkViewPermission(userId, organizationId);
+    }
+
+    return this.sourceSchemaRepository.findByOrganizationPaginated(organizationId, limit, offset);
+  }
+
+  /**
    * Update source schema
    */
   async update(

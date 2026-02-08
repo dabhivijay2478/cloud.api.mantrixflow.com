@@ -213,6 +213,22 @@ export class PipelineService {
   }
 
   /**
+   * Get pipelines by organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    userId: string | undefined,
+    limit: number = 20,
+    offset: number = 0,
+  ) {
+    if (userId) {
+      await this.checkPipelineViewPermission(userId, organizationId);
+    }
+
+    return this.pipelineRepository.findByOrganizationPaginated(organizationId, limit, offset);
+  }
+
+  /**
    * Get pipeline by ID
    */
   async findById(id: string, organizationId?: string): Promise<Pipeline | null> {

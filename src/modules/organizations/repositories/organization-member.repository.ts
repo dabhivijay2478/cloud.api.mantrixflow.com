@@ -4,8 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, or } from 'drizzle-orm';
+import { and, count as drizzleCount, desc, eq, or } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
+import type { PaginatedResult } from '../../../common/dto/pagination-query.dto';
 import {
   type NewOrganizationMember,
   type OrganizationMember,
@@ -111,6 +112,36 @@ export class OrganizationMemberRepository {
       .from(organizationMembers)
       .where(eq(organizationMembers.organizationId, organizationId))
       .orderBy(desc(organizationMembers.createdAt));
+  }
+
+  /**
+   * Find all members for an organization with pagination
+   */
+  async findByOrganizationIdPaginated(
+    organizationId: string,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<PaginatedResult<OrganizationMember>> {
+    const conditions = [eq(organizationMembers.organizationId, organizationId)];
+
+    const [countResult, data] = await Promise.all([
+      this.db
+        .select({ count: drizzleCount() })
+        .from(organizationMembers)
+        .where(and(...conditions)),
+      this.db
+        .select()
+        .from(organizationMembers)
+        .where(and(...conditions))
+        .orderBy(desc(organizationMembers.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return {
+      data,
+      total: Number(countResult[0]?.count || 0),
+    };
   }
 
   /**
