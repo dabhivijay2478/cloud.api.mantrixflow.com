@@ -106,17 +106,16 @@ export class OrganizationMemberService {
     // Note: This requires Supabase to be configured with email templates
     if (this.supabaseAdmin) {
       try {
-        // Get frontend URL from config
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
-
-        // Send invite email via Supabase Auth
-        // This uses Supabase's built-in invite functionality
-        // redirectTo: When user clicks invite link, Supabase verify endpoint will redirect here
-        // Supabase redirects with tokens in URL hash (#access_token=...), which must be handled client-side
-        // IMPORTANT: redirectTo must match one of the allowed redirect URLs in Supabase dashboard
-        const redirectTo = `${frontendUrl}/auth/accept-invite`;
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL');
+        if (!frontendUrl) {
+          this.logger.warn(
+            'FRONTEND_URL not set in environment; set it in apps/api/.env for invite email redirects',
+          );
+        }
+        // redirectTo must match allowed redirect URLs in Supabase dashboard
+        const redirectTo = frontendUrl ? `${frontendUrl}/auth/accept-invite` : undefined;
         const { error } = await this.supabaseAdmin.auth.admin.inviteUserByEmail(email, {
-          redirectTo,
+          ...(redirectTo && { redirectTo }),
           data: {
             organizationId,
             organizationName: organization.name,
@@ -178,6 +177,18 @@ export class OrganizationMemberService {
     }
 
     return this.memberRepository.findByOrganizationId(organizationId);
+  }
+
+  /**
+   * List members with pagination
+   */
+  async listMembersPaginated(organizationId: string, limit: number = 20, offset: number = 0) {
+    const organization = await this.organizationRepository.findById(organizationId);
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID "${organizationId}" not found`);
+    }
+
+    return this.memberRepository.findByOrganizationIdPaginated(organizationId, limit, offset);
   }
 
   /**

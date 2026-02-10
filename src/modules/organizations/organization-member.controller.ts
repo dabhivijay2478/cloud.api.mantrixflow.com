@@ -16,6 +16,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Request,
 } from '@nestjs/common';
 import type { Request as ExpressRequest } from 'express';
@@ -140,9 +141,25 @@ export class OrganizationMemberController {
     status: 200,
     description: 'Members retrieved successfully',
   })
-  async listMembers(@Param('organizationId') organizationId: string) {
-    const members = await this.memberService.listMembers(organizationId);
-    return createListResponse(members, 'Members retrieved successfully');
+  async listMembers(
+    @Param('organizationId') organizationId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const limitNum = Math.min(Math.max(parseInt(limit || '20', 10) || 20, 1), 100);
+    const offsetNum = Math.max(parseInt(offset || '0', 10) || 0, 0);
+
+    const result = await this.memberService.listMembersPaginated(
+      organizationId,
+      limitNum,
+      offsetNum,
+    );
+    return createListResponse(result.data, 'Members retrieved successfully', {
+      total: result.total,
+      limit: limitNum,
+      offset: offsetNum,
+      hasMore: offsetNum + limitNum < result.total,
+    });
   }
 
   /**

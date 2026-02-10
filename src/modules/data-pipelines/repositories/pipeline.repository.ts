@@ -4,8 +4,21 @@
  */
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  count as drizzleCount,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { PaginatedResult } from '../../../common/dto/pagination-query.dto';
 import type {
   NewPipeline,
   NewPipelineRun,
@@ -158,6 +171,56 @@ export class PipelineRepository {
 
       throw enhancedError;
     }
+  }
+
+  /**
+   * Find pipelines by organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<
+    PaginatedResult<
+      Pipeline & {
+        sourceSchema?: PipelineSourceSchema | null;
+        destinationSchema?: PipelineDestinationSchema | null;
+      }
+    >
+  > {
+    const conditions = [eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)];
+
+    const [countResult, rows] = await Promise.all([
+      this.db
+        .select({ count: drizzleCount() })
+        .from(pipelines)
+        .where(and(...conditions)),
+      this.db
+        .select({
+          pipeline: pipelines,
+          sourceSchema: pipelineSourceSchemas,
+          destinationSchema: pipelineDestinationSchemas,
+        })
+        .from(pipelines)
+        .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+        .leftJoin(
+          pipelineDestinationSchemas,
+          eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+        )
+        .where(and(...conditions))
+        .orderBy(desc(pipelines.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return {
+      data: rows.map((row) => ({
+        ...row.pipeline,
+        sourceSchema: row.sourceSchema,
+        destinationSchema: row.destinationSchema,
+      })),
+      total: Number(countResult[0]?.count || 0),
+    };
   }
 
   /**
@@ -577,7 +640,7 @@ export class PipelineRepository {
   }
 
   // ============================================================================
-  // POLLING/CDC SUPPORT METHODS (RabbitMQ Integration)
+  // POLLING/CDC SUPPORT METHODS (BullMQ Integration)
   // ============================================================================
 
   /**
@@ -688,8 +751,41 @@ export class PipelineRepository {
   }
 
   /**
-   * Update pipeline checkpoint atomically
-   * ROOT FIX: Ensures checkpoint is always updated in a transaction
+   * Persist checkpoint atomically (single transaction).
+   */
+  async saveCheckpointStateAtomic(
+    pipelineId: string,
+    checkpoint: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.db.transaction(async (tx) => {
+        const checkpointValue = checkpoint as Record<string, unknown>;
+        const lastSyncValue = checkpointValue.lastSyncValue;
+        const lastSyncAtRaw = checkpointValue.lastSyncAt;
+        const lastSyncAt =
+          typeof lastSyncAtRaw === 'string' || lastSyncAtRaw instanceof Date
+            ? new Date(lastSyncAtRaw)
+            : new Date();
+
+        await tx
+          .update(pipelines)
+          .set({
+            checkpoint: checkpointValue as any,
+            lastSyncValue:
+              lastSyncValue === undefined || lastSyncValue === null ? null : String(lastSyncValue),
+            lastSyncAt,
+            updatedAt: new Date(),
+          })
+          .where(eq(pipelines.id, pipelineId));
+      });
+    } catch (error) {
+      this.logger.error(`[saveCheckpointStateAtomic] Error updating checkpoint: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Backward-compatible alias.
    */
   async updateCheckpointAtomic(
     pipelineId: string,
@@ -698,26 +794,10 @@ export class PipelineRepository {
       lastSyncValue: string | number;
       lastSyncAt: string;
       rowsProcessed: number;
+      [key: string]: unknown;
     },
   ): Promise<void> {
-    try {
-      await this.db
-        .update(pipelines)
-        .set({
-          checkpoint: checkpoint,
-          lastSyncValue: String(checkpoint.lastSyncValue),
-          lastSyncAt: new Date(checkpoint.lastSyncAt),
-          updatedAt: new Date(),
-        })
-        .where(eq(pipelines.id, pipelineId));
-
-      this.logger.debug(
-        `[updateCheckpointAtomic] Updated checkpoint for pipeline ${pipelineId}: ${checkpoint.watermarkField} = ${checkpoint.lastSyncValue}`,
-      );
-    } catch (error) {
-      this.logger.error(`[updateCheckpointAtomic] Error updating checkpoint: ${error}`);
-      throw error;
-    }
+    await this.saveCheckpointStateAtomic(pipelineId, checkpoint);
   }
 
   /**

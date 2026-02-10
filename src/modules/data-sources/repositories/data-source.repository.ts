@@ -4,8 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, count as drizzleCount, desc, eq, isNull } from 'drizzle-orm';
 import type { DrizzleDatabase } from '../../../database/drizzle/database';
+import type { PaginatedResult } from '../../../common/dto/pagination-query.dto';
 import {
   type DataSource,
   type NewDataSource,
@@ -81,6 +82,48 @@ export class DataSourceRepository {
       .select()
       .from(dataSources)
       .where(and(...conditions));
+  }
+
+  /**
+   * Find all data sources for an organization with pagination
+   */
+  async findByOrganizationPaginated(
+    organizationId: string,
+    limit: number = 20,
+    offset: number = 0,
+    filters?: { sourceType?: string; isActive?: boolean },
+  ): Promise<PaginatedResult<DataSource>> {
+    const conditions = [
+      eq(dataSources.organizationId, organizationId),
+      isNull(dataSources.deletedAt),
+    ];
+
+    if (filters?.sourceType) {
+      conditions.push(eq(dataSources.sourceType, filters.sourceType));
+    }
+
+    if (filters?.isActive !== undefined) {
+      conditions.push(eq(dataSources.isActive, filters.isActive));
+    }
+
+    const [countResult, data] = await Promise.all([
+      this.db
+        .select({ count: drizzleCount() })
+        .from(dataSources)
+        .where(and(...conditions)),
+      this.db
+        .select()
+        .from(dataSources)
+        .where(and(...conditions))
+        .orderBy(desc(dataSources.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return {
+      data,
+      total: Number(countResult[0]?.count || 0),
+    };
   }
 
   /**

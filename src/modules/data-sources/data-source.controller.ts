@@ -3,10 +3,11 @@
  * REST API endpoints for data source management
  *
  * Architecture:
- * - NestJS: Handles listing (GET) and deletion (DELETE) of data sources
+ * - NestJS: Handles create/list/get/delete of data sources
  * - Python FastAPI: Handles connection operations (create, update, test), collector/emitter/transformations
  *
  * Available Endpoints:
+ * - POST / - Create data source (NestJS)
  * - GET / - List all data sources (NestJS)
  * - GET /types - Get supported data source types (NestJS)
  * - GET /:id - Get data source by ID (NestJS)
@@ -20,6 +21,8 @@
  */
 
 import {
+  BadRequestException,
+  Body,
   Controller,
   Delete,
   Get,
@@ -27,6 +30,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Post,
   Query,
   Request,
   UseGuards,
@@ -47,8 +51,8 @@ import {
 } from '../../common/dto/api-response.dto';
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import { DataSourceService } from './data-source.service';
-import { ConnectionService } from './connection.service';
+import { DataSourceService, type CreateDataSourceDto } from './data-source.service';
+import { ConnectionService, type CreateConnectionDto } from './connection.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -61,6 +65,51 @@ export class DataSourceController {
     private readonly dataSourceService: DataSourceService,
     private readonly connectionService: ConnectionService,
   ) {}
+
+  /**
+   * Create a data source
+   */
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create data source',
+    description: 'Create a new data source for an organization',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiResponse({ status: 201, description: 'Data source created successfully' })
+  async createDataSource(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const sourceType = (body.sourceType || body.source_type) as string | undefined;
+    if (!sourceType || typeof sourceType !== 'string') {
+      throw new BadRequestException('sourceType (or source_type) is required');
+    }
+
+    const name = body.name as string | undefined;
+    if (!name || typeof name !== 'string') {
+      throw new BadRequestException('name is required');
+    }
+
+    const dto: CreateDataSourceDto = {
+      name,
+      description: (body.description as string | undefined) || undefined,
+      sourceType,
+      metadata:
+        body.metadata && typeof body.metadata === 'object'
+          ? (body.metadata as Record<string, unknown>)
+          : undefined,
+    };
+
+    const dataSource = await this.dataSourceService.createDataSource(organizationId, userId, dto);
+    return createSuccessResponse(dataSource, 'Data source created successfully');
+  }
 
   /**
    * List all data sources for organization
@@ -80,6 +129,8 @@ export class DataSourceController {
     @Request() req: ExpressRequestType,
     @Query('sourceType') sourceType?: string,
     @Query('isActive') isActive?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     const userId = req.user?.id;
     if (!userId) {
@@ -90,13 +141,23 @@ export class DataSourceController {
     if (sourceType) filters.sourceType = sourceType;
     if (isActive !== undefined) filters.isActive = isActive === 'true';
 
-    const dataSources = await this.dataSourceService.listDataSources(
+    const limitNum = Math.min(Math.max(parseInt(limit || '20', 10) || 20, 1), 100);
+    const offsetNum = Math.max(parseInt(offset || '0', 10) || 0, 0);
+
+    const result = await this.dataSourceService.listDataSourcesPaginated(
       organizationId,
       userId,
       filters,
+      limitNum,
+      offsetNum,
     );
 
-    return createListResponse(dataSources);
+    return createListResponse(result.data, undefined, {
+      total: result.total,
+      limit: limitNum,
+      offset: offsetNum,
+      hasMore: offsetNum + limitNum < result.total,
+    });
   }
 
   /**
@@ -143,9 +204,57 @@ export class DataSourceController {
   }
 
   /**
+   * Create or update connection for data source
+   * NestJS owns credential encryption before persistence.
+   */
+  @Post(':sourceId/connection')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Create or update connection',
+    description: 'Create or update encrypted connection configuration for a data source',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Connection saved successfully' })
+  async createOrUpdateConnection(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const connectionType = (body.connectionType || body.connection_type) as string | undefined;
+    if (!connectionType || typeof connectionType !== 'string') {
+      throw new BadRequestException('connectionType (or connection_type) is required');
+    }
+
+    const config = body.config as Record<string, unknown> | undefined;
+    if (!config || typeof config !== 'object') {
+      throw new BadRequestException('config is required');
+    }
+
+    const dto: CreateConnectionDto = {
+      connectionType,
+      config: config as Record<string, any>,
+    };
+
+    const connection = await this.connectionService.createOrUpdateConnection(
+      organizationId,
+      sourceId,
+      userId,
+      dto,
+    );
+
+    return createSuccessResponse(connection, 'Connection saved successfully');
+  }
+
+  /**
    * Get connection for data source
-   * NOTE: All connection operations (create, update, test, discover) are handled by Python FastAPI service
-   * This endpoint only retrieves existing connection metadata for display
+   * Returns connection metadata/config from NestJS storage.
    */
   @Get(':sourceId/connection')
   @HttpCode(HttpStatus.OK)

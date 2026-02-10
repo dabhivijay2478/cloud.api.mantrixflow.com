@@ -49,6 +49,13 @@ export class DataSourceConnectionRepository {
   }
 
   /**
+   * List all connections
+   */
+  async findAll(): Promise<DataSourceConnection[]> {
+    return this.db.select().from(dataSourceConnections);
+  }
+
+  /**
    * Update connection
    */
   async update(id: string, data: Partial<NewDataSourceConnection>): Promise<DataSourceConnection> {

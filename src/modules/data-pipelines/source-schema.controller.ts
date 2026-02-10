@@ -17,6 +17,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Request,
   UseGuards,
   UsePipes,
@@ -28,6 +29,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -92,23 +94,45 @@ export class SourceSchemaController {
   @Get()
   @ApiOperation({
     summary: 'List source schemas',
-    description: 'Get all source schemas for the organization.',
+    description: 'Get all source schemas for the organization with pagination.',
   })
   @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Items per page (default: 20, max: 100)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: Number,
+    description: 'Items to skip (default: 0)',
+  })
   @ApiResponse({ status: 200, description: 'List of source schemas' })
   async listSourceSchemas(
     @Param('organizationId', RequiredUUIDPipe) organizationId: string,
     @Request() req: ExpressRequestType,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     try {
       const userId = this.extractUserId(req);
-      const schemas = await this.sourceSchemaService.findByOrganization(organizationId, userId);
+      const limitNum = Math.min(Math.max(parseInt(limit || '20', 10) || 20, 1), 100);
+      const offsetNum = Math.max(parseInt(offset || '0', 10) || 0, 0);
 
-      return createListResponse(schemas, `Found ${schemas.length} source schema(s)`, {
-        total: schemas.length,
-        limit: schemas.length,
-        offset: 0,
-        hasMore: false,
+      const result = await this.sourceSchemaService.findByOrganizationPaginated(
+        organizationId,
+        userId,
+        limitNum,
+        offsetNum,
+      );
+
+      return createListResponse(result.data, `Found ${result.total} source schema(s)`, {
+        total: result.total,
+        limit: limitNum,
+        offset: offsetNum,
+        hasMore: offsetNum + limitNum < result.total,
       });
     } catch (error) {
       this.handleError('list source schemas', error);
