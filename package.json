@@ -7,6 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
+    "build:deploy": "nest build && bun run db:migrate",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint --write .",

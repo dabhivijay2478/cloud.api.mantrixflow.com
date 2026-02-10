@@ -67,10 +67,17 @@ The following tables have been created in your database:
 
 ### Making Schema Changes
 
-1. Edit `src/database/drizzle/schema/postgres-connectors.schema.ts`
+1. Edit `src/database/schemas/` (see `drizzle.config.ts` for schema paths)
 2. Generate migration: `bun run db:generate`
 3. Review the generated SQL in `src/database/drizzle/migrations/`
 4. Apply migration: `bun run db:migrate`
+
+### Deploy (Vercel / CI)
+
+On deploy, the latest Drizzle migrations run automatically:
+
+- **Vercel**: `buildCommand` is `bun run build:deploy`, which runs `nest build` then `bun run db:migrate`. Set `DATABASE_URL` in the Vercel project (Production and Preview) so migrations succeed. If `DATABASE_URL` is missing, the build fails so you don’t deploy without migrated schema.
+- **Local / CI**: Use `bun run build:deploy` when you want “build + migrate” in one step. Use `bun run build` when you only need the Nest build (e.g. tests or image build without DB).
 
 ### Quick Development
 
