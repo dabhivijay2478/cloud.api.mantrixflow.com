@@ -154,7 +154,11 @@ export class DestinationSchemaService {
       await this.checkViewPermission(userId, organizationId);
     }
 
-    return this.destinationSchemaRepository.findByOrganizationPaginated(organizationId, limit, offset);
+    return this.destinationSchemaRepository.findByOrganizationPaginated(
+      organizationId,
+      limit,
+      offset,
+    );
   }
 
   /**

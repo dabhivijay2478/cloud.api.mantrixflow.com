@@ -109,7 +109,9 @@ export class PipelineController {
       });
 
       this.activity.info('pipeline.created', `Pipeline created: ${pipeline.name}`, {
-        pipelineId: pipeline.id, organizationId, userId,
+        pipelineId: pipeline.id,
+        organizationId,
+        userId,
       });
 
       return createSuccessResponse(pipeline, 'Pipeline created successfully', HttpStatus.CREATED);
@@ -127,8 +129,18 @@ export class PipelineController {
     description: 'Get all data pipelines for the organization with pagination.',
   })
   @ApiParam({ name: 'organizationId', type: 'string' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 20, max: 100)' })
-  @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Items to skip (default: 0)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Items per page (default: 20, max: 100)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: Number,
+    description: 'Items to skip (default: 0)',
+  })
   @ApiResponse({ status: 200, description: 'List of pipelines' })
   async listPipelines(
     @Param('organizationId', RequiredUUIDPipe) organizationId: string,
@@ -320,7 +332,9 @@ export class PipelineController {
       );
 
       this.activity.info('pipeline.started', `Pipeline run started: ${id}`, {
-        pipelineId: id, runId: run.id, userId,
+        pipelineId: id,
+        runId: run.id,
+        userId,
         metadata: { triggerType: dto?.triggerType || 'manual' },
       });
 

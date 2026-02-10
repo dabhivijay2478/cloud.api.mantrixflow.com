@@ -26,7 +26,8 @@ export class PythonETLService {
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly connectionService: ConnectionService,
   ) {
-    const raw = this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
+    const raw =
+      this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
       this.configService.get<string>('PYTHON_SERVICE_URL');
     this.pythonServiceUrl = normalizeEtlBaseUrl(raw);
     this.pythonServiceAuthToken =
@@ -34,9 +35,10 @@ export class PythonETLService {
       this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ||
       'internal-etl-service';
     if (!this.pythonServiceUrl) {
-      const hint = raw != null && String(raw).trim().length > 0
-        ? ` Value was normalized to an invalid URL (e.g. missing host). Set a valid base URL like http://localhost:8001 in apps/api/.env (from the api directory so .env is loaded).`
-        : ' Set ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL in apps/api/.env and run the API from the api directory so .env is loaded.';
+      const hint =
+        raw != null && String(raw).trim().length > 0
+          ? ` Value was normalized to an invalid URL (e.g. missing host). Set a valid base URL like http://localhost:8001 in apps/api/.env (from the api directory so .env is loaded).`
+          : ' Set ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL in apps/api/.env and run the API from the api directory so .env is loaded.';
       throw new Error(
         `ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be a valid URL with host.${hint}`,
       );

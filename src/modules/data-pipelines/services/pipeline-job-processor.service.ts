@@ -41,7 +41,10 @@ export class PipelineJobsProcessor extends WorkerHost {
   async process(job: Job<FullSyncJobData, unknown, string>): Promise<void> {
     const { pipelineId, organizationId, userId, triggerType, batchSize } = job.data;
     this.activity.info('job.full_sync', `Starting full sync job for pipeline ${pipelineId}`, {
-      pipelineId, organizationId, userId, metadata: { triggerType, batchSize, jobId: job.id },
+      pipelineId,
+      organizationId,
+      userId,
+      metadata: { triggerType, batchSize, jobId: job.id },
     });
 
     try {
@@ -54,14 +57,20 @@ export class PipelineJobsProcessor extends WorkerHost {
         return;
       }
 
-      const run = await this.pipelineService.runPipeline(pipelineId, userId || 'system', triggerType, {
-        batchSize: batchSize || 500,
-      });
+      const run = await this.pipelineService.runPipeline(
+        pipelineId,
+        userId || 'system',
+        triggerType,
+        {
+          batchSize: batchSize || 500,
+        },
+      );
       const completedRun = await this.waitForRunCompletion(run.id);
 
       if (completedRun.status !== 'success') {
         throw new Error(
-          completedRun.errorMessage || `Pipeline run ${completedRun.id} ended with status ${completedRun.status}`,
+          completedRun.errorMessage ||
+            `Pipeline run ${completedRun.id} ended with status ${completedRun.status}`,
         );
       }
 
@@ -128,9 +137,16 @@ export class IncrementalSyncProcessor extends WorkerHost {
 
   async process(job: Job<IncrementalSyncJobData, unknown, string>): Promise<void> {
     const { pipelineId, organizationId, userId, triggerType, batchSize } = job.data;
-    this.activity.info('job.incremental_sync', `Starting incremental sync job for pipeline ${pipelineId}`, {
-      pipelineId, organizationId, userId, metadata: { triggerType, batchSize, jobId: job.id },
-    });
+    this.activity.info(
+      'job.incremental_sync',
+      `Starting incremental sync job for pipeline ${pipelineId}`,
+      {
+        pipelineId,
+        organizationId,
+        userId,
+        metadata: { triggerType, batchSize, jobId: job.id },
+      },
+    );
 
     try {
       const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -158,7 +174,8 @@ export class IncrementalSyncProcessor extends WorkerHost {
 
       if (completedRun.status !== 'success') {
         throw new Error(
-          completedRun.errorMessage || `Pipeline run ${completedRun.id} ended with status ${completedRun.status}`,
+          completedRun.errorMessage ||
+            `Pipeline run ${completedRun.id} ended with status ${completedRun.status}`,
         );
       }
 
@@ -239,12 +256,15 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
         },
       );
       this.logger.log('[POLLING] CDC poll cycle scheduled every 5 minutes');
+      this.activity.info('job.poll_cycle', 'CDC poll cycle scheduled every 5 minutes');
     } catch (error) {
       this.logger.error(`[POLLING] Failed to schedule poll-cycle: ${error}`);
     }
   }
 
-  async process(job: Job<DeltaCheckJobData | Record<string, never>, unknown, string>): Promise<void> {
+  async process(
+    job: Job<DeltaCheckJobData | Record<string, never>, unknown, string>,
+  ): Promise<void> {
     if (job.name === 'poll-cycle') {
       await this.runPollCycle();
       return;
@@ -266,7 +286,10 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
         return;
       }
 
-      const result = await this.checkForChanges(pipelineId, pipeline.checkpoint as Record<string, unknown>);
+      const result = await this.checkForChanges(
+        pipelineId,
+        pipeline.checkpoint as Record<string, unknown>,
+      );
 
       if (result.checkpoint) {
         await this.pipelineRepository.saveCheckpointStateAtomic(pipelineId, result.checkpoint);
@@ -277,12 +300,19 @@ export class PollingChecksProcessor extends WorkerHost implements OnModuleInit {
       }
 
       this.logger.log(`[DELTA-CHECK] Changes detected for pipeline ${pipelineId}`);
+      this.activity.info('job.delta_check', `Changes detected for pipeline ${pipelineId}`, {
+        pipelineId,
+        organizationId,
+      });
       await this.pipelineQueueService.enqueueIncrementalSync({
         pipelineId,
         organizationId,
         userId: pipeline.createdBy || 'system',
         triggerType: 'polling',
-        checkpoint: ((result.checkpoint || pipeline.checkpoint || {}) as Record<string, unknown>) as IncrementalSyncJobData['checkpoint'],
+        checkpoint: (result.checkpoint || pipeline.checkpoint || {}) as Record<
+          string,
+          unknown
+        > as IncrementalSyncJobData['checkpoint'],
         batchSize: 500,
       });
     } catch (error) {

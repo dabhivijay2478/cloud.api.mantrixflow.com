@@ -59,7 +59,12 @@ interface PipelineRunUpdatePayload {
       const frontendUrl = process.env.FRONTEND_URL ?? '';
       const allowedOrigins: string[] = [];
       if (allowedOriginsEnv) {
-        allowedOrigins.push(...allowedOriginsEnv.split(',').map((o) => o.trim()).filter(Boolean));
+        allowedOrigins.push(
+          ...allowedOriginsEnv
+            .split(',')
+            .map((o) => o.trim())
+            .filter(Boolean),
+        );
       }
       if (frontendUrl && !allowedOrigins.includes(frontendUrl)) {
         allowedOrigins.push(frontendUrl);
@@ -127,7 +132,9 @@ export class PipelineUpdatesGateway
     }
     try {
       this.redisSub = new Redis(redisUrl, { maxRetriesPerRequest: null });
-      this.redisSub.on('error', (err) => this.logger.error(`Redis subscriber error: ${err.message}`));
+      this.redisSub.on('error', (err) =>
+        this.logger.error(`Redis subscriber error: ${err.message}`),
+      );
       this.redisSub.subscribe(REDIS_PUBSUB_CHANNEL, (err) => {
         if (err) this.logger.error(`Redis subscribe error: ${err.message}`);
       });
@@ -328,7 +335,9 @@ export class PipelineUpdatesGateway
     // Join pipeline room
     client.join(`pipeline_${pipelineId}`);
     this.activity.info('ws.room_joined', `Client ${client.id} joined pipeline_${pipelineId}`, {
-      pipelineId, organizationId, metadata: { clientId: client.id, room: `pipeline_${pipelineId}` },
+      pipelineId,
+      organizationId,
+      metadata: { clientId: client.id, room: `pipeline_${pipelineId}` },
     });
 
     // Also join organization room if provided
@@ -352,7 +361,8 @@ export class PipelineUpdatesGateway
     if (pipelineId) {
       client.leave(`pipeline_${pipelineId}`);
       this.activity.info('ws.room_left', `Client ${client.id} left pipeline_${pipelineId}`, {
-        pipelineId, metadata: { clientId: client.id },
+        pipelineId,
+        metadata: { clientId: client.id },
       });
     }
 
@@ -369,7 +379,8 @@ export class PipelineUpdatesGateway
     if (runId) {
       client.join(`run_${runId}`);
       this.activity.debug('ws.room_joined', `Client ${client.id} joined run_${runId}`, {
-        runId, metadata: { clientId: client.id },
+        runId,
+        metadata: { clientId: client.id },
       });
       client.emit('joined_run', { runId });
     }

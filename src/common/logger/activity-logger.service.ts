@@ -94,8 +94,16 @@ export class ActivityLoggerService {
    * in the JSON output and are searchable by any log aggregator.
    */
   log(params: ActivityLogParams): void {
-    const { level = 'info', action, message, userId, pipelineId, runId, organizationId, metadata } =
-      params;
+    const {
+      level = 'info',
+      action,
+      message,
+      userId,
+      pipelineId,
+      runId,
+      organizationId,
+      metadata,
+    } = params;
 
     const ctx: Record<string, unknown> = {
       action,
@@ -116,7 +124,6 @@ export class ActivityLoggerService {
       case 'debug':
         this.pino.debug(ctx, message);
         break;
-      case 'info':
       default:
         this.pino.info(ctx, message);
         break;
@@ -124,22 +131,38 @@ export class ActivityLoggerService {
   }
 
   /** Convenience: info-level log */
-  info(action: ActivityAction, message: string, ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>): void {
+  info(
+    action: ActivityAction,
+    message: string,
+    ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>,
+  ): void {
     this.log({ level: 'info', action, message, ...ctx });
   }
 
   /** Convenience: warn-level log */
-  warn(action: ActivityAction, message: string, ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>): void {
+  warn(
+    action: ActivityAction,
+    message: string,
+    ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>,
+  ): void {
     this.log({ level: 'warn', action, message, ...ctx });
   }
 
   /** Convenience: error-level log */
-  error(action: ActivityAction, message: string, ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>): void {
+  error(
+    action: ActivityAction,
+    message: string,
+    ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>,
+  ): void {
     this.log({ level: 'error', action, message, ...ctx });
   }
 
   /** Convenience: debug-level log */
-  debug(action: ActivityAction, message: string, ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>): void {
+  debug(
+    action: ActivityAction,
+    message: string,
+    ctx?: Omit<ActivityLogParams, 'action' | 'message' | 'level'>,
+  ): void {
     this.log({ level: 'debug', action, message, ...ctx });
   }
 }

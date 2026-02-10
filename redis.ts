@@ -7,7 +7,8 @@ const redis = new Redis({
   db: 0,
 });
 
-redis.ping()
+redis
+  .ping()
   .then(() => console.log('Connected successfully! Redis is working.'))
-  .catch(err => console.error('Connection failed:', err.message))
+  .catch((err) => console.error('Connection failed:', err.message))
   .finally(() => redis.quit());

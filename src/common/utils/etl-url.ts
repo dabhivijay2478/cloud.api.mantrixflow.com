@@ -15,7 +15,7 @@ export function normalizeEtlBaseUrl(url: string | undefined): string {
     ? withoutTrailingSlash
     : `https://${withoutTrailingSlash}`;
   try {
-    const parsed = new URL(withScheme + '/');
+    const parsed = new URL(`${withScheme}/`);
     if (!parsed.host) return '';
     return withScheme;
   } catch {

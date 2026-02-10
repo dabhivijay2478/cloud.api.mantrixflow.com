@@ -181,7 +181,9 @@ export class ConnectionService implements OnModuleInit {
           normalized.ssl.ca_cert = this.maybeDecryptIncomingEncrypted(normalized.ssl.ca_cert);
         }
         if (normalized.ssl?.client_cert) {
-          normalized.ssl.client_cert = this.maybeDecryptIncomingEncrypted(normalized.ssl.client_cert);
+          normalized.ssl.client_cert = this.maybeDecryptIncomingEncrypted(
+            normalized.ssl.client_cert,
+          );
         }
         if (normalized.ssl?.client_key) {
           normalized.ssl.client_key = this.maybeDecryptIncomingEncrypted(normalized.ssl.client_key);
@@ -368,7 +370,9 @@ export class ConnectionService implements OnModuleInit {
       }
 
       if (migratedCount > 0) {
-        this.logger.log(`Migrated ${migratedCount} connection(s) with legacy plaintext credentials`);
+        this.logger.log(
+          `Migrated ${migratedCount} connection(s) with legacy plaintext credentials`,
+        );
       }
     } catch (error) {
       this.logger.warn(
@@ -688,7 +692,10 @@ export class ConnectionService implements OnModuleInit {
     }
 
     // Verify connection type matches data source type (normalize aliases like "postgres" → "postgresql")
-    if (this.normalizeSourceTypeForPython(dto.connectionType) !== this.normalizeSourceTypeForPython(dataSource.sourceType)) {
+    if (
+      this.normalizeSourceTypeForPython(dto.connectionType) !==
+      this.normalizeSourceTypeForPython(dataSource.sourceType)
+    ) {
       throw new BadRequestException(
         `Connection type "${dto.connectionType}" does not match data source type "${dataSource.sourceType}"`,
       );

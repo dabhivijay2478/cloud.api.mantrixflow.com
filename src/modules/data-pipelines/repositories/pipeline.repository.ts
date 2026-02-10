@@ -4,7 +4,19 @@
  */
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, count as drizzleCount, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  count as drizzleCount,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { PaginatedResult } from '../../../common/dto/pagination-query.dto';
 import type {
@@ -760,9 +772,7 @@ export class PipelineRepository {
           .set({
             checkpoint: checkpointValue as any,
             lastSyncValue:
-              lastSyncValue === undefined || lastSyncValue === null
-                ? null
-                : String(lastSyncValue),
+              lastSyncValue === undefined || lastSyncValue === null ? null : String(lastSyncValue),
             lastSyncAt,
             updatedAt: new Date(),
           })

@@ -46,7 +46,13 @@ export class SourceSchemaService {
    */
   private normalizeSourceType(type: string): string {
     const t = type.toLowerCase().trim();
-    if (t === 'postgres' || t === 'pg' || t === 'pgvector' || t === 'redshift' || t === 'postgresql') {
+    if (
+      t === 'postgres' ||
+      t === 'pg' ||
+      t === 'pgvector' ||
+      t === 'redshift' ||
+      t === 'postgresql'
+    ) {
       return 'postgresql';
     }
     return t;
@@ -71,7 +77,9 @@ export class SourceSchemaService {
         throw new ForbiddenException('Data source does not belong to this organization');
       }
       // Validate source type matches data source type (normalize aliases like "postgres" → "postgresql")
-      if (this.normalizeSourceType(dataSource.sourceType) !== this.normalizeSourceType(sourceType)) {
+      if (
+        this.normalizeSourceType(dataSource.sourceType) !== this.normalizeSourceType(sourceType)
+      ) {
         throw new BadRequestException(
           `Source type '${sourceType}' does not match data source type '${dataSource.sourceType}'`,
         );

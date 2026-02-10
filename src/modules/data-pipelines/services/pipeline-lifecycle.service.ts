@@ -289,7 +289,10 @@ export class PipelineLifecycleService {
       throw new NotFoundException(`Pipeline ${pipelineId} not found`);
     }
 
-    await this.pipelineRepository.saveCheckpointStateAtomic(pipelineId, checkpoint as Record<string, unknown>);
+    await this.pipelineRepository.saveCheckpointStateAtomic(
+      pipelineId,
+      checkpoint as Record<string, unknown>,
+    );
 
     const logMessage = `💾 Checkpoint saved: ${checkpoint.rowsProcessed?.toLocaleString() || 0} rows processed`;
     this.logger.log(logMessage);

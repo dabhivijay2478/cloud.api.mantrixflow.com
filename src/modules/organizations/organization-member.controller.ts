@@ -149,7 +149,11 @@ export class OrganizationMemberController {
     const limitNum = Math.min(Math.max(parseInt(limit || '20', 10) || 20, 1), 100);
     const offsetNum = Math.max(parseInt(offset || '0', 10) || 0, 0);
 
-    const result = await this.memberService.listMembersPaginated(organizationId, limitNum, offsetNum);
+    const result = await this.memberService.listMembersPaginated(
+      organizationId,
+      limitNum,
+      offsetNum,
+    );
     return createListResponse(result.data, 'Members retrieved successfully', {
       total: result.total,
       limit: limitNum,

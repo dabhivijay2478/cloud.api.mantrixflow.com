@@ -188,7 +188,12 @@ export class DataSourceService {
       throw new ForbiddenException('You are not a member of this organization');
     }
 
-    return this.dataSourceRepository.findByOrganizationPaginated(organizationId, limit, offset, filters);
+    return this.dataSourceRepository.findByOrganizationPaginated(
+      organizationId,
+      limit,
+      offset,
+      filters,
+    );
   }
 
   /**
