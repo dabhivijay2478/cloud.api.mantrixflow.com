@@ -45,7 +45,7 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PipelineQueueService } from '../../queue/pipeline-queue.service';
+import { PgmqQueueService } from '../../queue';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -78,7 +78,7 @@ export class PipelineService {
     private readonly roleService: OrganizationRoleService,
     private readonly lifecycleService: PipelineLifecycleService,
     private readonly schedulerService: PipelineSchedulerService,
-    private readonly pipelineQueueService: PipelineQueueService,
+    private readonly pipelineQueueService: PgmqQueueService,
     private readonly connectionService: ConnectionService,
     private readonly activity: ActivityLoggerService,
   ) {}

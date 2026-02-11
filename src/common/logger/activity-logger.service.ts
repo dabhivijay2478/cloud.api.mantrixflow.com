@@ -51,7 +51,7 @@ export type ActivityAction =
   | 'ws.room_joined'
   | 'ws.room_left'
   | 'ws.update_broadcast'
-  | 'ws.redis_message'
+  | 'ws.notify_message'
   // Data sources
   | 'datasource.created'
   | 'datasource.deleted'
