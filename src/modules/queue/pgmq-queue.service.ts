@@ -90,21 +90,40 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit(): Promise<void> {
-    const databaseUrl = this.configService.get<string>('DATABASE_URL');
+    // PgMQ/pg_cron need session mode. Prefer DATABASE_DIRECT_URL; else derive from DATABASE_URL (6543 → 5432).
+    const explicitDirect = this.configService.get<string>('DATABASE_DIRECT_URL');
+    const poolerUrl = this.configService.get<string>('DATABASE_URL');
+    const databaseUrl =
+      explicitDirect ||
+      (poolerUrl?.includes(':6543') ? poolerUrl.replace(':6543', ':5432') : poolerUrl) ||
+      null;
     if (!databaseUrl) {
-      this.logger.error('DATABASE_URL not set — pgmq queue service cannot start');
+      this.logger.error('DATABASE_URL (or DATABASE_DIRECT_URL) not set — pgmq queue service cannot start');
       return;
+    }
+    if (!explicitDirect && poolerUrl?.includes(':6543')) {
+      this.logger.log(
+        'Using session-mode URL derived from DATABASE_URL (port 5432). Set DATABASE_DIRECT_URL in .env to override.',
+      );
     }
     try {
       this.pool = new Pool({ connectionString: databaseUrl, max: 5 });
       this.pool.on('error', (err) => this.logger.error(`PG pool error: ${err.message}`));
+      this.logger.log('Ensuring pgmq extension...');
       await this.ensureExtension();
+      this.logger.log('Ensuring queues exist...');
       await this.ensureQueuesExist();
+      this.logger.log('Setting up pg_cron (optional)...');
       await this.setupCdcPollCron();
       this.initialized = true;
       this.logger.log('PgMQ queue service (pgmq + pg_cron) ready');
     } catch (error) {
-      this.logger.error(`Failed to initialise PgMQ queue service: ${error}`);
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        `Failed to initialise PgMQ queue service: ${err.message}. ` +
+          'Ensure pgmq is enabled in Supabase Dashboard → Database → Extensions, and use a session-mode connection (DATABASE_DIRECT_URL, port 5432) for queue operations.',
+      );
+      if (err.stack) this.logger.debug(err.stack);
     }
   }
 
@@ -130,12 +149,11 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
       await this.sql('CREATE EXTENSION IF NOT EXISTS pgmq');
       this.logger.log('pgmq extension enabled');
     } catch (error) {
-      this.logger.error(
-        'Could not enable pgmq extension. Enable it in Supabase Dashboard → ' +
-          'Database → Extensions → search "pgmq" → Enable. ' +
-          `Error: ${error}`,
+      // Non-fatal: extension may already be enabled via Supabase Dashboard (Database → Extensions).
+      this.logger.warn(
+        `Could not run CREATE EXTENSION pgmq (continuing anyway): ${error}. ` +
+          'If queues fail, enable pgmq in Supabase Dashboard → Database → Extensions.',
       );
-      throw error;
     }
   }
 
@@ -145,8 +163,14 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
         await this.sql('SELECT pgmq.create($1)', [name]);
         this.logger.log(`pgmq queue "${name}" created`);
       } catch (error: any) {
-        if (error?.message?.includes('already exists')) {
-          this.logger.debug(`pgmq queue "${name}" already exists`);
+        const msg = String(error?.message ?? error).toLowerCase();
+        const alreadyExists =
+          msg.includes('already exists') ||
+          msg.includes('duplicate') ||
+          (msg.includes('relation') && msg.includes('exists')) ||
+          msg.includes('already a member of extension');
+        if (alreadyExists) {
+          this.logger.log(`pgmq queue "${name}" already exists (skipped)`);
         } else {
           throw error;
         }

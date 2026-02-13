@@ -103,14 +103,16 @@ export class PipelineUpdatesGateway
 
   async onModuleDestroy() {
     this.logger.log('Shutting down Pipeline Updates Gateway...');
-    // Clean up Postgres NOTIFY listeners
-    for (const listener of this.notifyListeners) {
-      if (this.pgClient) {
-        await this.pgClient.query(`UNLISTEN ${listener.channel}`).catch(() => {});
-      }
-    }
+    // Clean up Postgres NOTIFY client
     if (this.pgClient) {
-      await this.pgClient.end();
+      try {
+        for (const listener of this.notifyListeners) {
+          await this.pgClient.query(`UNLISTEN ${listener.channel}`).catch(() => {});
+        }
+        await this.pgClient.end();
+      } catch {
+        /* ignore cleanup errors */
+      }
       this.pgClient = null;
     }
     // Clean up Supabase Realtime
@@ -242,22 +244,7 @@ export class PipelineUpdatesGateway
         this.logger.warn('DATABASE_URL not found — NOTIFY listeners disabled');
         return;
       }
-      // Create a dedicated connection for listening
-      const { Pool } = await import('pg');
-      const pool = new Pool({ connectionString: databaseUrl });
-      this.pgClient = await pool.connect();
-      // Existing DB-trigger channels
-      await this.pgClient.query('LISTEN pipeline_updates');
-      await this.pgClient.query('LISTEN pipeline_run_updates');
-      // New channel for transient job status updates (published by PgmqQueueService)
-      await this.pgClient.query(`LISTEN ${PG_NOTIFY_PIPELINE_STATUS}`);
-      // Handle notifications
-      this.pgClient.on('notification', (msg: any) => {
-        this.handlePostgresNotification(msg.channel, msg.payload);
-      });
-      this.logger.log(
-        `Postgres NOTIFY listeners: pipeline_updates, pipeline_run_updates, ${PG_NOTIFY_PIPELINE_STATUS}`,
-      );
+      await this.connectPgNotify(databaseUrl);
       // Store listeners for cleanup
       this.notifyListeners = [
         {
@@ -275,6 +262,41 @@ export class PipelineUpdatesGateway
       ];
     } catch (error) {
       this.logger.error(`Failed to setup Postgres listeners: ${error}`);
+    }
+  }
+
+  /**
+   * Create a dedicated PG connection for LISTEN/NOTIFY with auto-reconnect.
+   * Handles ECONNRESET gracefully instead of crashing the process.
+   */
+  private async connectPgNotify(databaseUrl: string): Promise<void> {
+    try {
+      if (this.pgClient) {
+        await this.pgClient.end().catch(() => {});
+        this.pgClient = null;
+      }
+      const { Client } = await import('pg');
+      this.pgClient = new Client({ connectionString: databaseUrl });
+      // Attach error handler BEFORE connect to prevent unhandled 'error' crash
+      this.pgClient.on('error', (err: Error) => {
+        this.logger.warn(`Postgres NOTIFY connection lost: ${err.message}. Reconnecting…`);
+        this.pgClient = null;
+        setTimeout(() => void this.connectPgNotify(databaseUrl), 3_000);
+      });
+      await this.pgClient.connect();
+      await this.pgClient.query('LISTEN pipeline_updates');
+      await this.pgClient.query('LISTEN pipeline_run_updates');
+      await this.pgClient.query(`LISTEN ${PG_NOTIFY_PIPELINE_STATUS}`);
+      this.pgClient.on('notification', (msg: any) => {
+        this.handlePostgresNotification(msg.channel, msg.payload);
+      });
+      this.logger.log(
+        `Postgres NOTIFY listeners: pipeline_updates, pipeline_run_updates, ${PG_NOTIFY_PIPELINE_STATUS}`,
+      );
+    } catch (error) {
+      this.logger.error(`Postgres NOTIFY connect failed: ${error}. Retrying in 5 s…`);
+      this.pgClient = null;
+      setTimeout(() => void this.connectPgNotify(databaseUrl), 5_000);
     }
   }
 
