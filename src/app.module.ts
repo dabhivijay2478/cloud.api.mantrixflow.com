@@ -29,7 +29,7 @@ import { UserModule } from './modules/users/user.module';
     // Use for quick, in-memory tasks that run on every instance
     ScheduleModule.forRoot(),
 
-    // Job queuing and scheduling: BullMQ + Redis (DataPipelineModule)
+    // Job queuing and scheduling: pgmq + pg_cron (DataPipelineModule)
 
     // Application Modules
     DataSourceModule,

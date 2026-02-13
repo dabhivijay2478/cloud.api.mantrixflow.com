@@ -3,9 +3,10 @@
  * Handles real-time updates via Socket.io
  *
  * Architecture:
- * - Listens to Postgres NOTIFY events ('pipeline_updates', 'pipeline_run_updates')
- * - Subscribes to Redis channel 'pipeline-updates' for job status/progress from BullMQ
- * - Forwards notifications to Socket.io clients
+ * - Listens to Postgres NOTIFY events for transient job status updates
+ *   ('pipeline_updates', 'pipeline_run_updates', 'pipeline_job_status')
+ * - Subscribes to Supabase Realtime for table-level changes on pipelines / pipeline_runs
+ * - Forwards all notifications to Socket.io clients
  * - Clients join room: pipeline_{pipelineId} to receive updates
  */
 
@@ -21,9 +22,9 @@ import {
 import { Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import { createClient, SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { ActivityLoggerService } from '../../../common/logger';
-import { REDIS_PUBSUB_CHANNEL } from '../../queue/bullmq.module';
+import { PG_NOTIFY_PIPELINE_STATUS } from '../../queue/pgmq.constants';
 
 interface PipelineUpdatePayload {
   pipeline_id: string;
@@ -83,8 +84,10 @@ export class PipelineUpdatesGateway
 
   private readonly logger = new Logger(PipelineUpdatesGateway.name);
   private pgClient: any = null;
-  private redisSub: Redis | null = null;
-  private notifyListeners: Array<{ channel: string; handler: (payload: string) => void }> = [];
+  private supabase: SupabaseClient | null = null;
+  private realtimeChannel: RealtimeChannel | null = null;
+  private notifyListeners: Array<{ channel: string; handler: (payload: string) => void }> =
+    [];
 
   constructor(
     private readonly configService: ConfigService,
@@ -93,68 +96,262 @@ export class PipelineUpdatesGateway
 
   async onModuleInit() {
     this.logger.log('Initializing Pipeline Updates Gateway...');
-
     await this.setupPostgresListeners();
-    await this.setupRedisSubscriber();
-
+    await this.setupSupabaseRealtime();
     this.logger.log('Pipeline Updates Gateway initialized');
   }
 
   async onModuleDestroy() {
     this.logger.log('Shutting down Pipeline Updates Gateway...');
-
-    for (const listener of this.notifyListeners) {
-      if (this.pgClient) {
-        await this.pgClient.query(`UNLISTEN ${listener.channel}`);
-      }
-    }
+    // Clean up Postgres NOTIFY client
     if (this.pgClient) {
-      await this.pgClient.end();
+      try {
+        for (const listener of this.notifyListeners) {
+          await this.pgClient.query(`UNLISTEN ${listener.channel}`).catch(() => {});
+        }
+        await this.pgClient.end();
+      } catch {
+        /* ignore cleanup errors */
+      }
       this.pgClient = null;
     }
-    if (this.redisSub) {
-      await this.redisSub.unsubscribe(REDIS_PUBSUB_CHANNEL);
-      await this.redisSub.quit();
-      this.redisSub = null;
+    // Clean up Supabase Realtime
+    if (this.realtimeChannel && this.supabase) {
+      this.supabase.removeChannel(this.realtimeChannel);
+      this.realtimeChannel = null;
     }
-
+    if (this.supabase) {
+      await this.supabase.removeAllChannels();
+      this.supabase = null;
+    }
     this.logger.log('Pipeline Updates Gateway shut down');
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // SUPABASE REALTIME (table-level changes on pipelines / pipeline_runs)
+  // ════════════════════════════════════════════════════════════════
+
   /**
-   * Subscribe to Redis channel for real-time status/progress from BullMQ job handlers.
+   * Subscribe to Supabase Realtime for table-level change events.
+   * Catches DB-level UPDATEs on the pipelines and pipeline_runs tables,
+   * complementing the NOTIFY channel for transient job status updates.
    */
-  private async setupRedisSubscriber(): Promise<void> {
-    const redisUrl = this.configService.get<string>('REDIS_URL');
-    if (!redisUrl) {
-      this.logger.warn('REDIS_URL not set. Redis pub/sub updates will not be received.');
+  private async setupSupabaseRealtime(): Promise<void> {
+    const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
+    const supabaseKey =
+      this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ||
+      this.configService.get<string>('SUPABASE_ANON_KEY');
+    if (!supabaseUrl || !supabaseKey) {
+      this.logger.warn(
+        'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set — Supabase Realtime disabled',
+      );
       return;
     }
     try {
-      this.redisSub = new Redis(redisUrl, { maxRetriesPerRequest: null });
-      this.redisSub.on('error', (err) =>
-        this.logger.error(`Redis subscriber error: ${err.message}`),
+      this.supabase = createClient(supabaseUrl, supabaseKey, {
+        realtime: { params: { eventsPerSecond: 10 } },
+      });
+      this.realtimeChannel = this.supabase
+        .channel('pipeline-realtime')
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'pipelines' },
+          (payload) => this.handleSupabasePipelineChange(payload),
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'pipeline_runs' },
+          (payload) => this.handleSupabaseRunChange(payload),
+        )
+        .subscribe((status) => {
+          this.logger.log(`Supabase Realtime subscription status: ${status}`);
+        });
+      this.logger.log(
+        'Supabase Realtime subscription active for pipelines & pipeline_runs',
       );
-      this.redisSub.subscribe(REDIS_PUBSUB_CHANNEL, (err) => {
-        if (err) this.logger.error(`Redis subscribe error: ${err.message}`);
-      });
-      this.redisSub.on('message', (channel: string, message: string) => {
-        if (channel === REDIS_PUBSUB_CHANNEL) {
-          this.handleRedisPipelineUpdate(message);
-        }
-      });
-      this.logger.log(`Subscribed to Redis channel: ${REDIS_PUBSUB_CHANNEL}`);
     } catch (error) {
-      this.logger.error(`Failed to setup Redis subscriber: ${error}`);
+      this.logger.error(`Failed to setup Supabase Realtime: ${error}`);
+    }
+  }
+
+  /** Forward Supabase Realtime pipeline UPDATE to Socket.io rooms. */
+  private handleSupabasePipelineChange(payload: any): void {
+    try {
+      const row = payload.new;
+      if (!row?.id || !row?.organization_id) return;
+      const update: PipelineUpdatePayload = {
+        pipeline_id: row.id,
+        organization_id: row.organization_id,
+        status: row.status,
+        last_run_status: row.last_run_status,
+        last_run_at: row.last_run_at,
+        total_rows_processed: row.total_rows_processed,
+        last_sync_at: row.last_sync_at,
+        updated_at: row.updated_at,
+      };
+      this.server
+        .to(`pipeline_${update.pipeline_id}`)
+        .emit('update', { type: 'pipeline', ...update });
+      this.server.to(`org_${update.organization_id}`).emit('pipeline_update', update);
+      this.logger.debug(`Supabase Realtime: pipeline ${update.pipeline_id} updated`);
+    } catch (error) {
+      this.logger.error(`Error handling Supabase pipeline change: ${error}`);
+    }
+  }
+
+  /** Forward Supabase Realtime pipeline_runs change to Socket.io rooms. */
+  private handleSupabaseRunChange(payload: any): void {
+    try {
+      const row = payload.new;
+      if (!row?.id || !row?.pipeline_id) return;
+      const update: PipelineRunUpdatePayload = {
+        run_id: row.id,
+        pipeline_id: row.pipeline_id,
+        organization_id: row.organization_id,
+        status: row.status,
+        rows_read: row.rows_read,
+        rows_written: row.rows_written,
+        rows_skipped: row.rows_skipped,
+        rows_failed: row.rows_failed,
+        duration_seconds: row.duration_seconds,
+        error_message: row.error_message,
+        updated_at: row.updated_at,
+      };
+      this.server
+        .to(`pipeline_${update.pipeline_id}`)
+        .emit('run_update', { type: 'run', ...update });
+      this.server.to(`run_${update.run_id}`).emit('update', { type: 'run', ...update });
+      this.logger.debug(`Supabase Realtime: run ${update.run_id} updated`);
+    } catch (error) {
+      this.logger.error(`Error handling Supabase run change: ${error}`);
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // POSTGRES NOTIFY (transient status updates + DB triggers)
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Set up Postgres LISTEN for NOTIFY events.
+   * Uses DATABASE_DIRECT_URL (session-mode pooler) if available, otherwise DATABASE_URL.
+   */
+  private async setupPostgresListeners() {
+    try {
+      const databaseUrl =
+        this.configService.get<string>('DATABASE_DIRECT_URL') ||
+        this.configService.get<string>('DATABASE_URL');
+      if (!databaseUrl) {
+        this.logger.warn('DATABASE_URL not found — NOTIFY listeners disabled');
+        return;
+      }
+      await this.connectPgNotify(databaseUrl);
+      // Store listeners for cleanup
+      this.notifyListeners = [
+        {
+          channel: 'pipeline_updates',
+          handler: (payload) => this.handlePipelineUpdate(payload),
+        },
+        {
+          channel: 'pipeline_run_updates',
+          handler: (payload) => this.handlePipelineRunUpdate(payload),
+        },
+        {
+          channel: PG_NOTIFY_PIPELINE_STATUS,
+          handler: (payload) => this.handleJobStatusUpdate(payload),
+        },
+      ];
+    } catch (error) {
+      this.logger.error(`Failed to setup Postgres listeners: ${error}`);
     }
   }
 
   /**
-   * Handle status update from Redis (published by PipelineQueueService / job processors).
+   * Create a dedicated PG connection for LISTEN/NOTIFY with auto-reconnect.
+   * Handles ECONNRESET gracefully instead of crashing the process.
    */
-  private handleRedisPipelineUpdate(message: string): void {
+  private async connectPgNotify(databaseUrl: string): Promise<void> {
     try {
-      const data = JSON.parse(message) as {
+      if (this.pgClient) {
+        await this.pgClient.end().catch(() => {});
+        this.pgClient = null;
+      }
+      const { Client } = await import('pg');
+      this.pgClient = new Client({ connectionString: databaseUrl });
+      // Attach error handler BEFORE connect to prevent unhandled 'error' crash
+      this.pgClient.on('error', (err: Error) => {
+        this.logger.warn(`Postgres NOTIFY connection lost: ${err.message}. Reconnecting…`);
+        this.pgClient = null;
+        setTimeout(() => void this.connectPgNotify(databaseUrl), 3_000);
+      });
+      await this.pgClient.connect();
+      await this.pgClient.query('LISTEN pipeline_updates');
+      await this.pgClient.query('LISTEN pipeline_run_updates');
+      await this.pgClient.query(`LISTEN ${PG_NOTIFY_PIPELINE_STATUS}`);
+      this.pgClient.on('notification', (msg: any) => {
+        this.handlePostgresNotification(msg.channel, msg.payload);
+      });
+      this.logger.log(
+        `Postgres NOTIFY listeners: pipeline_updates, pipeline_run_updates, ${PG_NOTIFY_PIPELINE_STATUS}`,
+      );
+    } catch (error) {
+      this.logger.error(`Postgres NOTIFY connect failed: ${error}. Retrying in 5 s…`);
+      this.pgClient = null;
+      setTimeout(() => void this.connectPgNotify(databaseUrl), 5_000);
+    }
+  }
+
+  /** Route Postgres NOTIFY to the appropriate handler. */
+  private handlePostgresNotification(channel: string, payload: string) {
+    try {
+      if (channel === 'pipeline_updates') {
+        this.handlePipelineUpdate(payload);
+      } else if (channel === 'pipeline_run_updates') {
+        this.handlePipelineRunUpdate(payload);
+      } else if (channel === PG_NOTIFY_PIPELINE_STATUS) {
+        this.handleJobStatusUpdate(payload);
+      }
+    } catch (error) {
+      this.logger.error(`Error handling NOTIFY from ${channel}: ${error}`);
+    }
+  }
+
+  /** Handle pipeline update from DB trigger NOTIFY (snake_case). */
+  private handlePipelineUpdate(payload: string) {
+    try {
+      const update: PipelineUpdatePayload = JSON.parse(payload);
+      const { pipeline_id, organization_id } = update;
+      this.server
+        .to(`pipeline_${pipeline_id}`)
+        .emit('update', { type: 'pipeline', ...update });
+      this.server.to(`org_${organization_id}`).emit('pipeline_update', update);
+      this.logger.debug(`Broadcasted pipeline update for ${pipeline_id}`);
+    } catch (error) {
+      this.logger.error(`Error parsing pipeline update: ${error}`);
+    }
+  }
+
+  /** Handle pipeline run update from DB trigger NOTIFY (snake_case). */
+  private handlePipelineRunUpdate(payload: string) {
+    try {
+      const update: PipelineRunUpdatePayload = JSON.parse(payload);
+      const { pipeline_id, run_id } = update;
+      this.server
+        .to(`pipeline_${pipeline_id}`)
+        .emit('run_update', { type: 'run', ...update });
+      this.server.to(`run_${run_id}`).emit('update', { type: 'run', ...update });
+      this.logger.debug(`Broadcasted run update for ${run_id} (pipeline: ${pipeline_id})`);
+    } catch (error) {
+      this.logger.error(`Error parsing run update: ${error}`);
+    }
+  }
+
+  /**
+   * Handle transient job status update from PgmqQueueService (via NOTIFY).
+   * Payload uses camelCase (pipelineId, organizationId, status, …).
+   */
+  private handleJobStatusUpdate(payload: string): void {
+    try {
+      const data = JSON.parse(payload) as {
         pipelineId: string;
         organizationId: string;
         status: string;
@@ -163,9 +360,15 @@ export class PipelineUpdatesGateway
         error?: string;
         timestamp: string;
       };
-      const { pipelineId, organizationId, status, rowsProcessed, newRowsCount, error, timestamp } =
-        data;
-
+      const {
+        pipelineId,
+        organizationId,
+        status,
+        rowsProcessed,
+        newRowsCount,
+        error,
+        timestamp,
+      } = data;
       this.server.to(`pipeline_${pipelineId}`).emit('update', {
         type: 'pipeline',
         pipeline_id: pipelineId,
@@ -185,179 +388,60 @@ export class PipelineUpdatesGateway
           updated_at: timestamp,
         });
       }
-      this.logger.debug(`Broadcasted Redis pipeline update for ${pipelineId}`);
+      this.logger.debug(`Broadcasted job status update for pipeline ${pipelineId}`);
     } catch (error) {
-      this.logger.error(`Error parsing Redis pipeline update: ${error}`);
+      this.logger.error(`Error parsing job status update: ${error}`);
     }
   }
 
-  /**
-   * Setup Postgres LISTEN for NOTIFY events
-   */
-  private async setupPostgresListeners() {
-    try {
-      const databaseUrl = this.configService.get<string>('DATABASE_URL');
-      if (!databaseUrl) {
-        this.logger.warn('DATABASE_URL not found. Real-time updates via NOTIFY will not work.');
-        return;
-      }
+  // ════════════════════════════════════════════════════════════════
+  // CLIENT CONNECTION HANDLERS
+  // ════════════════════════════════════════════════════════════════
 
-      // Create a dedicated connection for listening
-      const { Pool } = await import('pg');
-      const pool = new Pool({ connectionString: databaseUrl });
-      this.pgClient = await pool.connect();
-
-      // Listen for pipeline updates
-      await this.pgClient.query('LISTEN pipeline_updates');
-      await this.pgClient.query('LISTEN pipeline_run_updates');
-
-      // Handle notifications
-      this.pgClient.on('notification', (msg: any) => {
-        this.handlePostgresNotification(msg.channel, msg.payload);
-      });
-
-      this.logger.log(
-        'Postgres NOTIFY listeners set up for pipeline_updates and pipeline_run_updates',
-      );
-
-      // Store listeners for cleanup
-      this.notifyListeners = [
-        { channel: 'pipeline_updates', handler: (payload) => this.handlePipelineUpdate(payload) },
-        {
-          channel: 'pipeline_run_updates',
-          handler: (payload) => this.handlePipelineRunUpdate(payload),
-        },
-      ];
-    } catch (error) {
-      this.logger.error(`Failed to setup Postgres listeners: ${error}`);
-    }
-  }
-
-  /**
-   * Handle Postgres NOTIFY notification
-   */
-  private handlePostgresNotification(channel: string, payload: string) {
-    try {
-      if (channel === 'pipeline_updates') {
-        this.handlePipelineUpdate(payload);
-      } else if (channel === 'pipeline_run_updates') {
-        this.handlePipelineRunUpdate(payload);
-      }
-    } catch (error) {
-      this.logger.error(`Error handling notification from ${channel}: ${error}`);
-    }
-  }
-
-  /**
-   * Handle pipeline update notification
-   */
-  private handlePipelineUpdate(payload: string) {
-    try {
-      const update: PipelineUpdatePayload = JSON.parse(payload);
-      const { pipeline_id, organization_id } = update;
-
-      // Broadcast to pipeline room
-      this.server.to(`pipeline_${pipeline_id}`).emit('update', {
-        type: 'pipeline',
-        ...update,
-      });
-
-      // Also broadcast to organization room (for dashboard views)
-      this.server.to(`org_${organization_id}`).emit('pipeline_update', {
-        ...update,
-      });
-
-      this.logger.debug(`Broadcasted pipeline update for ${pipeline_id}`);
-    } catch (error) {
-      this.logger.error(`Error parsing pipeline update: ${error}`);
-    }
-  }
-
-  /**
-   * Handle pipeline run update notification
-   */
-  private handlePipelineRunUpdate(payload: string) {
-    try {
-      const update: PipelineRunUpdatePayload = JSON.parse(payload);
-      const { pipeline_id, run_id } = update;
-
-      // Broadcast to pipeline room
-      this.server.to(`pipeline_${pipeline_id}`).emit('run_update', {
-        type: 'run',
-        ...update,
-      });
-
-      // Broadcast to run-specific room
-      this.server.to(`run_${run_id}`).emit('update', {
-        type: 'run',
-        ...update,
-      });
-
-      this.logger.debug(`Broadcasted run update for ${run_id} (pipeline: ${pipeline_id})`);
-    } catch (error) {
-      this.logger.error(`Error parsing run update: ${error}`);
-    }
-  }
-
-  /**
-   * Handle client connection
-   */
+  /** Handle client connection */
   handleConnection(client: Socket) {
     this.activity.info('ws.client_connected', `Client connected: ${client.id}`, {
       metadata: { clientId: client.id },
     });
   }
 
-  /**
-   * Handle client disconnection
-   */
+  /** Handle client disconnection */
   handleDisconnect(client: Socket) {
     this.activity.info('ws.client_disconnected', `Client disconnected: ${client.id}`, {
       metadata: { clientId: client.id },
     });
   }
 
-  /**
-   * Join pipeline room to receive updates
-   */
+  /** Join pipeline room to receive updates */
   @SubscribeMessage('join_pipeline')
   handleJoinPipeline(
     @MessageBody() data: { pipelineId: string; organizationId?: string },
     @ConnectedSocket() client: Socket,
   ) {
     const { pipelineId, organizationId } = data;
-
     if (!pipelineId) {
       client.emit('error', { message: 'pipelineId is required' });
       return;
     }
-
-    // Join pipeline room
     client.join(`pipeline_${pipelineId}`);
     this.activity.info('ws.room_joined', `Client ${client.id} joined pipeline_${pipelineId}`, {
       pipelineId,
       organizationId,
       metadata: { clientId: client.id, room: `pipeline_${pipelineId}` },
     });
-
-    // Also join organization room if provided
     if (organizationId) {
       client.join(`org_${organizationId}`);
     }
-
     client.emit('joined', { pipelineId, organizationId });
   }
 
-  /**
-   * Leave pipeline room
-   */
+  /** Leave pipeline room */
   @SubscribeMessage('leave_pipeline')
   handleLeavePipeline(
     @MessageBody() data: { pipelineId: string },
     @ConnectedSocket() client: Socket,
   ) {
     const { pipelineId } = data;
-
     if (pipelineId) {
       client.leave(`pipeline_${pipelineId}`);
       this.activity.info('ws.room_left', `Client ${client.id} left pipeline_${pipelineId}`, {
@@ -365,17 +449,16 @@ export class PipelineUpdatesGateway
         metadata: { clientId: client.id },
       });
     }
-
     client.emit('left', { pipelineId });
   }
 
-  /**
-   * Join pipeline run room
-   */
+  /** Join pipeline run room */
   @SubscribeMessage('join_run')
-  handleJoinRun(@MessageBody() data: { runId: string }, @ConnectedSocket() client: Socket) {
+  handleJoinRun(
+    @MessageBody() data: { runId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
     const { runId } = data;
-
     if (runId) {
       client.join(`run_${runId}`);
       this.activity.debug('ws.room_joined', `Client ${client.id} joined run_${runId}`, {

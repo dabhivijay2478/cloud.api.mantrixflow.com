@@ -45,7 +45,7 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PipelineQueueService } from '../../queue/pipeline-queue.service';
+import { PgmqQueueService } from '../../queue';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -78,7 +78,7 @@ export class PipelineService {
     private readonly roleService: OrganizationRoleService,
     private readonly lifecycleService: PipelineLifecycleService,
     private readonly schedulerService: PipelineSchedulerService,
-    private readonly pipelineQueueService: PipelineQueueService,
+    private readonly pipelineQueueService: PgmqQueueService,
     private readonly connectionService: ConnectionService,
     private readonly activity: ActivityLoggerService,
   ) {}
@@ -1029,23 +1029,35 @@ export class PipelineService {
       }
     } catch (error) {
       const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const rawErrorMessage = error instanceof Error ? error.message : String(error);
+      // Truncate to prevent DB column overflow / excessively long query params
+      const errorMessage = rawErrorMessage.length > 2000 ? rawErrorMessage.substring(0, 2000) : rawErrorMessage;
+      const rawStack = error instanceof Error ? error.stack : undefined;
+      const errorStack = rawStack && rawStack.length > 4000 ? rawStack.substring(0, 4000) : rawStack;
 
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'failed',
-        jobState: 'failed',
-        completedAt: new Date(),
-        durationSeconds,
-        errorMessage,
-        errorStack: error instanceof Error ? error.stack : undefined,
-      });
+      try {
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'failed',
+          jobState: 'failed',
+          completedAt: new Date(),
+          durationSeconds,
+          errorMessage,
+          errorStack,
+        });
+      } catch (dbError) {
+        this.logger.error(`Failed to persist run error for ${runId}: ${dbError}`);
+      }
 
-      await this.pipelineRepository.update(pipeline.id, {
-        lastRunAt: new Date(),
-        lastRunStatus: 'failed',
-        lastError: errorMessage,
-        totalRunsFailed: (pipeline.totalRunsFailed || 0) + 1,
-      });
+      try {
+        await this.pipelineRepository.update(pipeline.id, {
+          lastRunAt: new Date(),
+          lastRunStatus: 'failed',
+          lastError: errorMessage.length > 1000 ? errorMessage.substring(0, 1000) : errorMessage,
+          totalRunsFailed: (pipeline.totalRunsFailed || 0) + 1,
+        });
+      } catch (dbError) {
+        this.logger.error(`Failed to persist pipeline error for ${pipeline.id}: ${dbError}`);
+      }
 
       // Log activity
       await this.activityLogService.logPipelineRunAction(

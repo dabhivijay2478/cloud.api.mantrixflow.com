@@ -1,9 +1,9 @@
 /**
  * Scheduled Pipeline Worker Service
- * Handles scheduled pipeline execution using BullMQ + Redis
+ * Handles scheduled pipeline execution using pgmq + pg_cron
  *
- * Uses BullMQ for reliable scheduling with:
- * - Message queuing for scheduled runs (pipeline-jobs queue)
+ * Uses pgmq for reliable scheduling with:
+ * - Message queuing for scheduled runs (pipeline_jobs queue)
  * - Automatic retry on failure
  * - Priority queues for urgent vs routine runs
  *
@@ -16,7 +16,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PipelineQueueService } from '../../queue/pipeline-queue.service';
+import { PgmqQueueService } from '../../queue';
 
 // Default batch size for scheduled runs
 const DEFAULT_BATCH_SIZE = 500;
@@ -33,7 +33,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
   constructor(
     private readonly pipelineRepository: PipelineRepository,
     readonly _schedulerService: PipelineSchedulerService,
-    private readonly pipelineQueueService: PipelineQueueService,
+    private readonly pipelineQueueService: PgmqQueueService,
   ) {}
 
   /**
@@ -41,17 +41,17 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
    */
   async onModuleInit(): Promise<void> {
     this.logger.log('════════════════════════════════════════════════════════');
-    this.logger.log('🔧 Starting Scheduled Pipeline Worker...');
+    this.logger.log('Starting Scheduled Pipeline Worker...');
     this.logger.log(`   Poll Interval: ${POLL_INTERVAL_MS / 1000} seconds`);
     this.logger.log(`   Default Batch Size: ${DEFAULT_BATCH_SIZE} records`);
     this.logger.log('════════════════════════════════════════════════════════');
-    this.logger.log('📌 Using BullMQ + Redis for job management:');
-    this.logger.log('   - Message queuing for scheduled runs (pipeline-jobs)');
-    this.logger.log('   - Automatic retries');
-    this.logger.log('   - Priority queues (high: manual, normal: scheduled)');
+    this.logger.log('Using pgmq + pg_cron for job management:');
+    this.logger.log('   - Message queuing for scheduled runs (pipeline_jobs)');
+    this.logger.log('   - Automatic retries via pgmq requeue with backoff');
+    this.logger.log('   - CDC poll cycle every 5 min via pg_cron');
     this.logger.log('════════════════════════════════════════════════════════');
 
-    // Wait for Redis/queue to be ready
+    // Wait for pgmq queue to be ready
     let retries = 0;
     while (!this.pipelineQueueService.isReady() && retries < 10) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -59,7 +59,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     }
 
     if (!this.pipelineQueueService.isReady()) {
-      this.logger.warn('BullMQ/Redis not ready, will retry');
+      this.logger.warn('pgmq not ready, will retry');
       setTimeout(() => this.onModuleInit(), 5000);
       return;
     }
@@ -67,7 +67,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     // Start polling for due pipelines
     this.startPolling();
 
-    this.logger.log('✅ Scheduled Pipeline Worker started');
+    this.logger.log('Scheduled Pipeline Worker started');
   }
 
   /**
@@ -170,10 +170,10 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
 
       this.logger.log(`[SCHEDULER] Found ${duePipelines.length} pipeline(s) due to run`);
 
-      // Enqueue each pipeline as a BullMQ job
+      // Enqueue each pipeline as a pgmq job
       for (const pipeline of duePipelines) {
         if (!this.pipelineQueueService.isReady()) {
-          this.logger.warn('[SCHEDULER] BullMQ/Redis not ready, cannot enqueue job');
+          this.logger.warn('[SCHEDULER] pgmq not ready, cannot enqueue job');
           continue;
         }
 

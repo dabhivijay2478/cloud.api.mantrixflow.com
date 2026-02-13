@@ -158,6 +158,10 @@ export class PythonETLService {
       const collectUrl = `${this.pythonServiceUrl}/collect/${sourceType}`;
       this.assertValidRequestUrl(collectUrl, 'collect');
 
+      // Sanitize checkpoint: remove keys that Singer rejects for incremental sync
+      // (e.g. 'xmin' from XMIN replication — invalid for bookmark-based incremental)
+      const sanitizedCheckpoint = this.sanitizeCheckpoint(checkpoint);
+
       const response = await firstValueFrom(
         this.httpService.post(
           collectUrl,
@@ -169,7 +173,7 @@ export class PythonETLService {
             schema_name: sourceSchema.sourceSchema,
             query: sourceSchema.sourceQuery,
             sync_mode: syncMode,
-            checkpoint: checkpoint || null,
+            checkpoint: sanitizedCheckpoint,
             limit,
             offset,
             cursor: cursor || null,
@@ -386,6 +390,32 @@ export class PythonETLService {
     }
 
     return error?.message || `${operation} failed with unknown error`;
+  }
+
+  /**
+   * Sanitize checkpoint state before passing to Singer taps.
+   * Removes invalid bookmark keys (e.g. 'xmin' from XMIN replication)
+   * that cause "invalid keys found in state" errors in incremental sync.
+   */
+  private sanitizeCheckpoint(checkpoint: any): any {
+    if (!checkpoint) return null;
+    const illegalBookmarkKeys = new Set(['xmin']);
+    try {
+      const clean = JSON.parse(JSON.stringify(checkpoint));
+      if (clean.bookmarks && typeof clean.bookmarks === 'object') {
+        for (const streamId of Object.keys(clean.bookmarks)) {
+          const bookmark = clean.bookmarks[streamId];
+          if (bookmark && typeof bookmark === 'object') {
+            for (const key of illegalBookmarkKeys) {
+              delete bookmark[key];
+            }
+          }
+        }
+      }
+      return clean;
+    } catch {
+      return checkpoint;
+    }
   }
 
   /**

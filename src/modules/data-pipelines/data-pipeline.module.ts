@@ -10,14 +10,14 @@
  * Architecture:
  * - NestJS: Orchestration, CRUD, user/org management, activity logging
  * - Python FastAPI: ETL operations (collect, transform, emit)
- * - BullMQ + Redis: Job queuing, scheduling, CDC polling, real-time pub/sub
- * - Socket.io: Real-time updates
+ * - pgmq + pg_cron: Job queuing, scheduling, CDC polling (Supabase-native)
+ * - Socket.io: Real-time updates (via Supabase Realtime + Postgres NOTIFY)
  *
  * Features:
  * - Incremental sync with checkpoint tracking (WAL CDC for PostgreSQL)
- * - BullMQ queues: pipeline-jobs, incremental-sync, polling-checks
- * - Polling-based CDC (delta check every 5 min via repeatable job)
- * - Redis pub/sub for status/progress → Socket.io gateway
+ * - pgmq queues: pipeline_jobs, incremental_sync, polling_checks
+ * - Polling-based CDC (delta check every 5 min via pg_cron → pgmq)
+ * - Postgres NOTIFY + Supabase Realtime for status/progress → Socket.io gateway
  *
  * Guide: To add a new data source type:
  * 1. Add connector in Python service: etl-service/connectors/{source-name}.py
@@ -47,14 +47,10 @@ import { PipelineLifecycleService } from './services/pipeline-lifecycle.service'
 import { PipelineSchedulerService } from './services/pipeline-scheduler.service';
 import { ScheduledPipelineWorkerService } from './services/scheduled-pipeline-worker.service';
 import { SchemaValidationService } from './services/schema-validation.service';
-import {
-  PipelineJobsProcessor,
-  IncrementalSyncProcessor,
-  PollingChecksProcessor,
-} from './services/pipeline-job-processor.service';
+import { PipelineJobProcessor } from './services/pipeline-job-processor.service';
 
-// Queue (BullMQ + Redis)
-import { BullmqModule } from '../queue/bullmq.module';
+// Queue (pgmq + pg_cron)
+import { PgmqModule } from '../queue';
 
 // Gateways
 import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
@@ -76,8 +72,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
 
-    // BullMQ + Redis for job queuing, scheduling, and real-time pub/sub
-    BullmqModule,
+    // pgmq + pg_cron for job queuing, scheduling, and real-time status updates
+    PgmqModule,
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
@@ -115,10 +111,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     // Python ETL Service - HTTP client for Python FastAPI microservice
     PythonETLService, // Handles collect, transform, emit via Python service
 
-    // BullMQ job processors (workers for pipeline-jobs, incremental-sync, polling-checks)
-    PipelineJobsProcessor,
-    IncrementalSyncProcessor,
-    PollingChecksProcessor,
+    // pgmq job processor (polls pipeline_jobs, incremental_sync, polling_checks queues)
+    PipelineJobProcessor,
 
     // Schema Validation
     SchemaValidationService, // Validates database schema on startup
@@ -128,7 +122,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
   ],
   exports: [
     // Export services for use in other modules
-    // (PipelineQueueService is from BullmqModule; import BullmqModule where needed.)
+    // (PgmqQueueService is from PgmqModule; import PgmqModule where needed.)
     PipelineService,
     SourceSchemaService,
     DestinationSchemaService,

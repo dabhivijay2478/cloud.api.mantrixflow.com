@@ -640,7 +640,7 @@ export class PipelineRepository {
   }
 
   // ============================================================================
-  // POLLING/CDC SUPPORT METHODS (BullMQ Integration)
+  // POLLING/CDC SUPPORT METHODS (pgmq Integration)
   // ============================================================================
 
   /**
