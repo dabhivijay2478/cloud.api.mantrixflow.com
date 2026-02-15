@@ -340,6 +340,86 @@ export class PythonETLService {
   }
 
   /**
+   * Run a dynamic Meltano-style pipeline. Connections are fetched from DB and passed by caller.
+   * Supports postgres-to-mongodb and mongodb-to-postgres.
+   */
+  async runMeltanoPipeline(options: {
+    direction: 'postgres-to-mongodb' | 'mongodb-to-postgres';
+    sourceConnectionConfig: any;
+    destConnectionConfig: any;
+    sourceTable?: string;
+    sourceSchema?: string;
+    destTable?: string;
+    destSchema?: string;
+    syncMode?: 'full' | 'incremental';
+    writeMode?: 'append' | 'upsert' | 'replace';
+    upsertKey?: string[];
+    transformScript?: string;
+    checkpoint?: any;
+    limit?: number;
+    replicationKey?: string;
+  }): Promise<{
+    rowsRead: number;
+    rowsWritten: number;
+    rowsSkipped: number;
+    rowsFailed: number;
+    checkpoint: any;
+    errors: any[];
+  }> {
+    const {
+      direction,
+      sourceConnectionConfig,
+      destConnectionConfig,
+      sourceTable,
+      sourceSchema = 'public',
+      destTable,
+      destSchema = 'public',
+      syncMode = 'full',
+      writeMode = 'upsert',
+      upsertKey = [],
+      transformScript,
+      checkpoint,
+      limit,
+      replicationKey,
+    } = options;
+
+    const runUrl = `${this.pythonServiceUrl}/run-meltano-pipeline`;
+    this.assertValidRequestUrl(runUrl, 'run-meltano-pipeline');
+
+    const response = await firstValueFrom(
+      this.httpService.post(
+        runUrl,
+        {
+          direction,
+          source_connection_config: sourceConnectionConfig,
+          dest_connection_config: destConnectionConfig,
+          source_table: sourceTable,
+          source_schema: sourceSchema,
+          dest_table: destTable ?? sourceTable,
+          dest_schema: destSchema,
+          sync_mode: syncMode,
+          write_mode: writeMode,
+          upsert_key: upsertKey,
+          transform_script: transformScript ?? null,
+          checkpoint: checkpoint ?? null,
+          limit: limit ?? null,
+          replication_key: replicationKey ?? null,
+        },
+        this.buildRequestConfig(600000), // 10 minutes
+      ),
+    );
+
+    return {
+      rowsRead: response.data.rows_read ?? 0,
+      rowsWritten: response.data.rows_written ?? 0,
+      rowsSkipped: response.data.rows_skipped ?? 0,
+      rowsFailed: response.data.rows_failed ?? 0,
+      checkpoint: response.data.checkpoint ?? {},
+      errors: response.data.errors ?? [],
+    };
+  }
+
+  /**
    * Get connection config for a source schema
    */
   async getConnectionConfig(
