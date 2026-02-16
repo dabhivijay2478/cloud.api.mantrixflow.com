@@ -16,6 +16,9 @@ export const PGMQ_QUEUE_NAMES = {
 /** How often NestJS polls pgmq queues for new messages (ms) */
 export const PGMQ_POLL_INTERVAL_MS = 2_000;
 
+/** Max number of pipeline jobs to process in parallel per poll cycle (real-time parallel execution) */
+export const PGMQ_PARALLEL_WORKERS = 5;
+
 /** Visibility timeout for long-running pipeline / sync jobs (seconds) */
 export const PGMQ_VT_LONG_SEC = 14_400; // 4 hours
 

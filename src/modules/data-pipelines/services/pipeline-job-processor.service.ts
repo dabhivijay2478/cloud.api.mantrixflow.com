@@ -31,6 +31,7 @@ import {
   PGMQ_POLL_INTERVAL_MS,
   PGMQ_VT_LONG_SEC,
   PGMQ_VT_SHORT_SEC,
+  PGMQ_PARALLEL_WORKERS,
 } from '../../queue';
 
 /** How often to poll the run DB for completion (ms) */
@@ -97,14 +98,21 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
     if (this.isShuttingDown || this.activeQueue.get(queueName)) return;
     this.activeQueue.set(queueName, true);
     try {
+      const batchSize =
+        queueName === PGMQ_QUEUE_NAMES.POLLING_CHECKS ? 1 : PGMQ_PARALLEL_WORKERS;
       const messages = await this.queueService.readMessages<PgmqJobPayload>(
         queueName,
-        1,
+        batchSize,
         vtSec,
       );
-      for (const msg of messages) {
-        await this.dispatch(queueName, msg);
+      if (messages.length === 0) return;
+      if (messages.length === 1) {
+        await this.dispatch(queueName, messages[0]);
+        return;
       }
+      await Promise.allSettled(
+        messages.map((msg) => this.dispatch(queueName, msg)),
+      );
     } catch (error) {
       this.logger.error(`Error polling "${queueName}": ${error}`);
     } finally {

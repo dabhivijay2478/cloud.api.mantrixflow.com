@@ -488,6 +488,15 @@ EXPOSE 8000
 CMD ["bun", "run", "start:prod"]
 ```
 
+### Vercel Deployment
+
+See **[VERCEL_DEPLOYMENT.md](../../VERCEL_DEPLOYMENT.md)** at repo root for the full guide.
+
+- **Root Directory**: `apps/api`
+- **Framework**: NestJS (auto-detected)
+- **Build**: `bun run build:deploy`
+- **Required env**: `DATABASE_URL`, `ETL_PYTHON_SERVICE_URL`, `ETL_PYTHON_SERVICE_TOKEN`, `SUPABASE_*`, `ALLOWED_ORIGINS`
+
 ## 🔒 Security Best Practices
 
 1. **Encryption**: All database credentials are encrypted at rest

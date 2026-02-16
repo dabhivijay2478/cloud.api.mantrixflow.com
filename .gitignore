@@ -19,7 +19,8 @@ bun-debug.log*
 # OS
 .DS_Store
 
-# Tests
+# Tests (local only - do not push to GitHub)
+/test
 /coverage
 /.nyc_output
 
