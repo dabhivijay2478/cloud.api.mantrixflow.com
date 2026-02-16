@@ -22,7 +22,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "bun --inspect-brk -r tsconfig-paths/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e": "jest --config ./test/jest-e2e.json --forceExit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun --bun src/database/drizzle/migrate.ts",
     "db:migrate:kit": "drizzle-kit migrate",
