@@ -1,9 +1,12 @@
 {
   "version": 2,
-  "framework": "nestjs",
   "buildCommand": "bun run build:deploy",
   "installCommand": "bun install",
-  "env": {
-    "NODE_ENV": "production"
-  }
+  "env": { "NODE_ENV": "production" },
+  "builds": [
+    { "src": "api/index.ts", "use": "@vercel/node" }
+  ],
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api" }
+  ]
 }
