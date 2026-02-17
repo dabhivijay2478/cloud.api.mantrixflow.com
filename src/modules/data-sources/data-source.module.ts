@@ -9,6 +9,7 @@ import { HttpModule } from '@nestjs/axios';
 import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { OrganizationModule } from '../organizations/organization.module';
+import { ConnectorsController } from './connectors.controller';
 import { DataSourceController } from './data-source.controller';
 import { ConnectionService } from './connection.service';
 import { DataSourceService } from './data-source.service';
@@ -25,7 +26,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
       maxRedirects: 5,
     }),
   ],
-  controllers: [DataSourceController],
+  controllers: [DataSourceController, ConnectorsController],
   providers: [
     // Database provider
     {
