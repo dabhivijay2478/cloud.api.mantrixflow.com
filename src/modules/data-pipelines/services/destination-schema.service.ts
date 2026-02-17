@@ -78,6 +78,7 @@ export class DestinationSchemaService {
       destinationTable,
       destinationTableExists: dto.destinationTableExists || false,
       transformScript: dto.transformScript || null,
+      dbtModels: (dto.dbtModels as string[])?.length ? (dto.dbtModels as string[]) : null,
       writeMode: (dto.writeMode as string) || 'append',
       upsertKey: (dto.upsertKey as string[]) || null,
       name: dto.name || `${destinationTable}_destination`,
@@ -184,6 +185,7 @@ export class DestinationSchemaService {
     const updated = await this.destinationSchemaRepository.update(id, {
       ...updates,
       transformScript: updates.transformScript !== undefined ? updates.transformScript : undefined,
+      dbtModels: updates.dbtModels !== undefined ? updates.dbtModels : undefined,
       upsertKey: (updates.upsertKey as string[]) || undefined,
       updatedAt: new Date(),
     });

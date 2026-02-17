@@ -259,6 +259,7 @@ export class PythonETLService {
     checkpoint?: any;
     limit?: number;
     replicationKey?: string;
+    dbtModels?: string[];
   }): Promise<{
     rowsRead: number;
     rowsWritten: number;
@@ -282,6 +283,7 @@ export class PythonETLService {
       checkpoint,
       limit,
       replicationKey,
+      dbtModels,
     } = options;
 
     const runUrl = `${this.pythonServiceUrl}/run-meltano-pipeline`;
@@ -306,6 +308,7 @@ export class PythonETLService {
             checkpoint: checkpoint ?? null,
             limit: limit ?? null,
             replication_key: replicationKey ?? null,
+            dbt_models: dbtModels ?? null,
           },
           this.buildRequestConfig(600000), // 10 minutes
         ),

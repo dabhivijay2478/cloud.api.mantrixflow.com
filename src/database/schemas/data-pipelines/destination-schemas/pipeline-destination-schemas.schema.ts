@@ -47,6 +47,9 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   /** Custom Python transform script (defines transform(record) function) */
   transformScript: text('transform_script'),
 
+  /** Selected dbt model names; empty/null = run all models */
+  dbtModels: jsonb('dbt_models').$type<string[]>(),
+
   // ============================================================================
   // WRITE CONFIGURATION
   // ============================================================================

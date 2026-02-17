@@ -586,6 +586,7 @@ export class PipelineService {
         (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'upsert';
       const effectiveUpsertKey = (destinationSchema.upsertKey as string[]) || [];
 
+      const dbtModels = (destinationSchema.dbtModels as string[] | null) ?? undefined;
       const result = await this.pythonETLService.runMeltanoPipeline({
         direction,
         sourceConnectionConfig,
@@ -600,6 +601,7 @@ export class PipelineService {
         stateId: `pipeline_${pipeline.id}`,
         checkpoint: checkpoint || undefined,
         limit: undefined,
+        dbtModels: dbtModels?.length ? dbtModels : undefined,
       });
 
       totalRowsRead = result.rowsRead;

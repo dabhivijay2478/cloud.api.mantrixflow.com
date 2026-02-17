@@ -48,6 +48,15 @@ export class UpdateDestinationSchemaDto {
   transformScript?: string;
 
   @ApiPropertyOptional({
+    description: 'Selected dbt model names; empty/undefined = run all models',
+    example: ['stg_users', 'dim_customers'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  dbtModels?: string[];
+
+  @ApiPropertyOptional({
     description: 'Write mode for destination',
     enum: WriteMode,
   })
