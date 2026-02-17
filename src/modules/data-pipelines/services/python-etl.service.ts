@@ -11,8 +11,8 @@ import { firstValueFrom } from 'rxjs';
 import { normalizeEtlBaseUrl } from '../../../common/utils/etl-url';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
-import type { WriteResult, ColumnInfo } from '../types/common.types';
-import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../database/schemas';
+import type { ColumnInfo } from '../types/common.types';
+import type { PipelineSourceSchema } from '../../../database/schemas';
 
 @Injectable()
 export class PythonETLService {
@@ -241,110 +241,11 @@ export class PythonETLService {
   }
 
   /**
-   * Transform data using custom Python script
-   */
-  async transform(options: { rows: any[]; transformScript: string }): Promise<{
-    transformedRows: any[];
-    errors: any[];
-  }> {
-    const { rows, transformScript } = options;
-
-    if (!transformScript || !transformScript.trim()) {
-      this.logger.warn('Empty transform script provided, returning rows as-is');
-      return {
-        transformedRows: rows,
-        errors: [],
-      };
-    }
-
-    try {
-      const transformUrl = `${this.pythonServiceUrl}/transform`;
-      this.assertValidRequestUrl(transformUrl, 'transform');
-
-      const response = await firstValueFrom(
-        this.httpService.post(
-          transformUrl,
-          {
-            rows,
-            transform_script: transformScript,
-          },
-          this.buildRequestConfig(300000), // 5 minutes for transformation (was 30s)
-        ),
-      );
-
-      return {
-        transformedRows: response.data.transformed_rows || [],
-        errors: response.data.errors || [],
-      };
-    } catch (error: any) {
-      const detail =
-        error?.response?.data?.detail ||
-        error?.response?.data?.message ||
-        error?.response?.data?.error ||
-        error?.message ||
-        'Unknown transform error';
-      this.logger.error(`Transformation failed: ${detail}`, error?.stack);
-      throw new Error(`Transformation failed: ${detail}`);
-    }
-  }
-
-  /**
-   * Emit data to destination
-   */
-  async emit(options: {
-    destinationSchema: PipelineDestinationSchema;
-    connectionConfig: any;
-    organizationId: string;
-    userId: string;
-    rows: any[];
-    writeMode: 'append' | 'upsert' | 'replace';
-    upsertKey?: string[];
-  }): Promise<WriteResult> {
-    const { destinationSchema, connectionConfig, rows, writeMode, upsertKey } = options;
-
-    try {
-      // Get destination data source type
-      const destDataSource = await this.getDataSourceType(destinationSchema.dataSourceId!);
-      const destType = this.normalizeSourceType(destDataSource);
-      const emitUrl = `${this.pythonServiceUrl}/emit/${destType}`;
-      this.assertValidRequestUrl(emitUrl, 'emit');
-
-      const response = await firstValueFrom(
-        this.httpService.post(
-          emitUrl,
-          {
-            destination_type: destType,
-            connection_config: connectionConfig,
-            destination_config: {}, // Destination-specific config (not stored in schema)
-            table_name: destinationSchema.destinationTable,
-            schema_name: destinationSchema.destinationSchema || undefined,
-            rows: rows,
-            write_mode: writeMode,
-            upsert_key: upsertKey || [],
-          },
-          this.buildRequestConfig(300000), // 5 minutes for emission (was 60s)
-        ),
-      );
-
-      return {
-        rowsWritten: response.data.rows_written || 0,
-        rowsSkipped: response.data.rows_skipped || 0,
-        rowsFailed: response.data.rows_failed || 0,
-        errors: response.data.errors || [],
-      };
-    } catch (error: any) {
-      const detail = this.extractPythonError(error, 'Emission');
-      this.logger.error(`Emission failed: ${detail}`, error.stack);
-      throw new Error(`Emission failed: ${detail}`);
-    }
-  }
-
-  /**
    * Run a dynamic Meltano-style pipeline. Connections are fetched from DB and passed by caller.
    * Supports postgres-to-mongodb and mongodb-to-postgres.
    */
   async runMeltanoPipeline(options: {
-    direction: 'postgres-to-mongodb' | 'mongodb-to-postgres';
+    direction: 'postgres-to-mongodb' | 'mongodb-to-postgres' | 'postgres-to-postgres' | 'mysql-to-postgres';
     sourceConnectionConfig: any;
     destConnectionConfig: any;
     sourceTable?: string;

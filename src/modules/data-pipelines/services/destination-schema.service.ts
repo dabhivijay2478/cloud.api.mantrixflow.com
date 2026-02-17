@@ -64,10 +64,7 @@ export class DestinationSchemaService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Validate that transformScript is provided
-    if (!dto.transformScript || !dto.transformScript.trim()) {
-      throw new BadRequestException('transformScript is required');
-    }
+    // transformScript is optional - Meltano handles mapping via run-meltano-pipeline
 
     // Validate upsert configuration
     if (dto.writeMode === WriteMode.UPSERT && (!dto.upsertKey || dto.upsertKey.length === 0)) {
@@ -233,9 +230,7 @@ export class DestinationSchemaService {
       errors.push('Destination table is required');
     }
 
-    if (!schema.transformScript || !schema.transformScript.trim()) {
-      warnings.push('No transform script defined');
-    }
+    // transformScript is optional (Meltano handles mapping)
 
     const validationResult: SchemaValidationResult = {
       valid: errors.length === 0,
@@ -303,11 +298,7 @@ export class DestinationSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    if (!schema.transformScript || !schema.transformScript.trim()) {
-      throw new BadRequestException('Transform script is required to create table');
-    }
-
-    // Table creation is now handled automatically by Python service during emit
+    // Table creation is handled by Meltano during run-meltano-pipeline
     // This method is kept for API compatibility
     // The table will be created on first emit if it doesn't exist
 
@@ -383,10 +374,7 @@ export class DestinationSchemaService {
       }
     }
 
-    // Check transform script
-    if (!schema.transformScript || !schema.transformScript.trim()) {
-      warnings.push('No transform script defined');
-    }
+    // transformScript is optional (Meltano handles mapping)
 
     // Check upsert configuration
     if ((schema.writeMode as string) === 'upsert') {
