@@ -597,6 +597,7 @@ export class PipelineService {
         syncMode: syncType,
         writeMode: effectiveWriteMode,
         upsertKey: effectiveUpsertKey.length > 0 ? effectiveUpsertKey : undefined,
+        stateId: `pipeline_${pipeline.id}`,
         checkpoint: checkpoint || undefined,
         limit: undefined,
       });

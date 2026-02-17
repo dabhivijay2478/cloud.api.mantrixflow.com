@@ -256,6 +256,7 @@ export class PythonETLService {
     writeMode?: 'append' | 'upsert' | 'replace';
     upsertKey?: string[];
     transformScript?: string;
+    stateId?: string;
     checkpoint?: any;
     limit?: number;
     replicationKey?: string;
@@ -279,6 +280,7 @@ export class PythonETLService {
       writeMode = 'upsert',
       upsertKey = [],
       transformScript,
+      stateId,
       checkpoint,
       limit,
       replicationKey,
@@ -287,30 +289,32 @@ export class PythonETLService {
     const runUrl = `${this.pythonServiceUrl}/run-meltano-pipeline`;
     this.assertValidRequestUrl(runUrl, 'run-meltano-pipeline');
 
-    const response = await firstValueFrom(
-      this.httpService.post(
-        runUrl,
-        {
-          direction,
-          source_connection_config: sourceConnectionConfig,
-          dest_connection_config: destConnectionConfig,
-          source_table: sourceTable,
-          source_schema: sourceSchema,
-          dest_table: destTable ?? sourceTable,
-          dest_schema: destSchema,
-          sync_mode: syncMode,
-          write_mode: writeMode,
-          upsert_key: upsertKey,
-          transform_script: transformScript ?? null,
-          checkpoint: checkpoint ?? null,
-          limit: limit ?? null,
-          replication_key: replicationKey ?? null,
-        },
-        this.buildRequestConfig(600000), // 10 minutes
-      ),
-    );
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post(
+          runUrl,
+          {
+            direction,
+            source_connection_config: sourceConnectionConfig,
+            dest_connection_config: destConnectionConfig,
+            source_table: sourceTable,
+            source_schema: sourceSchema,
+            dest_table: destTable ?? sourceTable,
+            dest_schema: destSchema,
+            sync_mode: syncMode,
+            write_mode: writeMode,
+            upsert_key: upsertKey,
+            transform_script: transformScript ?? null,
+            state_id: stateId ?? null,
+            checkpoint: checkpoint ?? null,
+            limit: limit ?? null,
+            replication_key: replicationKey ?? null,
+          },
+          this.buildRequestConfig(600000), // 10 minutes
+        ),
+      );
 
-    return {
+      return {
       rowsRead: response.data.rows_read ?? 0,
       rowsWritten: response.data.rows_written ?? 0,
       rowsSkipped: response.data.rows_skipped ?? 0,
@@ -318,6 +322,10 @@ export class PythonETLService {
       checkpoint: response.data.checkpoint ?? {},
       errors: response.data.errors ?? [],
     };
+    } catch (error: any) {
+      const detail = this.extractPythonError(error, 'Run Meltano pipeline');
+      throw new Error(detail);
+    }
   }
 
   /**
