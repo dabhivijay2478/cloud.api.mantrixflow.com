@@ -255,7 +255,6 @@ export class PythonETLService {
     syncMode?: 'full' | 'incremental';
     writeMode?: 'append' | 'upsert' | 'replace';
     upsertKey?: string[];
-    transformScript?: string;
     stateId?: string;
     checkpoint?: any;
     limit?: number;
@@ -279,7 +278,6 @@ export class PythonETLService {
       syncMode = 'full',
       writeMode = 'upsert',
       upsertKey = [],
-      transformScript,
       stateId,
       checkpoint,
       limit,
@@ -304,7 +302,6 @@ export class PythonETLService {
             sync_mode: syncMode,
             write_mode: writeMode,
             upsert_key: upsertKey,
-            transform_script: transformScript ?? null,
             state_id: stateId ?? null,
             checkpoint: checkpoint ?? null,
             limit: limit ?? null,
