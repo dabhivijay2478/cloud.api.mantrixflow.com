@@ -323,7 +323,16 @@ export class PythonETLService {
       errors: response.data.errors ?? [],
     };
     } catch (error: any) {
-      const detail = this.extractPythonError(error, 'Run Meltano pipeline');
+      // For 502, prefer raw detail (user_message from ETL) for CDC guidance display
+      const pythonDetail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.response?.data?.error;
+      const is502 = error?.response?.status === 502;
+      const detail =
+        is502 && typeof pythonDetail === 'string'
+          ? pythonDetail
+          : this.extractPythonError(error, 'Run Meltano pipeline');
       throw new Error(detail);
     }
   }
