@@ -9,7 +9,7 @@ Add to `apps/api/.env`:
 | Variable | Description |
 |----------|-------------|
 | `INTERNAL_TOKEN` | Secret for `/internal/*` endpoints. Must match pg_cron config if using pg_net. |
-| `INTERNAL_API_URL` | Full URL of this NestJS API (e.g. `http://host.docker.internal:5000`). Used for callback URL. Must include `/api` prefix in path for NestJS routes. |
+| `INTERNAL_API_URL` | Base URL of this API (e.g. `http://localhost:5000`). ETL replaces host with caller IP for Docker compatibility. |
 | `ETL_PYTHON_SERVICE_URL` | ETL FastAPI base URL (e.g. `http://localhost:8001`) |
 | `ETL_PYTHON_SERVICE_TOKEN` | Bearer token for ETL auth (must match ETL `ETL_AUTH_TOKEN`) |
 | `USE_ETL_JOBS_QUEUE` | Set to `false` to use legacy sync flow. Default: `true` |
