@@ -252,6 +252,8 @@ export class PythonETLService {
     sourceSchema?: string;
     destTable?: string;
     destSchema?: string;
+    /** Column mapping: { sourceColumn: destColumn } for table-to-table migration */
+    columnRenames?: Record<string, string>;
     syncMode?: 'full' | 'incremental';
     writeMode?: 'append' | 'upsert' | 'replace';
     upsertKey?: string[];
@@ -276,6 +278,7 @@ export class PythonETLService {
       sourceSchema = 'public',
       destTable,
       destSchema = 'public',
+      columnRenames,
       syncMode = 'full',
       writeMode = 'upsert',
       upsertKey = [],
@@ -301,6 +304,7 @@ export class PythonETLService {
             source_schema: sourceSchema,
             dest_table: destTable ?? sourceTable,
             dest_schema: destSchema,
+            column_renames: columnRenames ?? null,
             sync_mode: syncMode,
             write_mode: writeMode,
             upsert_key: upsertKey,

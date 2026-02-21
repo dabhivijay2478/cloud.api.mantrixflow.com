@@ -9,10 +9,19 @@ Add to `apps/api/.env`:
 | Variable | Description |
 |----------|-------------|
 | `INTERNAL_TOKEN` | Secret for `/internal/*` endpoints. Must match pg_cron config if using pg_net. |
-| `INTERNAL_API_URL` | Full URL of this NestJS API (e.g. `https://api.example.com`). Used for callback URL. |
+| `INTERNAL_API_URL` | Full URL of this NestJS API (e.g. `http://host.docker.internal:5000`). Used for callback URL. Must include `/api` prefix in path for NestJS routes. |
 | `ETL_PYTHON_SERVICE_URL` | ETL FastAPI base URL (e.g. `http://localhost:8001`) |
 | `ETL_PYTHON_SERVICE_TOKEN` | Bearer token for ETL auth (must match ETL `ETL_AUTH_TOKEN`) |
 | `USE_ETL_JOBS_QUEUE` | Set to `false` to use legacy sync flow. Default: `true` |
+
+### Callback URL: ETL in Docker → API on host
+
+When ETL runs in Docker and the API runs on the host, the ETL container cannot reach `localhost` (that resolves to the container itself). Use a host-reachable URL:
+
+| Platform | `INTERNAL_API_URL` |
+|----------|--------------------|
+| **Mac / Windows** | `http://host.docker.internal:5000` |
+| **Linux** | `http://172.17.0.1:5000` (Docker bridge gateway) or add `extra_hosts: host.docker.internal: host-gateway` to ETL compose and use `http://host.docker.internal:5000` |
 
 ## Flow
 

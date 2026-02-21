@@ -158,7 +158,7 @@ export class EtlJobsService {
       );
     }
 
-    const callbackUrl = `${internalApiUrl.replace(/\/$/, '')}/internal/etl-callback`;
+    const callbackUrl = `${internalApiUrl.replace(/\/$/, '')}/api/internal/etl-callback`;
 
     const job = await this.pgmqService.runInTransaction(async (client) => {
       const insertResult = await client.query(
@@ -184,6 +184,13 @@ export class EtlJobsService {
       );
       const jobId = insertResult.rows[0].id;
 
+      const columnRenames =
+        (pipeline.transformations as Array<{ transformType: string; sourceColumn: string; destinationColumn: string }> | null)
+          ?.filter((t) => t.transformType === 'rename' && t.sourceColumn && t.destinationColumn)
+          .reduce<Record<string, string>>((acc, t) => {
+            acc[t.sourceColumn] = t.destinationColumn;
+            return acc;
+          }, {});
       const pgmqPayload = {
         jobId,
         meltanoJobId,
@@ -197,6 +204,7 @@ export class EtlJobsService {
         sourceSchema: sourceSchema.sourceSchema || 'public',
         destTable: destinationSchema.destinationTable || sourceSchema.sourceTable,
         destSchema: destinationSchema.destinationSchema || 'public',
+        columnRenames: Object.keys(columnRenames ?? {}).length > 0 ? columnRenames : undefined,
         stateId: `pipeline_${dto.pipelineId}`,
         callback_url: callbackUrl,
         callback_token: internalToken,
@@ -243,6 +251,7 @@ export class EtlJobsService {
       sourceSchema?: string;
       destTable?: string;
       destSchema?: string;
+      columnRenames?: Record<string, string>;
       stateId?: string;
       callback_url: string;
       callback_token: string;
@@ -283,6 +292,7 @@ export class EtlJobsService {
           source_schema: payload.sourceSchema || 'public',
           dest_table: payload.destTable,
           dest_schema: payload.destSchema || 'public',
+          column_renames: payload.columnRenames ?? null,
           state_id: payload.stateId,
           callback_url: payload.callback_url,
           callback_token: payload.callback_token,

@@ -49,6 +49,7 @@ import type {
   PipelineSourceSchema,
   Pipeline,
   PipelineRun,
+  Transformation,
 } from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import {
@@ -92,6 +93,19 @@ const DEFAULT_BATCH_SIZE = 500;
 const MAX_BATCH_SIZE = 10000;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
+
+/** Normalize DTO transformations to DB format (ensure transformConfig is always present) */
+function normalizeTransformations(
+  transformations: Array<{ sourceColumn: string; transformType: string; transformConfig?: Record<string, unknown>; destinationColumn: string }> | null | undefined,
+): Transformation[] | null {
+  if (!transformations?.length) return null;
+  return transformations.map((t) => ({
+    sourceColumn: t.sourceColumn,
+    transformType: t.transformType as Transformation['transformType'],
+    transformConfig: t.transformConfig ?? {},
+    destinationColumn: t.destinationColumn,
+  }));
+}
 
 @Injectable()
 export class PipelineService {
@@ -177,7 +191,7 @@ export class PipelineService {
       description: dto.description,
       sourceSchemaId,
       destinationSchemaId,
-      transformations: dto.transformations || null,
+      transformations: normalizeTransformations(dto.transformations),
       syncMode: dto.syncMode || 'full',
       incrementalColumn: dto.incrementalColumn || null,
       syncFrequency: dto.syncFrequency || 'manual',
@@ -353,6 +367,9 @@ export class PipelineService {
       scheduleTimezone,
       nextScheduledRunAt,
     };
+    if (updates.transformations !== undefined) {
+      updateData.transformations = normalizeTransformations(updates.transformations);
+    }
 
     const updated = await this.pipelineRepository.update(id, updateData);
 
@@ -638,6 +655,13 @@ export class PipelineService {
       const effectiveUpsertKey = (destinationSchema.upsertKey as string[]) || [];
 
       const dbtModels = (destinationSchema.dbtModels as string[] | null) ?? undefined;
+      const columnRenames =
+        (pipeline.transformations as Array<{ transformType: string; sourceColumn: string; destinationColumn: string }> | null)
+          ?.filter((t) => t.transformType === 'rename' && t.sourceColumn && t.destinationColumn)
+          .reduce<Record<string, string>>((acc, t) => {
+            acc[t.sourceColumn] = t.destinationColumn;
+            return acc;
+          }, {}) ?? undefined;
       const result = await this.pythonETLService.runMeltanoPipeline({
         direction,
         sourceConnectionConfig,
@@ -646,6 +670,7 @@ export class PipelineService {
         sourceSchema: sourceSchema.sourceSchema || 'public',
         destTable: destinationSchema.destinationTable || undefined,
         destSchema: destinationSchema.destinationSchema || 'public',
+        columnRenames: Object.keys(columnRenames ?? {}).length > 0 ? columnRenames : undefined,
         syncMode: syncType,
         writeMode: effectiveWriteMode,
         upsertKey: effectiveUpsertKey.length > 0 ? effectiveUpsertKey : undefined,

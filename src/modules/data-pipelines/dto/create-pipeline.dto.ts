@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsArray,
   IsEnum,
+  IsObject,
   MaxLength,
   MinLength,
   ValidateNested,
@@ -50,8 +51,10 @@ export class TransformationDto {
   @IsString()
   transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom' | 'filter' | 'mask' | 'hash';
 
-  @ApiProperty({ description: 'Transformation configuration', default: {} })
-  transformConfig: any = {};
+  @ApiPropertyOptional({ description: 'Transformation configuration', default: {} })
+  @IsOptional()
+  @IsObject()
+  transformConfig?: Record<string, unknown>;
 
   @ApiProperty({ description: 'Destination column name' })
   @IsString()
