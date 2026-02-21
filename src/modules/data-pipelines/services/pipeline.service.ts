@@ -13,12 +13,20 @@ const SUPPORTED_DIRECTIONS = [
 
 type MeltanoDirection = (typeof SUPPORTED_DIRECTIONS)[number];
 
+function normalizeSourceType(t: string): string {
+  const lower = (t || '').trim().toLowerCase();
+  if (lower === 'postgres' || lower === 'pg' || lower === 'pgvector' || lower === 'redshift' || lower === 'postgresql') return 'postgresql';
+  if (lower === 'mysql' || lower === 'mariadb') return 'mysql';
+  if (lower === 'mongodb' || lower === 'mongo') return 'mongodb';
+  return lower;
+}
+
 function getDirectionForPipeline(
   sourceType: string,
   destType: string,
 ): MeltanoDirection | null {
-  const s = sourceType?.toLowerCase();
-  const d = destType?.toLowerCase();
+  const s = normalizeSourceType(sourceType);
+  const d = normalizeSourceType(destType);
   if (s === 'postgresql' && d === 'mongodb') return 'postgres-to-mongodb';
   if (s === 'mongodb' && d === 'postgresql') return 'mongodb-to-postgres';
   if (s === 'postgresql' && d === 'postgresql') return 'postgres-to-postgres';
@@ -33,6 +41,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ActivityLoggerService } from '../../../common/logger';
 import type {
   PipelineDestinationSchema,
@@ -64,6 +73,7 @@ import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
 import { PgmqQueueService } from '../../queue';
+import { EtlJobsService } from '../../etl-jobs/etl-jobs.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -99,6 +109,8 @@ export class PipelineService {
     private readonly pipelineQueueService: PgmqQueueService,
     private readonly connectionService: ConnectionService,
     private readonly activity: ActivityLoggerService,
+    private readonly etlJobsService: EtlJobsService,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -391,6 +403,7 @@ export class PipelineService {
 
   /**
    * Run pipeline with batching and retry support
+   * Uses etl_jobs + pgmq queue when USE_ETL_JOBS_QUEUE=true (default)
    */
   async runPipeline(
     pipelineId: string,
@@ -398,6 +411,47 @@ export class PipelineService {
     triggerType: 'manual' | 'scheduled' | 'api' | 'polling' = 'manual',
     options?: BatchOptions,
   ): Promise<PipelineRun> {
+    const useEtlQueue =
+      this.configService.get<string>('USE_ETL_JOBS_QUEUE') !== 'false';
+
+    if (useEtlQueue) {
+      const pipeline = await this.pipelineRepository.findById(pipelineId);
+      if (!pipeline) throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+      if (triggerType === 'manual' || triggerType === 'api') {
+        await this.checkPipelineManagePermission(userId, pipeline.organizationId);
+      }
+      if (pipeline.status === 'paused') {
+        throw new BadRequestException('Pipeline is paused. Resume it before running.');
+      }
+      const jobId = await this.etlJobsService.enqueueJob({
+        pipelineId,
+        orgId: pipeline.organizationId,
+        userId,
+        syncMode: undefined,
+        triggerType,
+      });
+      await this.pipelineRepository.update(pipelineId, {
+        lastRunStatus: 'running',
+        lastRunAt: new Date(),
+      });
+      this.logger.log(`Enqueued ETL job ${jobId} for pipeline ${pipelineId}`);
+      return {
+        id: jobId,
+        pipelineId,
+        organizationId: pipeline.organizationId,
+        status: 'pending',
+        jobState: 'queued',
+        triggerType,
+        triggeredBy: userId,
+        rowsRead: 0,
+        rowsWritten: 0,
+        rowsSkipped: 0,
+        rowsFailed: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as PipelineRun;
+    }
+
     const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
     if (!pipelineWithSchemas) {
       throw new NotFoundException(`Pipeline ${pipelineId} not found`);
@@ -406,17 +460,14 @@ export class PipelineService {
     const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
     // AUTHORIZATION - Skip for scheduled/polling triggers (system-initiated)
-    // These are internal operations and the pipeline creator has already been authorized
     if (triggerType === 'manual' || triggerType === 'api') {
       await this.checkPipelineManagePermission(userId, pipeline.organizationId);
     }
 
-    // Check pipeline status
     if (pipeline.status === 'paused') {
       throw new BadRequestException('Pipeline is paused. Resume it before running.');
     }
 
-    // Create run record
     const run = await this.pipelineRepository.createRun({
       pipelineId,
       organizationId: pipeline.organizationId,
@@ -427,15 +478,11 @@ export class PipelineService {
       startedAt: new Date(),
     });
 
-    // Update parent pipeline status to running immediately for UI feedback
     await this.pipelineRepository.update(pipelineId, {
       lastRunStatus: 'running',
       lastRunAt: new Date(),
     });
 
-    this.logger.log(`Updated pipeline ${pipelineId} status to running`);
-
-    // Log activity
     await this.activityLogService.logPipelineRunAction(
       pipeline.organizationId,
       userId,
@@ -446,7 +493,6 @@ export class PipelineService {
       { triggerType },
     );
 
-    // Execute pipeline asynchronously
     this.executePipelineAsync(
       run.id,
       pipeline,
@@ -926,20 +972,65 @@ export class PipelineService {
   }
 
   /**
-   * Get pipeline runs
+   * Get pipeline runs (from etl_jobs when USE_ETL_JOBS_QUEUE, else pipeline_runs)
    */
   async getPipelineRuns(
     pipelineId: string,
     limit: number = 20,
     offset: number = 0,
   ): Promise<PipelineRun[]> {
+    const useEtlQueue =
+      this.configService.get<string>('USE_ETL_JOBS_QUEUE') !== 'false';
+    if (useEtlQueue) {
+      const jobs = await this.etlJobsService.getJobsByPipeline(pipelineId, limit);
+      return jobs.map((j) => ({
+        id: j.id,
+        pipelineId: j.pipelineId,
+        organizationId: j.orgId,
+        status: j.status === 'completed' ? 'success' : j.status === 'failed' ? 'failed' : j.status,
+        jobState: j.status,
+        triggerType: 'manual',
+        rowsRead: j.rowsSynced ?? 0,
+        rowsWritten: j.rowsSynced ?? 0,
+        rowsSkipped: 0,
+        rowsFailed: j.status === 'failed' ? 1 : 0,
+        startedAt: j.startedAt ?? undefined,
+        completedAt: j.completedAt ?? undefined,
+        errorMessage: j.errorMessage ?? j.userMessage ?? undefined,
+        createdAt: j.createdAt,
+        updatedAt: j.completedAt ?? j.createdAt,
+      })) as PipelineRun[];
+    }
     return await this.pipelineRepository.findRunsByPipeline(pipelineId, limit, offset);
   }
 
   /**
-   * Get pipeline run by ID
+   * Get pipeline run by ID (checks etl_jobs when USE_ETL_JOBS_QUEUE, else pipeline_runs)
    */
   async getPipelineRunById(runId: string): Promise<PipelineRun | null> {
+    const useEtlQueue =
+      this.configService.get<string>('USE_ETL_JOBS_QUEUE') !== 'false';
+    if (useEtlQueue) {
+      const job = await this.etlJobsService.getJobById(runId);
+      if (!job) return null;
+      return {
+        id: job.id,
+        pipelineId: job.pipelineId,
+        organizationId: job.orgId,
+        status: job.status === 'completed' ? 'success' : job.status === 'failed' ? 'failed' : job.status,
+        jobState: job.status,
+        triggerType: 'manual',
+        rowsRead: job.rowsSynced ?? 0,
+        rowsWritten: job.rowsSynced ?? 0,
+        rowsSkipped: 0,
+        rowsFailed: job.status === 'failed' ? 1 : 0,
+        startedAt: job.startedAt ?? undefined,
+        completedAt: job.completedAt ?? undefined,
+        errorMessage: job.errorMessage ?? job.userMessage ?? undefined,
+        createdAt: job.createdAt,
+        updatedAt: job.completedAt ?? job.createdAt,
+      } as PipelineRun;
+    }
     return await this.pipelineRepository.findRunById(runId);
   }
 

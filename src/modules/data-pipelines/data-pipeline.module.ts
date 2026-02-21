@@ -51,6 +51,7 @@ import { PipelineJobProcessor } from './services/pipeline-job-processor.service'
 
 // Queue (pgmq + pg_cron)
 import { PgmqModule } from '../queue';
+import { EtlJobsModule } from '../etl-jobs/etl-jobs.module';
 
 // Gateways
 import { PipelineUpdatesGateway } from './gateways/pipeline-updates.gateway';
@@ -74,6 +75,7 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // pgmq + pg_cron for job queuing, scheduling, and real-time status updates
     PgmqModule,
+    forwardRef(() => EtlJobsModule),
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({

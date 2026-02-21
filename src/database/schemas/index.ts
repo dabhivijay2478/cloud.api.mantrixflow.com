@@ -14,6 +14,8 @@
 export * from './activity-logs';
 // Data Pipelines Schemas
 export * from './data-pipelines';
+// ETL Jobs Schemas (async queue)
+export * from './etl-jobs';
 // Data Sources Schemas
 export * from './data-sources';
 // Organizations Schemas

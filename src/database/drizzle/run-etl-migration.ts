@@ -1,0 +1,44 @@
+/**
+ * Run ETL jobs migration (0022) standalone
+ * Use when etl_jobs table is missing: bun run db:migrate:etl
+ */
+
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
+
+const connectionString = process.env.DATABASE_URL || process.env.DATABASE_DIRECT_URL;
+
+if (!connectionString) {
+  console.error('❌ DATABASE_URL or DATABASE_DIRECT_URL required');
+  process.exit(1);
+}
+
+async function run() {
+  const postgres = await import('postgres');
+  const sql = postgres.default(connectionString!, { max: 1 });
+
+  const migrationPath = path.join(
+    __dirname,
+    'migrations',
+    '0022_add_etl_jobs_pgmq.sql',
+  );
+  const sqlContent = fs.readFileSync(migrationPath, 'utf-8');
+
+  console.log('🔄 Running ETL migration (0022_add_etl_jobs_pgmq)...');
+  console.log(`📦 Database: ${connectionString!.split('@')[1]?.split('/')[0] || 'unknown'}`);
+
+  try {
+    await sql.unsafe(sqlContent);
+    console.log('✅ ETL migration completed successfully!');
+  } catch (error) {
+    console.error('❌ Migration failed:', error);
+    process.exit(1);
+  } finally {
+    await sql.end();
+  }
+}
+
+void run();

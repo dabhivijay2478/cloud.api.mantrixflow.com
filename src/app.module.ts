@@ -8,6 +8,7 @@ import { AppLoggerModule } from './common/logger';
 import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
+import { EtlJobsModule } from './modules/etl-jobs/etl-jobs.module';
 import { DataSourceModule } from './modules/data-sources/data-source.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
@@ -34,6 +35,7 @@ import { UserModule } from './modules/users/user.module';
     // Application Modules
     DataSourceModule,
     DataPipelineModule,
+    EtlJobsModule,
     OrganizationModule,
     UserModule,
     OnboardingModule,

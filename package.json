@@ -25,6 +25,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --forceExit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun --bun src/database/drizzle/migrate.ts",
+    "db:migrate:etl": "bun --bun src/database/drizzle/run-etl-migration.ts",
     "db:migrate:kit": "drizzle-kit migrate",
     "db:migrate:roles": "bun --bun src/database/drizzle/run-role-migration.ts",
     "db:push": "drizzle-kit push",

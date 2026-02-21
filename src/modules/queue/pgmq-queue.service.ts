@@ -12,7 +12,7 @@
 
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import {
   PGMQ_QUEUE_NAMES,
   PGCRON_CDC_POLL_JOB,
@@ -140,6 +140,25 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
     return this.initialized && this.pool !== null;
   }
 
+  /**
+   * Run a callback in a database transaction. Used for atomic etl_jobs INSERT + pgmq.send.
+   */
+  async runInTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    if (!this.pool) throw new Error('PG pool not initialised');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   // ════════════════════════════════════════════════════════════════
   // EXTENSION & QUEUE BOOTSTRAP
   // ════════════════════════════════════════════════════════════════
@@ -158,7 +177,14 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensureQueuesExist(): Promise<void> {
-    for (const name of Object.values(PGMQ_QUEUE_NAMES)) {
+    const queuesToCreate = [
+      PGMQ_QUEUE_NAMES.PIPELINE_JOBS,
+      PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC,
+      PGMQ_QUEUE_NAMES.POLLING_CHECKS,
+      PGMQ_QUEUE_NAMES.ETL_JOBS,
+      PGMQ_QUEUE_NAMES.ETL_JOBS_DLQ,
+    ];
+    for (const name of queuesToCreate) {
       try {
         await this.sql('SELECT pgmq.create($1)', [name]);
         this.logger.log(`pgmq queue "${name}" created`);
@@ -355,11 +381,11 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
   // ════════════════════════════════════════════════════════════════
 
   private async send(queueName: string, payload: PgmqJobPayload): Promise<string> {
-    const result = await this.sql('SELECT * FROM pgmq.send($1, $2::jsonb)', [
+    const result = await this.sql('SELECT pgmq.send($1::text, $2::jsonb) as msg_id', [
       queueName,
       JSON.stringify(payload),
     ]);
-    return result.rows[0]?.send;
+    return String(result.rows[0]?.msg_id ?? result.rows[0]?.send ?? '');
   }
 
   private async sendWithDelay(
@@ -367,12 +393,12 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
     payload: PgmqJobPayload,
     delaySec: number,
   ): Promise<string> {
-    const result = await this.sql('SELECT * FROM pgmq.send_delay($1, $2::jsonb, $3)', [
-      queueName,
-      JSON.stringify(payload),
-      delaySec,
-    ]);
-    return result.rows[0]?.send_delay;
+    // pgmq.send(queue_name text, msg jsonb, delay integer) - explicit casts avoid "is not unique"
+    const result = await this.sql(
+      'SELECT pgmq.send($1::text, $2::jsonb, $3::integer) as msg_id',
+      [queueName, JSON.stringify(payload), delaySec],
+    );
+    return String(result.rows[0]?.msg_id ?? '');
   }
 
   private async sql(text: string, params?: unknown[]) {

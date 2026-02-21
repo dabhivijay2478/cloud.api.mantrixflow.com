@@ -10,7 +10,7 @@
  * Architecture:
  * - pg_cron inserts poll-cycle messages into the polling_checks queue every 5 min
  * - This processor reads messages from all three queues and dispatches to handlers
- * - Failed jobs are retried with exponential backoff via pgmq.send_delay()
+ * - Failed jobs are retried with exponential backoff via pgmq.send(..., delay)
  */
 
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
@@ -378,7 +378,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
   private async waitForRunCompletion(runId: string) {
     const startedAt = Date.now();
     while (Date.now() - startedAt <= RUN_WAIT_TIMEOUT_MS) {
-      const run = await this.pipelineRepository.findRunById(runId);
+      const run = await this.pipelineService.getPipelineRunById(runId);
       if (!run) throw new Error(`Pipeline run ${runId} not found while waiting`);
       if (['success', 'failed', 'cancelled'].includes(run.status || '')) return run;
       await new Promise((resolve) => setTimeout(resolve, RUN_POLL_INTERVAL_MS));

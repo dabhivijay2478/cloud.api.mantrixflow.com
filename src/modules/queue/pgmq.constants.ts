@@ -11,6 +11,8 @@ export const PGMQ_QUEUE_NAMES = {
   PIPELINE_JOBS: 'pipeline_jobs',
   INCREMENTAL_SYNC: 'incremental_sync',
   POLLING_CHECKS: 'polling_checks',
+  ETL_JOBS: 'etl_jobs',
+  ETL_JOBS_DLQ: 'etl_jobs_dlq',
 } as const;
 
 /** How often NestJS polls pgmq queues for new messages (ms) */

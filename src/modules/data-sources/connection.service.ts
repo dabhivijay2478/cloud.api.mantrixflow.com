@@ -792,10 +792,14 @@ export class ConnectionService implements OnModuleInit {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // AUTHORIZATION: Check if user can view organization
-    const canView = await this.roleService.canViewOrganization(userId, organizationId);
-    if (!canView) {
-      throw new ForbiddenException('You are not a member of this organization');
+    // Bypass role checks for internal/system calls (ETL jobs, scheduled runs)
+    const isSystemCall = userId === 'system';
+    if (!isSystemCall) {
+      // AUTHORIZATION: Check if user can view organization
+      const canView = await this.roleService.canViewOrganization(userId, organizationId);
+      if (!canView) {
+        throw new ForbiddenException('You are not a member of this organization');
+      }
     }
 
     const connection = await this.connectionRepository.findByDataSourceId(dataSourceId);
@@ -811,10 +815,12 @@ export class ConnectionService implements OnModuleInit {
       } as DataSourceConnection;
     }
 
-    // For sensitive access, check if user has EDITOR+ role
-    const canManage = await this.roleService.canManageDataSources(userId, organizationId);
-    if (!canManage) {
-      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can view connection credentials');
+    // For sensitive access, check if user has EDITOR+ role (skip for system calls)
+    if (!isSystemCall) {
+      const canManage = await this.roleService.canManageDataSources(userId, organizationId);
+      if (!canManage) {
+        throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can view connection credentials');
+      }
     }
 
     // Return decrypted credentials for sensitive consumers (schema discovery, test connection, etc.).
@@ -839,20 +845,22 @@ export class ConnectionService implements OnModuleInit {
       }
     }
 
-    // Log activity
-    try {
-      await this.activityLogService.logConnectionAction(
-        organizationId,
-        userId,
-        CONNECTION_ACTIONS.VIEWED,
-        connection.id,
-        dataSource.name,
-      );
-    } catch (error) {
-      this.logger.error(
-        'Failed to log connection view activity',
-        error instanceof Error ? error.stack : String(error),
-      );
+    // Log activity (skip for system calls - avoids FK on non-existent user in activity_logs)
+    if (userId !== 'system') {
+      try {
+        await this.activityLogService.logConnectionAction(
+          organizationId,
+          userId,
+          CONNECTION_ACTIONS.VIEWED,
+          connection.id,
+          dataSource.name,
+        );
+      } catch (error) {
+        this.logger.error(
+          'Failed to log connection view activity',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
     }
 
     return {
