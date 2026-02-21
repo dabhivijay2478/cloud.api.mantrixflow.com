@@ -26,4 +26,8 @@ Add to `apps/api/.env`:
 
 ## Migration
 
-Run `bun run db:migrate` to apply `0022_add_etl_jobs_pgmq.sql`.
+Run `bun run db:migrate:etl` to apply ETL migrations (0022, 0023, 0024):
+
+- `0022_add_etl_jobs_pgmq.sql` — etl_jobs table, pgmq queues
+- `0023_etl_jobs_backend_read_policy.sql` — RLS SELECT for backend
+- `0024_etl_jobs_backend_insert_update.sql` — RLS INSERT/UPDATE for backend

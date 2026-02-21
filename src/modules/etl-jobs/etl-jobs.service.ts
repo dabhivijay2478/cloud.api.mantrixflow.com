@@ -40,7 +40,8 @@ const SUPPORTED_DIRECTIONS = [
 
 function normalizeSourceType(t: string): string {
   const lower = (t || '').trim().toLowerCase();
-  if (lower === 'postgres' || lower === 'pg' || lower === 'pgvector' || lower === 'redshift' || lower === 'postgresql') return 'postgresql';
+  if (['postgres', 'pg', 'pgvector', 'redshift', 'postgresql', 'neon', 'supabase'].includes(lower))
+    return 'postgresql';
   if (lower === 'mysql' || lower === 'mariadb') return 'mysql';
   if (lower === 'mongodb' || lower === 'mongo') return 'mongodb';
   return lower;
@@ -202,7 +203,7 @@ export class EtlJobsService {
       };
 
       const sendResult = await client.query(
-        `SELECT pgmq.send($1, $2::jsonb) as msg_id`,
+        `SELECT pgmq.send($1::text, $2::jsonb) as msg_id`,
         [PGMQ_QUEUE_NAMES.ETL_JOBS, JSON.stringify(pgmqPayload)],
       );
       const pgmqMsgId = Number(sendResult.rows[0]?.msg_id ?? 0);
@@ -270,21 +271,23 @@ export class EtlJobsService {
           .where(eq(etlJobs.id, payload.jobId));
 
         const runUrl = `${etlUrl}/run-meltano-pipeline`;
+        // ETL expects snake_case keys (RunMeltanoPipelineRequest)
         const body = {
-          jobId: payload.jobId,
-          meltanoJobId: payload.meltanoJobId,
+          job_id: payload.jobId,
+          meltano_job_id: payload.meltanoJobId,
           direction: payload.direction,
-          syncMode: payload.syncMode,
+          sync_mode: payload.syncMode || 'full',
           source_connection_config: payload.sourceConfig,
           dest_connection_config: payload.destConfig,
           source_table: payload.sourceTable,
-          source_schema: payload.sourceSchema,
+          source_schema: payload.sourceSchema || 'public',
           dest_table: payload.destTable,
-          dest_schema: payload.destSchema,
+          dest_schema: payload.destSchema || 'public',
           state_id: payload.stateId,
           callback_url: payload.callback_url,
           callback_token: payload.callback_token,
           pgmq_msg_id: Number(msg.msg_id),
+          write_mode: 'replace',
         };
 
         const controller = new AbortController();

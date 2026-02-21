@@ -212,6 +212,8 @@ export class ActivityLogService {
     dataSourceName: string,
     metadata?: Record<string, unknown>,
   ): Promise<void> {
+    // Skip logging for system calls - user_id FK references users.id, 'system' is not a valid UUID
+    if (userId === 'system') return;
     try {
       await this.logActivity({
         organizationId,

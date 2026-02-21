@@ -15,7 +15,8 @@ type MeltanoDirection = (typeof SUPPORTED_DIRECTIONS)[number];
 
 function normalizeSourceType(t: string): string {
   const lower = (t || '').trim().toLowerCase();
-  if (lower === 'postgres' || lower === 'pg' || lower === 'pgvector' || lower === 'redshift' || lower === 'postgresql') return 'postgresql';
+  if (['postgres', 'pg', 'pgvector', 'redshift', 'postgresql', 'neon', 'supabase'].includes(lower))
+    return 'postgresql';
   if (lower === 'mysql' || lower === 'mariadb') return 'mysql';
   if (lower === 'mongodb' || lower === 'mongo') return 'mongodb';
   return lower;
@@ -435,6 +436,10 @@ export class PipelineService {
         lastRunAt: new Date(),
       });
       this.logger.log(`Enqueued ETL job ${jobId} for pipeline ${pipelineId}`);
+      // Process immediately so user doesn't wait up to 1 min for scheduler
+      this.etlJobsService.processQueue(1).catch((err) =>
+        this.logger.warn(`Immediate processQueue failed (scheduler will retry): ${err}`),
+      );
       return {
         id: jobId,
         pipelineId,

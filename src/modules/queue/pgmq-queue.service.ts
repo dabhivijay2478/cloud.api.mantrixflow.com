@@ -124,6 +124,15 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
           'Ensure pgmq is enabled in Supabase Dashboard → Database → Extensions, and use a session-mode connection (DATABASE_DIRECT_URL, port 5432) for queue operations.',
       );
       if (err.stack) this.logger.debug(err.stack);
+      // Clean up pool on init failure to avoid "Cannot use a pool after calling end"
+      if (this.pool) {
+        try {
+          await this.pool.end();
+        } catch {
+          /* ignore */
+        }
+        this.pool = null;
+      }
     }
   }
 
@@ -329,11 +338,10 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
   ): Promise<PgmqMessage<T>[]> {
     if (!this.isReady()) return [];
     try {
-      const result = await this.sql('SELECT * FROM pgmq.read($1, $2, $3)', [
-        queueName,
-        vtSec,
-        qty,
-      ]);
+      const result = await this.sql(
+        'SELECT * FROM pgmq.read($1::text, $2::integer, $3::integer)',
+        [queueName, vtSec, qty],
+      );
       return result.rows as PgmqMessage<T>[];
     } catch (error) {
       this.logger.error(`Failed to read from pgmq queue "${queueName}": ${error}`);
