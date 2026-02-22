@@ -345,6 +345,56 @@ export class PipelineController {
   }
 
   /**
+   * Get sync state (cursor/LSN) for incremental/CDC pipelines
+   */
+  @Get(':id/sync-state')
+  @ApiOperation({
+    summary: 'Get sync state',
+    description: 'Get pipeline sync state (cursor, LSN). NestJS owns state.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Sync state' })
+  async getSyncState(
+    @Param('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    try {
+      const userId = this.extractUserId(req);
+      const result = await this.pipelineService.getSyncState(id, organizationId, userId);
+      return createSuccessResponse(result, result.message);
+    } catch (error) {
+      this.handleError('get sync state', error);
+    }
+  }
+
+  /**
+   * Reset sync state — next run will do full sync
+   */
+  @Delete(':id/sync-state')
+  @ApiOperation({
+    summary: 'Reset sync state',
+    description: 'Clear sync state. Next run will do a full sync.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Sync state reset' })
+  async resetSyncState(
+    @Param('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    try {
+      const userId = this.extractUserId(req);
+      const result = await this.pipelineService.resetSyncState(id, organizationId, userId);
+      return createSuccessResponse(result, result.message);
+    } catch (error) {
+      this.handleError('reset sync state', error);
+    }
+  }
+
+  /**
    * Pause pipeline
    */
   @Post(':id/pause')

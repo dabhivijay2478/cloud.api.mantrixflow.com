@@ -35,16 +35,30 @@ export interface UpdateDataSourceDto {
 export class DataSourceService {
   private readonly logger = new Logger(DataSourceService.name);
 
-  // Supported data source types
+  // Supported data source types (aligned with ETL registry)
   private readonly supportedTypes = [
     'postgres',
     'mysql',
     'mongodb',
+    'mssql',
     's3',
     'api',
     'bigquery',
     'snowflake',
     'csv',
+    'shopify',
+    'stripe',
+    'hubspot',
+    'salesforce',
+    'github',
+    'google-sheets',
+    'google-analytics',
+    'facebook-marketing',
+    'airtable',
+    'notion',
+    'slack',
+    'faker',
+    'file',
   ];
 
   constructor(
@@ -61,13 +75,17 @@ export class DataSourceService {
   }
 
   /**
-   * Validate data source type
+   * Validate data source type.
+   * Accepts all Airbyte connector types; strict list used for UI only.
    */
   private validateSourceType(sourceType: string): void {
-    if (!this.supportedTypes.includes(sourceType)) {
-      throw new BadRequestException(
-        `Unsupported source type: ${sourceType}. Supported types: ${this.supportedTypes.join(', ')}`,
-      );
+    if (!sourceType || typeof sourceType !== 'string' || sourceType.trim() === '') {
+      throw new BadRequestException('sourceType is required');
+    }
+    const normalized = sourceType.toLowerCase().trim();
+    if (!this.supportedTypes.includes(normalized)) {
+      // Allow any type for extensibility; ETL validates on connect/discover
+      this.logger.debug(`Using connector type: ${normalized} (not in strict UI list)`);
     }
   }
 

@@ -1,6 +1,7 @@
 /**
  * Supabase Auth Guard
- * Verifies Supabase JWT tokens and extracts user information
+ * Verifies Supabase JWT tokens and extracts user information.
+ * Skips verification when route is marked with @Public().
  */
 
 import {
@@ -9,14 +10,16 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { createClient } from '@supabase/supabase-js';
 import type { Request } from 'express';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
   private supabase: ReturnType<typeof createClient>;
 
-  constructor() {
+  constructor(private readonly reflector: Reflector) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 
@@ -34,6 +37,14 @@ export class SupabaseAuthGuard implements CanActivate {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) {
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest<Request>();
     const token = this.extractTokenFromHeader(request);
 

@@ -495,7 +495,7 @@ See **[VERCEL_DEPLOYMENT.md](../../VERCEL_DEPLOYMENT.md)** at repo root for the 
 - **Root Directory**: `apps/api`
 - **Framework**: NestJS (auto-detected)
 - **Build**: `bun run build:deploy`
-- **Required env**: `DATABASE_URL`, `ETL_PYTHON_SERVICE_URL`, `ETL_PYTHON_SERVICE_TOKEN`, `SUPABASE_*`, `ALLOWED_ORIGINS`
+- **Required env**: `DATABASE_URL`, `ETL_PYTHON_SERVICE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (JWT for ETL auth), `SUPABASE_*`, `ALLOWED_ORIGINS`
 
 ## 🔒 Security Best Practices
 

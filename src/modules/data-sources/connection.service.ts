@@ -137,9 +137,85 @@ export class ConnectionService implements OnModuleInit {
           encrypted.password = this.encryptionService.encrypt(encrypted.password);
         }
         break;
+      default:
+        // Airbyte API-based connectors (github, stripe, hubspot, etc.)
+        this.encryptApiConnectorFields(encrypted);
+        break;
     }
 
     return encrypted;
+  }
+
+  /** Decrypt common sensitive fields for API-based Airbyte connectors */
+  private decryptApiConnectorFields(config: Record<string, any>, connectionType: string): void {
+    if (config.api_key) {
+      config.api_key = this.decryptFieldWithLegacySupport(
+        config.api_key,
+        connectionType,
+        'api_key',
+      );
+    }
+    if (config.credentials?.personal_access_token) {
+      config.credentials.personal_access_token = this.decryptFieldWithLegacySupport(
+        config.credentials.personal_access_token,
+        connectionType,
+        'credentials.personal_access_token',
+      );
+    }
+    if (config.credentials?.access_token) {
+      config.credentials.access_token = this.decryptFieldWithLegacySupport(
+        config.credentials.access_token,
+        connectionType,
+        'credentials.access_token',
+      );
+    }
+    if (config.credentials?.api_token) {
+      config.credentials.api_token = this.decryptFieldWithLegacySupport(
+        config.credentials.api_token,
+        connectionType,
+        'credentials.api_token',
+      );
+    }
+    if (config.password) {
+      config.password = this.decryptFieldWithLegacySupport(
+        config.password,
+        connectionType,
+        'password',
+      );
+    }
+    if (config.client_secret) {
+      config.client_secret = this.decryptFieldWithLegacySupport(
+        config.client_secret,
+        connectionType,
+        'client_secret',
+      );
+    }
+  }
+
+  /** Encrypt common sensitive fields for API-based Airbyte connectors */
+  private encryptApiConnectorFields(config: Record<string, any>): void {
+    if (config.api_key) {
+      config.api_key = this.encryptionService.encrypt(config.api_key);
+    }
+    if (config.credentials?.personal_access_token) {
+      config.credentials.personal_access_token = this.encryptionService.encrypt(
+        config.credentials.personal_access_token,
+      );
+    }
+    if (config.credentials?.access_token) {
+      config.credentials.access_token = this.encryptionService.encrypt(
+        config.credentials.access_token,
+      );
+    }
+    if (config.credentials?.api_token) {
+      config.credentials.api_token = this.encryptionService.encrypt(config.credentials.api_token);
+    }
+    if (config.password) {
+      config.password = this.encryptionService.encrypt(config.password);
+    }
+    if (config.client_secret) {
+      config.client_secret = this.encryptionService.encrypt(config.client_secret);
+    }
   }
 
   private maybeDecryptIncomingEncrypted(value: unknown): unknown {
@@ -234,9 +310,40 @@ export class ConnectionService implements OnModuleInit {
           normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
         }
         break;
+      default:
+        this.normalizeApiConnectorFields(normalized);
+        break;
     }
 
     return normalized;
+  }
+
+  /** Normalize incoming config for API-based Airbyte connectors */
+  private normalizeApiConnectorFields(config: Record<string, any>): void {
+    if (config.api_key) {
+      config.api_key = this.maybeDecryptIncomingEncrypted(config.api_key);
+    }
+    if (config.credentials?.personal_access_token) {
+      config.credentials.personal_access_token = this.maybeDecryptIncomingEncrypted(
+        config.credentials.personal_access_token,
+      );
+    }
+    if (config.credentials?.access_token) {
+      config.credentials.access_token = this.maybeDecryptIncomingEncrypted(
+        config.credentials.access_token,
+      );
+    }
+    if (config.credentials?.api_token) {
+      config.credentials.api_token = this.maybeDecryptIncomingEncrypted(
+        config.credentials.api_token,
+      );
+    }
+    if (config.password) {
+      config.password = this.maybeDecryptIncomingEncrypted(config.password);
+    }
+    if (config.client_secret) {
+      config.client_secret = this.maybeDecryptIncomingEncrypted(config.client_secret);
+    }
   }
 
   /**
@@ -325,7 +432,15 @@ export class ConnectionService implements OnModuleInit {
         checks.push(config.password);
         break;
       default:
-        return false;
+        checks.push(
+          config.api_key,
+          config.credentials?.personal_access_token,
+          config.credentials?.access_token,
+          config.credentials?.api_token,
+          config.password,
+          config.client_secret,
+        );
+        break;
     }
 
     return checks.some((value) => {
@@ -490,6 +605,9 @@ export class ConnectionService implements OnModuleInit {
             );
           }
           break;
+        default:
+          this.decryptApiConnectorFields(decrypted, connectionType);
+          break;
       }
     } catch (error) {
       this.logger.error(
@@ -565,13 +683,28 @@ export class ConnectionService implements OnModuleInit {
           masked.password = '****';
         }
         break;
+      default:
+        this.maskApiConnectorFields(masked);
+        break;
     }
 
     return masked;
   }
 
+  /** Mask sensitive fields for API-based Airbyte connectors */
+  private maskApiConnectorFields(config: Record<string, any>): void {
+    if (config.api_key) config.api_key = '****';
+    if (config.credentials?.personal_access_token)
+      config.credentials.personal_access_token = '****';
+    if (config.credentials?.access_token) config.credentials.access_token = '****';
+    if (config.credentials?.api_token) config.credentials.api_token = '****';
+    if (config.password) config.password = '****';
+    if (config.client_secret) config.client_secret = '****';
+  }
+
   /**
-   * Validate connection config structure based on type
+   * Validate connection config structure based on type.
+   * Airbyte connectors use generic validation when no specific validator exists.
    */
   validateConnectionConfig(connectionType: string, config: Record<string, any>): void {
     switch (connectionType) {
@@ -597,7 +730,11 @@ export class ConnectionService implements OnModuleInit {
         this.validateSnowflakeConfig(config as SnowflakeConfig);
         break;
       default:
-        throw new BadRequestException(`Unsupported connection type: ${connectionType}`);
+        // Allow all Airbyte connectors with minimal validation; ETL validates on test/discover
+        if (!config || typeof config !== 'object') {
+          throw new BadRequestException('config must be a non-empty object');
+        }
+        break;
     }
   }
 

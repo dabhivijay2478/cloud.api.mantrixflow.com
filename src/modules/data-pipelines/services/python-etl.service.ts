@@ -30,10 +30,16 @@ export class PythonETLService {
       this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
       this.configService.get<string>('PYTHON_SERVICE_URL');
     this.pythonServiceUrl = normalizeEtlBaseUrl(raw);
+    // ETL uses Supabase JWT verification — pass service role key (valid JWT)
     this.pythonServiceAuthToken =
-      this.configService.get<string>('ETL_PYTHON_SERVICE_TOKEN') ||
       this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ||
-      'internal-etl-service';
+      this.configService.get<string>('ETL_PYTHON_SERVICE_TOKEN') ||
+      '';
+    if (!this.pythonServiceAuthToken) {
+      this.logger.warn(
+        'SUPABASE_SERVICE_ROLE_KEY not set — ETL requests will fail auth. Set it in apps/api/.env',
+      );
+    }
     if (!this.pythonServiceUrl) {
       const hint =
         raw != null && String(raw).trim().length > 0

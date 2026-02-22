@@ -447,6 +447,54 @@ export class PipelineService {
   }
 
   /**
+   * Get sync state (cursor/LSN/binlog) for incremental/CDC pipelines.
+   * NestJS owns state — stored in pipeline.checkpoint.
+   */
+  async getSyncState(pipelineId: string, organizationId: string, userId: string): Promise<{
+    pipeline_id: string;
+    state: Record<string, unknown> | null;
+    message: string;
+  }> {
+    await this.checkPipelineManagePermission(userId, organizationId);
+    const pipeline = await this.pipelineRepository.findById(pipelineId, organizationId);
+    if (!pipeline) {
+      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+    }
+    return {
+      pipeline_id: pipelineId,
+      state: (pipeline.checkpoint as Record<string, unknown>) ?? null,
+      message: pipeline.checkpoint
+        ? 'Sync state found — next run will resume from cursor'
+        : 'No sync state — will do full sync on first run',
+    };
+  }
+
+  /**
+   * Reset sync state — next run will do a full sync.
+   */
+  async resetSyncState(pipelineId: string, organizationId: string, userId: string): Promise<{
+    pipeline_id: string;
+    deleted: boolean;
+    message: string;
+  }> {
+    await this.checkPipelineManagePermission(userId, organizationId);
+    const pipeline = await this.pipelineRepository.findById(pipelineId, organizationId);
+    if (!pipeline) {
+      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+    }
+    await this.pipelineRepository.update(pipelineId, {
+      checkpoint: null,
+      lastSyncValue: null,
+      updatedAt: new Date(),
+    });
+    return {
+      pipeline_id: pipelineId,
+      deleted: true,
+      message: 'Sync state reset — next run will do a full sync',
+    };
+  }
+
+  /**
    * Execute pipeline asynchronously with batching and retries
    */
   private async executePipelineAsync(

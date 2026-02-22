@@ -51,10 +51,20 @@ import {
 } from '../../common/dto/api-response.dto';
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
+import { EtlService } from '../etl/etl.service';
 import { DataSourceService, type CreateDataSourceDto } from './data-source.service';
 import { ConnectionService, type CreateConnectionDto } from './connection.service';
 
 type ExpressRequestType = ExpressRequest;
+
+function toEtlSourceType(type: string): string {
+  const t = (type ?? 'postgres').toLowerCase();
+  if (t === 'postgres' || t === 'postgresql') return 'source-postgres';
+  if (t === 'mongodb') return 'source-mongodb-v2';
+  if (t === 'mysql') return 'source-mysql';
+  if (t === 'mssql' || t === 'sqlserver') return 'source-mssql';
+  return t.startsWith('source-') ? t : `source-${t}`;
+}
 
 @ApiTags('data-sources')
 @ApiBearerAuth('JWT-auth')
@@ -64,6 +74,7 @@ export class DataSourceController {
   constructor(
     private readonly dataSourceService: DataSourceService,
     private readonly connectionService: ConnectionService,
+    private readonly etlService: EtlService,
   ) {}
 
   /**
@@ -158,6 +169,22 @@ export class DataSourceController {
       offset: offsetNum,
       hasMore: offsetNum + limitNum < result.total,
     });
+  }
+
+  /**
+   * Get available connectors (sources + destinations) from ETL registry
+   */
+  @Get('connectors')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'List connectors',
+    description: 'Get available source and destination connectors from ETL registry',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiResponse({ status: 200, description: 'Connectors retrieved successfully' })
+  async listConnectors(@Param('organizationId', ParseUUIDPipe) _organizationId: string) {
+    const data = await this.etlService.listConnectors();
+    return createSuccessResponse(data);
   }
 
   /**
@@ -292,6 +319,118 @@ export class DataSourceController {
   }
 
   /**
+   * Preview data from data source using ETL (Airbyte)
+   * Discovers streams and returns sample rows for the selected stream
+   */
+  @Post(':sourceId/preview')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Preview data',
+    description: 'Preview sample data from a data source using ETL/Airbyte',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Preview data retrieved successfully' })
+  async previewData(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const dataSource = await this.dataSourceService.getDataSourceById(
+      organizationId,
+      sourceId,
+      userId,
+    );
+    const sourceConfig = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      sourceId,
+      userId,
+    );
+
+    const sourceType = toEtlSourceType(dataSource.sourceType);
+    const sourceStream = body.source_stream as string | undefined;
+    const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
+
+    let streamToPreview = sourceStream;
+    if (!streamToPreview) {
+      const discoverResult = (await this.etlService.discover({
+        source_type: sourceType,
+        source_config: sourceConfig,
+      })) as { streams?: Array<{ name: string }> };
+      const streams = discoverResult?.streams ?? [];
+      streamToPreview = streams[0]?.name;
+      if (!streamToPreview) {
+        throw new BadRequestException('No streams found. Ensure the source has data.');
+      }
+    }
+
+    const previewResult = (await this.etlService.preview({
+      source_type: sourceType,
+      source_config: sourceConfig,
+      source_stream: streamToPreview,
+      limit,
+    })) as { records?: unknown[]; columns?: unknown[]; total?: number; stream?: string; warning?: string };
+
+    return createSuccessResponse({
+      stream: previewResult.stream ?? streamToPreview,
+      records: previewResult.records ?? [],
+      columns: previewResult.columns ?? [],
+      total: previewResult.total ?? 0,
+      ...(previewResult.warning && { warning: previewResult.warning }),
+    });
+  }
+
+  /**
+   * Discover streams from data source using ETL (Airbyte)
+   */
+  @Post(':sourceId/discover')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Discover streams',
+    description: 'Discover available streams/tables from a data source using ETL/Airbyte',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Streams discovered successfully' })
+  async discoverStreams(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const dataSource = await this.dataSourceService.getDataSourceById(
+      organizationId,
+      sourceId,
+      userId,
+    );
+    const sourceConfig = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      sourceId,
+      userId,
+    );
+    const sourceType = toEtlSourceType(dataSource.sourceType);
+
+    const discoverResult = (await this.etlService.discover({
+      source_type: sourceType,
+      source_config: sourceConfig,
+    })) as { streams?: Array<{ name: string; columns?: string[] }> };
+
+    return createSuccessResponse({
+      streams: discoverResult.streams ?? [],
+    });
+  }
+
+  /**
    * Delete data source (soft delete)
    * NestJS handles data source deletion
    */
@@ -321,8 +460,7 @@ export class DataSourceController {
 
   /**
    * Delete connection for data source
-   * NOTE: This endpoint is kept for Python service to call back for actual database deletion
-   * Frontend should call Python API directly: DELETE /connections/{connection_id}
+   * Connections are managed by NestJS only. Frontend calls this endpoint.
    */
   @Delete(':sourceId/connection')
   @HttpCode(HttpStatus.OK)

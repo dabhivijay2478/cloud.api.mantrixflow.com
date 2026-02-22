@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
+import { EtlModule } from '../etl/etl.module';
 import { OrganizationModule } from '../organizations/organization.module';
 import { DataSourceController } from './data-source.controller';
 import { ConnectionService } from './connection.service';
@@ -19,6 +20,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
 @Module({
   imports: [
     ActivityLogModule,
+    EtlModule,
     OrganizationModule,
     HttpModule.register({
       timeout: 30000,

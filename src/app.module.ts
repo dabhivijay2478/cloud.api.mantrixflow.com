@@ -9,6 +9,9 @@ import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 import { DataSourceModule } from './modules/data-sources/data-source.module';
+import { ConnectorsModule } from './modules/connectors/connectors.module';
+import { EtlModule } from './modules/etl/etl.module';
+import { InternalModule } from './modules/internal/internal.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
 import { SearchModule } from './modules/search/search.module';
@@ -32,8 +35,11 @@ import { UserModule } from './modules/users/user.module';
     // Job queuing and scheduling: pgmq + pg_cron (DataPipelineModule)
 
     // Application Modules
+    ConnectorsModule,
     DataSourceModule,
     DataPipelineModule,
+    EtlModule,
+    InternalModule,
     OrganizationModule,
     UserModule,
     OnboardingModule,
