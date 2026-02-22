@@ -108,10 +108,16 @@ export class DataSourceController {
       throw new BadRequestException('name is required');
     }
 
+    const connectorRole = (body.connectorRole || body.connector_role) as
+      | 'source'
+      | 'destination'
+      | undefined;
     const dto: CreateDataSourceDto = {
       name,
       description: (body.description as string | undefined) || undefined,
       sourceType,
+      connectorRole:
+        connectorRole === 'destination' ? 'destination' : undefined,
       metadata:
         body.metadata && typeof body.metadata === 'object'
           ? (body.metadata as Record<string, unknown>)

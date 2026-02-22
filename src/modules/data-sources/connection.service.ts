@@ -155,6 +155,13 @@ export class ConnectionService implements OnModuleInit {
         'api_key',
       );
     }
+    if (config.credentials_json) {
+      config.credentials_json = this.decryptFieldWithLegacySupport(
+        config.credentials_json,
+        connectionType,
+        'credentials_json',
+      );
+    }
     if (config.credentials?.personal_access_token) {
       config.credentials.personal_access_token = this.decryptFieldWithLegacySupport(
         config.credentials.personal_access_token,
@@ -196,6 +203,9 @@ export class ConnectionService implements OnModuleInit {
   private encryptApiConnectorFields(config: Record<string, any>): void {
     if (config.api_key) {
       config.api_key = this.encryptionService.encrypt(config.api_key);
+    }
+    if (config.credentials_json) {
+      config.credentials_json = this.encryptionService.encrypt(config.credentials_json);
     }
     if (config.credentials?.personal_access_token) {
       config.credentials.personal_access_token = this.encryptionService.encrypt(
@@ -322,6 +332,9 @@ export class ConnectionService implements OnModuleInit {
   private normalizeApiConnectorFields(config: Record<string, any>): void {
     if (config.api_key) {
       config.api_key = this.maybeDecryptIncomingEncrypted(config.api_key);
+    }
+    if (config.credentials_json) {
+      config.credentials_json = this.maybeDecryptIncomingEncrypted(config.credentials_json);
     }
     if (config.credentials?.personal_access_token) {
       config.credentials.personal_access_token = this.maybeDecryptIncomingEncrypted(

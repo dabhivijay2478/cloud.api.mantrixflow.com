@@ -10,6 +10,7 @@ import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { EtlModule } from '../etl/etl.module';
 import { OrganizationModule } from '../organizations/organization.module';
+import { UserModule } from '../users/user.module';
 import { DataSourceController } from './data-source.controller';
 import { ConnectionService } from './connection.service';
 import { DataSourceService } from './data-source.service';
@@ -22,6 +23,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
     ActivityLogModule,
     EtlModule,
     OrganizationModule,
+    UserModule,
     HttpModule.register({
       timeout: 30000,
       maxRedirects: 5,

@@ -15,12 +15,14 @@ import type { DataSource } from '../../database/schemas/data-sources';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
 import { DATASOURCE_ACTIONS, ENTITY_TYPES } from '../activity-logs/constants/activity-log-types';
 import { OrganizationRoleService } from '../organizations/services/organization-role.service';
+import { UserService } from '../users/user.service';
 import { DataSourceRepository } from './repositories/data-source.repository';
 
 export interface CreateDataSourceDto {
   name: string;
   description?: string;
   sourceType: string;
+  connectorRole?: 'source' | 'destination';
   metadata?: Record<string, unknown>;
 }
 
@@ -35,16 +37,19 @@ export interface UpdateDataSourceDto {
 export class DataSourceService {
   private readonly logger = new Logger(DataSourceService.name);
 
-  // Supported data source types (aligned with ETL registry)
+  // Supported data source types (aligned with ETL registry and frontend connectors)
   private readonly supportedTypes = [
     'postgres',
+    'postgresql',
     'mysql',
     'mongodb',
     'mssql',
+    'sqlserver',
     's3',
     'api',
     'bigquery',
     'snowflake',
+    'redshift',
     'csv',
     'shopify',
     'stripe',
@@ -59,12 +64,20 @@ export class DataSourceService {
     'slack',
     'faker',
     'file',
+    'duckdb',
+    'motherduck',
+    'clickhouse',
+    'databricks',
+    'pgvector',
+    'weaviate',
+    'excel',
   ];
 
   constructor(
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
+    private readonly userService: UserService,
   ) {}
 
   /**
@@ -98,6 +111,19 @@ export class DataSourceService {
     userId: string,
     dto: CreateDataSourceDto,
   ): Promise<DataSource> {
+    // Ensure user exists in users table (sync from Supabase if needed)
+    // Prevents FK violation on created_by when user hasn't completed onboarding
+    try {
+      await this.userService.getUserById(userId);
+    } catch (e) {
+      this.logger.warn(
+        `User ${userId} not found and could not be synced: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      throw new BadRequestException(
+        'User not found. Please complete sign-in and try again.',
+      );
+    }
+
     // Validate source type
     this.validateSourceType(dto.sourceType);
 
@@ -116,11 +142,14 @@ export class DataSourceService {
     }
 
     // Create data source
+    const connectorRole =
+      dto.connectorRole === 'destination' ? 'destination' : 'source';
     const dataSource = await this.dataSourceRepository.create({
       organizationId,
       name: dto.name,
       description: dto.description,
       sourceType: dto.sourceType,
+      connectorRole,
       isActive: true,
       metadata: dto.metadata || null,
       createdBy: userId,

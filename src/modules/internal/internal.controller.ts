@@ -92,21 +92,56 @@ export class InternalController {
   }
 
   private toEtlSourceType(type: string): string {
-    const t = (type ?? 'postgres').toLowerCase();
-    if (t === 'postgres' || t === 'postgresql') return 'source-postgres';
-    if (t === 'mongodb') return 'source-mongodb-v2';
-    if (t === 'mysql') return 'source-mysql';
-    if (t === 'mssql' || t === 'sqlserver') return 'source-mssql';
-    return t.startsWith('source-') ? t : `source-${t}`;
+    const t = (type ?? 'postgres').toLowerCase().trim();
+    if (!t) return 'source-postgres';
+    if (t.startsWith('source-')) return t;
+    const map: Record<string, string> = {
+      postgres: 'source-postgres',
+      postgresql: 'source-postgres',
+      mongodb: 'source-mongodb-v2',
+      mysql: 'source-mysql',
+      mssql: 'source-mssql',
+      sqlserver: 'source-mssql',
+      snowflake: 'source-snowflake',
+      bigquery: 'source-bigquery',
+      s3: 'source-s3',
+      shopify: 'source-shopify',
+      stripe: 'source-stripe',
+      hubspot: 'source-hubspot',
+      salesforce: 'source-salesforce',
+      github: 'source-github',
+      'google-sheets': 'source-google-sheets',
+      'google-analytics': 'source-google-analytics',
+      'facebook-marketing': 'source-facebook-marketing',
+      airtable: 'source-airtable',
+      notion: 'source-notion',
+      slack: 'source-slack',
+      faker: 'source-faker',
+      file: 'source-file',
+    };
+    return map[t] ?? `source-${t}`;
   }
 
   private toEtlDestType(type: string): string {
-    const t = (type ?? 'postgres').toLowerCase();
-    if (t === 'postgres' || t === 'postgresql') return 'postgres';
-    if (t === 'mongodb') return 'mongodb';
-    if (t === 'mysql') return 'mysql';
-    if (t === 'mssql' || t === 'sqlserver') return 'mssql';
-    return t;
+    const t = (type ?? 'postgres').toLowerCase().trim().replace(/^destination-/, '');
+    if (!t) return 'postgres';
+    const map: Record<string, string> = {
+      postgres: 'postgres',
+      postgresql: 'postgres',
+      mongodb: 'mongodb',
+      mysql: 'mysql',
+      mssql: 'mssql',
+      sqlserver: 'mssql',
+      snowflake: 'snowflake',
+      bigquery: 'bigquery',
+      duckdb: 'duckdb',
+      motherduck: 'motherduck',
+      s3: 's3',
+      redshift: 'redshift',
+      databricks: 'databricks',
+      clickhouse: 'clickhouse',
+    };
+    return map[t] ?? t;
   }
 
   @Post('etl-callback')
