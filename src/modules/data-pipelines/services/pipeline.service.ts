@@ -583,11 +583,18 @@ export class PipelineService {
         throw new BadRequestException('Source and destination must have data source IDs');
       }
 
-      // Get transform script
-      const transformScript = destinationSchema.transformScript;
+      // Get transform config (dbt only)
+      const transformType = (destinationSchema.transformType as string) || 'dbt';
+      const dbtModel = destinationSchema.dbtModel as string | undefined;
+      const customSql = destinationSchema.customSql as string | undefined;
 
-      if (!transformScript || !transformScript.trim()) {
-        throw new BadRequestException('Transform script is required for destination schema');
+      const hasDbt =
+        transformType === 'dbt' &&
+        (dbtModel?.trim() || customSql?.trim());
+      if (!hasDbt) {
+        throw new BadRequestException(
+          'Transform is required: set customSql or dbtModel when transformType is dbt',
+        );
       }
 
       // Collect data with batching
@@ -793,10 +800,12 @@ export class PipelineService {
 
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
           try {
-            // Transform data first using transform script
-            const transformResult = await this.pythonETLService.transform({
+            // Transform data (dbt only)
+            const transformResult = await this.pythonETLService.transformData({
               rows: sourceData.rows,
-              transformScript: transformScript,
+              transformType,
+              dbtModel,
+              customSql,
             });
 
             const writeResult = await this.pythonETLService.emit({
@@ -1287,9 +1296,16 @@ export class PipelineService {
       errors.push('Destination schema must have a destination table');
     }
 
-    // Validate transform script
-    if (!destinationSchema.transformScript || !destinationSchema.transformScript.trim()) {
-      errors.push('Transform script is required');
+    // Validate transform (dbt only)
+    const transformType = (destinationSchema.transformType as string) || 'dbt';
+    const hasDbt =
+      transformType === 'dbt' &&
+      (destinationSchema.dbtModel?.trim() ||
+        (destinationSchema.customSql as string)?.trim());
+    if (!hasDbt) {
+      errors.push(
+        'Transform is required: set customSql or dbtModel when transformType is dbt',
+      );
     }
 
     // Python handles incremental sync validation - no need to validate here
@@ -1342,16 +1358,25 @@ export class PipelineService {
       limit: sampleSize,
     });
 
-    // Transform sample data
-    const transformScript = destinationSchema.transformScript;
+    // Transform sample data (dbt only)
+    const transformType = (destinationSchema.transformType as string) || 'dbt';
+    const dbtModel = destinationSchema.dbtModel as string | undefined;
+    const customSql = destinationSchema.customSql as string | undefined;
+    const hasDbt =
+      transformType === 'dbt' &&
+      (dbtModel?.trim() || customSql?.trim());
 
-    if (!transformScript || !transformScript.trim()) {
-      throw new BadRequestException('Transform script is required for destination schema');
+    if (!hasDbt) {
+      throw new BadRequestException(
+        'Transform is required: set customSql or dbtModel when transformType is dbt',
+      );
     }
 
-    const transformResult = await this.pythonETLService.transform({
+    const transformResult = await this.pythonETLService.transformData({
       rows: sourceData.rows,
-      transformScript: transformScript,
+      transformType,
+      dbtModel,
+      customSql,
     });
     const transformedSample = transformResult.transformedRows;
 
@@ -1572,12 +1597,18 @@ export class PipelineService {
         jobState: 'running',
       });
 
-      // Get transform script
-      const transformScript = destinationSchema.transformScript;
+      // Get transform config (dbt only)
+      const transformType = (destinationSchema.transformType as string) || 'dbt';
+      const dbtModel = destinationSchema.dbtModel as string | undefined;
+      const customSql = destinationSchema.customSql as string | undefined;
+      const hasDbt =
+        transformType === 'dbt' &&
+        (dbtModel?.trim() || customSql?.trim());
 
-      // Basic validation
-      if (!transformScript || !transformScript.trim()) {
-        throw new BadRequestException('Transform script is required');
+      if (!hasDbt) {
+        throw new BadRequestException(
+          'Transform is required: set customSql or dbtModel when transformType is dbt',
+        );
       }
 
       // Get connection configs
@@ -1634,9 +1665,11 @@ export class PipelineService {
         },
       );
 
-      const transformResult = await this.pythonETLService.transform({
+      const transformResult = await this.pythonETLService.transformData({
         rows: sourceData.rows,
-        transformScript: transformScript || '',
+        transformType,
+        dbtModel,
+        customSql,
       });
 
       // Group by entity if needed (simplified - assumes single entity for now)

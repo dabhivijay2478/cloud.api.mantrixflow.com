@@ -247,49 +247,77 @@ export class PythonETLService {
   }
 
   /**
-   * Transform data using custom Python script
+   * Transform data using dbt (custom SQL or dbt model)
    */
-  async transform(options: { rows: any[]; transformScript: string }): Promise<{
-    transformedRows: any[];
-    errors: any[];
-  }> {
-    const { rows, transformScript } = options;
+  async transformData(options: {
+    rows: any[];
+    transformType?: string;
+    dbtModel?: string;
+    customSql?: string;
+  }): Promise<{ transformedRows: any[]; errors: any[] }> {
+    const hasDbt =
+      (options.transformType || 'dbt').toLowerCase() === 'dbt' &&
+      (options.customSql?.trim() || options.dbtModel?.trim());
+    if (hasDbt) {
+      return this.transformDbt({
+        rows: options.rows,
+        dbtModel: options.dbtModel,
+        customSql: options.customSql,
+      });
+    }
+    return { transformedRows: options.rows, errors: [] };
+  }
 
-    if (!transformScript || !transformScript.trim()) {
-      this.logger.warn('Empty transform script provided, returning rows as-is');
-      return {
-        transformedRows: rows,
-        errors: [],
-      };
+  /**
+   * Transform data using dbt model or custom SQL from FE
+   */
+  async transformDbt(options: {
+    rows: any[];
+    dbtModel?: string;
+    customSql?: string;
+  }): Promise<{ transformedRows: any[]; errors: any[] }> {
+    const { rows, dbtModel, customSql } = options;
+    const hasCustomSql = customSql?.trim();
+    const hasDbtModel = dbtModel?.trim();
+
+    if (!hasCustomSql && !hasDbtModel) {
+      this.logger.warn('No dbt model or custom SQL provided, returning rows as-is');
+      return { transformedRows: rows, errors: [] };
     }
 
     try {
-      const transformUrl = `${this.pythonServiceUrl}/transform`;
-      this.assertValidRequestUrl(transformUrl, 'transform');
+      const transformUrl = `${this.pythonServiceUrl}/transform/dbt`;
+      this.assertValidRequestUrl(transformUrl, 'transform/dbt');
+
+      const payload: Record<string, unknown> = {
+        records: rows,
+        dbt_model: hasDbtModel ? dbtModel : null,
+        custom_sql: hasCustomSql ? customSql : null,
+      };
 
       const response = await firstValueFrom(
         this.httpService.post(
           transformUrl,
-          {
-            rows,
-            transform_script: transformScript,
-          },
-          this.buildRequestConfig(300000), // 5 minutes for transformation (was 30s)
+          payload,
+          this.buildRequestConfig(300000),
         ),
       );
 
+      if (response.data?.error) {
+        throw new Error(response.data.error);
+      }
+
       return {
-        transformedRows: response.data.transformed_rows || [],
-        errors: response.data.errors || [],
+        transformedRows: response.data.records || [],
+        errors: [],
       };
     } catch (error: any) {
       const detail =
-        error?.response?.data?.detail ||
-        error?.response?.data?.message ||
         error?.response?.data?.error ||
+        error?.response?.data?.detail ||
         error?.message ||
-        'Unknown transform error';
-      this.logger.error(`Transformation failed: ${detail}`, error?.stack);
+        'Unknown dbt transform error';
+      this.logger.error(`dbt transform failed: ${detail}`, error?.stack);
       throw new Error(`Transformation failed: ${detail}`);
     }
   }

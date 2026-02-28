@@ -64,9 +64,15 @@ export class DestinationSchemaService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Validate that transformScript is provided
-    if (!dto.transformScript || !dto.transformScript.trim()) {
-      throw new BadRequestException('transformScript is required');
+    // Validate transform (dbt only)
+    const transformType = (dto.transformType || 'dbt').toLowerCase();
+    const hasDbt =
+      transformType === 'dbt' &&
+      (dto.dbtModel?.trim() || dto.customSql?.trim());
+    if (!hasDbt) {
+      throw new BadRequestException(
+        'Transform is required: set customSql or dbtModel when transformType is dbt',
+      );
     }
 
     // Validate upsert configuration
@@ -80,7 +86,9 @@ export class DestinationSchemaService {
       destinationSchema: dto.destinationSchema || 'public',
       destinationTable,
       destinationTableExists: dto.destinationTableExists || false,
-      transformScript: dto.transformScript || null,
+      transformType: (dto.transformType as string) || 'dbt',
+      dbtModel: dto.dbtModel || null,
+      customSql: dto.customSql || null,
       writeMode: (dto.writeMode as string) || 'append',
       upsertKey: (dto.upsertKey as string[]) || null,
       name: dto.name || `${destinationTable}_destination`,
@@ -186,7 +194,6 @@ export class DestinationSchemaService {
 
     const updated = await this.destinationSchemaRepository.update(id, {
       ...updates,
-      transformScript: updates.transformScript !== undefined ? updates.transformScript : undefined,
       upsertKey: (updates.upsertKey as string[]) || undefined,
       updatedAt: new Date(),
     });
@@ -233,8 +240,8 @@ export class DestinationSchemaService {
       errors.push('Destination table is required');
     }
 
-    if (!schema.transformScript || !schema.transformScript.trim()) {
-      warnings.push('No transform script defined');
+    if (!schema.customSql?.trim() && !schema.dbtModel?.trim()) {
+      warnings.push('No custom SQL or dbt model defined');
     }
 
     const validationResult: SchemaValidationResult = {
@@ -303,8 +310,8 @@ export class DestinationSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    if (!schema.transformScript || !schema.transformScript.trim()) {
-      throw new BadRequestException('Transform script is required to create table');
+    if (!schema.customSql?.trim() && !schema.dbtModel?.trim()) {
+      throw new BadRequestException('Custom SQL or dbt model is required to create table');
     }
 
     // Table creation is now handled automatically by Python service during emit
@@ -383,9 +390,9 @@ export class DestinationSchemaService {
       }
     }
 
-    // Check transform script
-    if (!schema.transformScript || !schema.transformScript.trim()) {
-      warnings.push('No transform script defined');
+    // Check transform (dbt SQL)
+    if (!schema.customSql?.trim() && !schema.dbtModel?.trim()) {
+      warnings.push('No custom SQL or dbt model defined');
     }
 
     // Check upsert configuration

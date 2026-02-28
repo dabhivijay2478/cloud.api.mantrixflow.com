@@ -59,13 +59,29 @@ export class CreateDestinationSchemaDto {
   destinationTableExists?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Custom Python transform script (defines transform(record) function)',
-    example:
-      'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
+    description: 'Transform type: dbt',
+    example: 'dbt',
+    default: 'dbt',
   })
   @IsOptional()
   @IsString()
-  transformScript?: string;
+  transformType?: string;
+
+  @ApiPropertyOptional({
+    description: 'dbt model name when transformType is dbt',
+    example: 'stg_company_role_combined',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  dbtModel?: string;
+
+  @ApiPropertyOptional({
+    description: 'Custom SQL - runs through dbt against raw_input (e.g. select id, company_name as name from raw_input)',
+  })
+  @IsOptional()
+  @IsString()
+  customSql?: string;
 
   @ApiPropertyOptional({
     description: 'Write mode for destination',

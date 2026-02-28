@@ -44,8 +44,14 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   /** Index definitions */
   indexes: jsonb('indexes').$type<IndexDefinition[]>(),
 
-  /** Custom Python transform script (defines transform(record) function) */
-  transformScript: text('transform_script'),
+  /** Transform type: 'dbt' | 'rules' | 'none' */
+  transformType: varchar('transform_type', { length: 50 }).default('dbt'),
+
+  /** dbt model name when transformType is 'dbt' (e.g. stg_company_role_combined) */
+  dbtModel: varchar('dbt_model', { length: 255 }),
+
+  /** Custom SQL from FE - runs against raw_input (no backend dbt files needed) */
+  customSql: text('custom_sql'),
 
   // ============================================================================
   // WRITE CONFIGURATION
