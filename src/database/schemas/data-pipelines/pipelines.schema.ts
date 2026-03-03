@@ -193,7 +193,7 @@ export const pipelines = pgTable('pipelines', {
 export interface Transformation {
   sourceColumn: string;
   transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom' | 'filter' | 'mask' | 'hash';
-  transformConfig: any; // transformation-specific config
+  transformConfig?: Record<string, unknown>; // transformation-specific config (optional)
   destinationColumn: string;
 }
 

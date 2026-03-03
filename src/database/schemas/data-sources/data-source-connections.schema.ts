@@ -21,7 +21,6 @@ export const connectionStatusEnum = pgEnum('connection_status', [
  * Key Features:
  * - Universal: Supports any data source type via connection_type and config JSONB
  * - Encrypted: Sensitive fields (passwords, tokens, keys) should be encrypted before storage
- * - Schema caching: Stores discovered schema/metadata for performance
  * - Connection testing: Tracks test results and connection status
  *
  * Config JSONB Structure Examples:
@@ -127,10 +126,6 @@ export const dataSourceConnections = pgTable(
 
     // Connection test results
     testResult: jsonb('test_result'),
-
-    // Schema cache - stores discovered schema/metadata for performance
-    schemaCache: jsonb('schema_cache'),
-    schemaCachedAt: timestamp('schema_cached_at'),
 
     // Timestamps
     createdAt: timestamp('created_at').notNull().defaultNow(),

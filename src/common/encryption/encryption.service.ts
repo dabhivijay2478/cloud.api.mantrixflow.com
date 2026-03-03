@@ -1,15 +1,15 @@
 /**
  * Encryption Service
- * Handles AES-256-GCM encryption/decryption for sensitive data
- * Uses crypto.scrypt for key derivation
+ * Handles AES-256-GCM encryption/decryption for sensitive data (connection credentials).
+ * Uses crypto.scrypt for key derivation. Enterprise-grade: AES-256, authenticated encryption.
  */
 
 import * as crypto from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
-export class EncryptionService {
+export class EncryptionService implements OnModuleInit {
   private readonly algorithm = 'aes-256-gcm';
   private readonly keyLength = 32; // 256 bits
   private readonly ivLength = 16; // 128 bits
@@ -23,6 +23,18 @@ export class EncryptionService {
 
   constructor(private readonly configService: ConfigService) {}
 
+  onModuleInit(): void {
+    const masterKey = this.configService.get<string>('ENCRYPTION_MASTER_KEY');
+    if (!masterKey || typeof masterKey !== 'string') {
+      throw new Error('ENCRYPTION_MASTER_KEY environment variable is not set');
+    }
+    if (masterKey.length < 32) {
+      throw new Error(
+        'ENCRYPTION_MASTER_KEY must be at least 32 characters. Generate with: openssl rand -hex 32',
+      );
+    }
+  }
+
   /**
    * Get encryption key from environment variable or derive from master key
    */
@@ -33,7 +45,6 @@ export class EncryptionService {
     }
 
     // Derive a consistent key from master key
-    // In production, you might want to use a key derivation service
     return crypto.scryptSync(
       masterKey,
       'postgres-connector-salt',

@@ -18,41 +18,10 @@ import {
   PGCRON_CDC_POLL_JOB,
   PGCRON_CDC_POLL_SCHEDULE,
   PG_NOTIFY_PIPELINE_STATUS,
+  type FullSyncJobData,
+  type IncrementalSyncJobData,
+  type DeltaCheckJobData,
 } from './pgmq.constants';
-
-// ════════════════════════════════════════════════════════════════
-// Job Data Interfaces
-// ════════════════════════════════════════════════════════════════
-
-export interface FullSyncJobData {
-  pipelineId: string;
-  organizationId: string;
-  userId: string;
-  triggerType: 'manual' | 'scheduled';
-  batchSize?: number;
-}
-
-export interface IncrementalSyncJobData {
-  pipelineId: string;
-  organizationId: string;
-  userId: string;
-  triggerType: 'polling' | 'manual' | 'resume';
-  checkpoint: {
-    watermarkField?: string;
-    lastValue?: string | number;
-    walPosition?: string;
-    lsn?: string;
-    slotName?: string;
-    publicationName?: string;
-    pauseTimestamp?: string;
-  };
-  batchSize?: number;
-}
-
-export interface DeltaCheckJobData {
-  pipelineId: string;
-  organizationId: string;
-}
 
 export interface StatusUpdateEventData {
   pipelineId: string;
@@ -213,61 +182,6 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ════════════════════════════════════════════════════════════════
-  // ENQUEUE METHODS
-  // ════════════════════════════════════════════════════════════════
-
-  /** Enqueue a full sync pipeline job. */
-  async enqueueFullSync(data: FullSyncJobData): Promise<void> {
-    const payload: PgmqJobPayload<FullSyncJobData> = {
-      name: 'full-sync',
-      data,
-      retryCount: 0,
-      maxRetries: 5,
-    };
-    await this.send(PGMQ_QUEUE_NAMES.PIPELINE_JOBS, payload);
-    this.logger.debug(`Enqueued full sync for pipeline ${data.pipelineId}`);
-  }
-
-  /** Enqueue an incremental sync pipeline job. */
-  async enqueueIncrementalSync(data: IncrementalSyncJobData): Promise<void> {
-    const payload: PgmqJobPayload<IncrementalSyncJobData> = {
-      name: 'incremental-sync',
-      data,
-      retryCount: 0,
-      maxRetries: 5,
-    };
-    await this.send(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, payload);
-    this.logger.debug(`Enqueued incremental sync for pipeline ${data.pipelineId}`);
-  }
-
-  /** Enqueue a delta-check job for CDC polling. */
-  async enqueueDeltaCheck(data: DeltaCheckJobData): Promise<void> {
-    const payload: PgmqJobPayload<DeltaCheckJobData> = {
-      name: 'delta-check',
-      data,
-      retryCount: 0,
-      maxRetries: 1,
-    };
-    await this.send(PGMQ_QUEUE_NAMES.POLLING_CHECKS, payload);
-    this.logger.debug(`Enqueued delta check for pipeline ${data.pipelineId}`);
-  }
-
-  /** Enqueue a delayed delta-check (e.g. for next poll window). */
-  async scheduleDelayedDeltaCheck(data: DeltaCheckJobData, delayMs: number): Promise<void> {
-    const payload: PgmqJobPayload<DeltaCheckJobData> = {
-      name: 'delta-check',
-      data,
-      retryCount: 0,
-      maxRetries: 1,
-    };
-    await this.sendWithDelay(
-      PGMQ_QUEUE_NAMES.POLLING_CHECKS,
-      payload,
-      Math.ceil(delayMs / 1000),
-    );
-  }
-
-  // ════════════════════════════════════════════════════════════════
   // STATUS UPDATES (replaces Redis pub/sub)
   // ════════════════════════════════════════════════════════════════
 
@@ -351,6 +265,40 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ════════════════════════════════════════════════════════════════
+  // PIPELINE JOB ENQUEUE HELPERS
+  // ════════════════════════════════════════════════════════════════
+
+  async enqueueFullSync(data: FullSyncJobData): Promise<string> {
+    const payload: PgmqJobPayload<FullSyncJobData> = {
+      name: 'full-sync',
+      data,
+      retryCount: 0,
+      maxRetries: 5,
+    };
+    return this.send(PGMQ_QUEUE_NAMES.PIPELINE_JOBS, payload);
+  }
+
+  async enqueueIncrementalSync(data: IncrementalSyncJobData): Promise<string> {
+    const payload: PgmqJobPayload<IncrementalSyncJobData> = {
+      name: 'incremental-sync',
+      data,
+      retryCount: 0,
+      maxRetries: 5,
+    };
+    return this.send(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, payload);
+  }
+
+  async enqueueDeltaCheck(data: DeltaCheckJobData): Promise<string> {
+    const payload: PgmqJobPayload<DeltaCheckJobData> = {
+      name: 'delta-check',
+      data,
+      retryCount: 0,
+      maxRetries: 1,
+    };
+    return this.send(PGMQ_QUEUE_NAMES.POLLING_CHECKS, payload);
+  }
+
+  // ════════════════════════════════════════════════════════════════
   // LOW-LEVEL pgmq SQL HELPERS
   // ════════════════════════════════════════════════════════════════
 
@@ -367,12 +315,13 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
     payload: PgmqJobPayload,
     delaySec: number,
   ): Promise<string> {
-    const result = await this.sql('SELECT * FROM pgmq.send_delay($1, $2::jsonb, $3)', [
+    // pgmq.send(queue_name, msg, delay) — delay is third param (seconds)
+    const result = await this.sql('SELECT * FROM pgmq.send($1, $2::jsonb, $3::integer)', [
       queueName,
       JSON.stringify(payload),
       delaySec,
     ]);
-    return result.rows[0]?.send_delay;
+    return String(result.rows[0]?.send ?? '');
   }
 
   private async sql(text: string, params?: unknown[]) {

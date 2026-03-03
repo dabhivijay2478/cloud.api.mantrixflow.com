@@ -9,7 +9,7 @@
  *
  * Architecture:
  * - NestJS: Orchestration, CRUD, user/org management, activity logging
- * - Python FastAPI: ETL operations (collect, transform, emit)
+ * - Python FastAPI (apps/new-etl): ETL operations (discover, preview, runSync)
  * - pgmq + pg_cron: Job queuing, scheduling, CDC polling (Supabase-native)
  * - Socket.io: Real-time updates (via Supabase Realtime + Postgres NOTIFY)
  *
@@ -20,7 +20,7 @@
  * - Postgres NOTIFY + Supabase Realtime for status/progress → Socket.io gateway
  *
  * Guide: To add a new data source type:
- * 1. Add connector in Python service: etl-service/connectors/{source-name}.py
+ * 1. Add connector in Python service: apps/new-etl
  * 2. Register in Python main.py CONNECTORS dict
  * 3. Add type to DataSourceType enum (postgresql, mysql, mongodb only)
  */
@@ -108,8 +108,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     PipelineSchedulerService, // Handles pipeline scheduling configuration
     ScheduledPipelineWorkerService, // Worker for processing scheduled pipeline jobs
 
-    // Python ETL Service - HTTP client for Python FastAPI microservice
-    PythonETLService, // Handles collect, transform, emit via Python service
+    // Python ETL Service - HTTP client for apps/new-etl (discover, preview, runSync)
+    PythonETLService,
 
     // pgmq job processor (polls pipeline_jobs, incremental_sync, polling_checks queues)
     PipelineJobProcessor,

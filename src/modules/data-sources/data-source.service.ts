@@ -37,41 +37,8 @@ export interface UpdateDataSourceDto {
 export class DataSourceService {
   private readonly logger = new Logger(DataSourceService.name);
 
-  // Supported data source types (aligned with ETL registry and frontend connectors)
-  private readonly supportedTypes = [
-    'postgres',
-    'postgresql',
-    'mysql',
-    'mongodb',
-    'mssql',
-    'sqlserver',
-    's3',
-    'api',
-    'bigquery',
-    'snowflake',
-    'redshift',
-    'csv',
-    'shopify',
-    'stripe',
-    'hubspot',
-    'salesforce',
-    'github',
-    'google-sheets',
-    'google-analytics',
-    'facebook-marketing',
-    'airtable',
-    'notion',
-    'slack',
-    'faker',
-    'file',
-    'duckdb',
-    'motherduck',
-    'clickhouse',
-    'databricks',
-    'pgvector',
-    'weaviate',
-    'excel',
-  ];
+  // Supported data source types — ETL (new-etl) is source of truth: postgres, mongodb only
+  private readonly supportedTypes = ['postgres', 'postgresql', 'mongodb'];
 
   constructor(
     private readonly dataSourceRepository: DataSourceRepository,

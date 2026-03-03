@@ -1603,12 +1603,6 @@ export class ConnectionService implements OnModuleInit {
         break;
     }
 
-    // Update schema cache
-    await this.connectionRepository.updateByDataSourceId(dataSourceId, {
-      schemaCache: schema,
-      schemaCachedAt: new Date(),
-    });
-
     // Log activity
     try {
       await this.activityLogService.logConnectionAction(

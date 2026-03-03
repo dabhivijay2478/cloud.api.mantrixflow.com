@@ -11,7 +11,10 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import type { PipelineDestinationSchema } from '../../../database/schemas';
+import type {
+  DestinationSchemaValidationResult,
+  PipelineDestinationSchema,
+} from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DESTINATION_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
@@ -64,15 +67,17 @@ export class DestinationSchemaService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Validate transform (dbt only)
-    const transformType = (dto.transformType || 'dbt').toLowerCase();
-    const hasDbt =
-      transformType === 'dbt' &&
-      (dto.dbtModel?.trim() || dto.customSql?.trim());
-    if (!hasDbt) {
-      throw new BadRequestException(
-        'Transform is required: set customSql or dbtModel when transformType is dbt',
-      );
+    // Validate transform: customSql/dbtModel required only when transformType is dbt
+    // Default to 'dlt' when not provided (new pipeline flow uses dlt; dbt requires explicit opt-in)
+    const rawType = dto.transformType?.trim() || 'dlt';
+    const transformType = rawType.toLowerCase();
+    if (transformType === 'dbt') {
+      const hasDbt = dto.dbtModel?.trim() || dto.customSql?.trim();
+      if (!hasDbt) {
+        throw new BadRequestException(
+          'Transform is required: set customSql or dbtModel when transformType is dbt',
+        );
+      }
     }
 
     // Validate upsert configuration
@@ -86,7 +91,7 @@ export class DestinationSchemaService {
       destinationSchema: dto.destinationSchema || 'public',
       destinationTable,
       destinationTableExists: dto.destinationTableExists || false,
-      transformType: (dto.transformType as string) || 'dbt',
+      transformType: transformType,
       dbtModel: dto.dbtModel || null,
       customSql: dto.customSql || null,
       writeMode: (dto.writeMode as string) || 'append',
@@ -240,7 +245,9 @@ export class DestinationSchemaService {
       errors.push('Destination table is required');
     }
 
-    if (!schema.customSql?.trim() && !schema.dbtModel?.trim()) {
+    // customSql/dbtModel only required for dbt; dlt creates tables automatically
+    const schemaTransformType = (schema.transformType || 'dlt').toLowerCase();
+    if (schemaTransformType === 'dbt' && !schema.customSql?.trim() && !schema.dbtModel?.trim()) {
       warnings.push('No custom SQL or dbt model defined');
     }
 
@@ -251,11 +258,13 @@ export class DestinationSchemaService {
     };
 
     // Update schema with validation result (include validatedAt for DestinationSchemaValidationResult)
+    const resultWithTimestamp: DestinationSchemaValidationResult = {
+      ...validationResult,
+      warnings: validationResult.warnings ?? [],
+      validatedAt: new Date().toISOString(),
+    };
     await this.destinationSchemaRepository.update(id, {
-      validationResult: {
-        ...validationResult,
-        validatedAt: new Date().toISOString(),
-      } as any,
+      validationResult: resultWithTimestamp,
       lastValidatedAt: new Date(),
     });
 
@@ -298,8 +307,8 @@ export class DestinationSchemaService {
 
   /**
    * Create destination table based on column mappings
-   * Note: Table creation is now handled by Python service during emit operation
-   * This method is kept for backward compatibility but table creation happens automatically
+   * For dlt: sync only to existing tables—no table creation. Returns no-op.
+   * For dbt: requires customSql or dbtModel to create table.
    */
   async createTable(id: string, userId: string): Promise<{ created: boolean; tableName: string }> {
     const schema = await this.destinationSchemaRepository.findById(id);
@@ -310,20 +319,29 @@ export class DestinationSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    if (!schema.customSql?.trim() && !schema.dbtModel?.trim()) {
-      throw new BadRequestException('Custom SQL or dbt model is required to create table');
+    const schemaTransformType = (schema.transformType || 'dlt').toLowerCase();
+
+    // dlt: sync to existing tables only—no table creation
+    if (schemaTransformType === 'dlt') {
+      this.logger.log(
+        `dlt syncs only to existing tables; no table creation for: ${schema.destinationTable}`,
+      );
+      return {
+        created: false,
+        tableName: schema.destinationTable,
+      };
     }
 
-    // Table creation is now handled automatically by Python service during emit
-    // This method is kept for API compatibility
-    // The table will be created on first emit if it doesn't exist
+    // dbt: customSql/dbtModel required
+    if (schemaTransformType === 'dbt' && !schema.customSql?.trim() && !schema.dbtModel?.trim()) {
+      throw new BadRequestException(
+        'Custom SQL or dbt model is required to create table when transformType is dbt',
+      );
+    }
 
-    this.logger.log(
-      `Table creation will happen automatically on first emit for: ${schema.destinationTable}`,
-    );
-
+    // dbt: table creation handled by dbt run (kept for API compatibility)
     return {
-      created: false, // Table creation deferred to emit operation
+      created: false,
       tableName: schema.destinationTable,
     };
   }
@@ -390,8 +408,9 @@ export class DestinationSchemaService {
       }
     }
 
-    // Check transform (dbt SQL)
-    if (!schema.customSql?.trim() && !schema.dbtModel?.trim()) {
+    // customSql/dbtModel only required for dbt; dlt creates tables automatically
+    const schemaTransformType = (schema.transformType || 'dlt').toLowerCase();
+    if (schemaTransformType === 'dbt' && !schema.customSql?.trim() && !schema.dbtModel?.trim()) {
       warnings.push('No custom SQL or dbt model defined');
     }
 

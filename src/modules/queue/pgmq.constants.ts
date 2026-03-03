@@ -16,8 +16,12 @@ export const PGMQ_QUEUE_NAMES = {
 /** How often NestJS polls pgmq queues for new messages (ms) */
 export const PGMQ_POLL_INTERVAL_MS = 2_000;
 
-/** Max number of pipeline jobs to process in parallel per poll cycle (real-time parallel execution) */
-export const PGMQ_PARALLEL_WORKERS = 5;
+/** Max number of pipeline jobs to process in parallel per poll cycle (real-time parallel execution).
+ * Override via PGMQ_PARALLEL_WORKERS env (e.g. 10-20 for ~2k runs/day). */
+export const PGMQ_PARALLEL_WORKERS =
+  (typeof process !== 'undefined' && process.env?.PGMQ_PARALLEL_WORKERS
+    ? parseInt(process.env.PGMQ_PARALLEL_WORKERS, 10)
+    : NaN) || 5;
 
 /** Visibility timeout for long-running pipeline / sync jobs (seconds) */
 export const PGMQ_VT_LONG_SEC = 14_400; // 4 hours
@@ -36,3 +40,26 @@ export const PGCRON_CDC_POLL_SCHEDULE = '*/5 * * * *';
 
 /** Postgres NOTIFY channel for transient pipeline job-status updates */
 export const PG_NOTIFY_PIPELINE_STATUS = 'pipeline_job_status';
+
+/** Job payload types for pgmq messages */
+export interface FullSyncJobData {
+  pipelineId: string;
+  organizationId: string;
+  userId: string;
+  triggerType: string;
+  batchSize?: number;
+}
+
+export interface IncrementalSyncJobData {
+  pipelineId: string;
+  organizationId: string;
+  userId: string;
+  triggerType: string;
+  checkpoint?: Record<string, unknown>;
+  batchSize?: number;
+}
+
+export interface DeltaCheckJobData {
+  pipelineId: string;
+  organizationId: string;
+}

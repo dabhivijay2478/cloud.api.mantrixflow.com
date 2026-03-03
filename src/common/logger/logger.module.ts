@@ -5,6 +5,7 @@
  * - Replaces the built-in NestJS Logger with Pino (structured JSON)
  * - Pretty-prints in development, raw JSON in production
  * - LOG_LEVEL configurable via .env (default: info)
+ * - LOG_HTTP_REQUESTS: set to 'false' to disable per-request "request completed" logs (default: true)
  * - Exposes ActivityLoggerService for structured activity tracking
  */
 
@@ -21,10 +22,12 @@ import { ActivityLoggerService } from './activity-logger.service';
       useFactory: (config: ConfigService) => {
         const isProduction = config.get<string>('NODE_ENV') === 'production';
         const logLevel = config.get<string>('LOG_LEVEL', 'info');
+        const logHttpRequests = config.get<string>('LOG_HTTP_REQUESTS', 'true') !== 'false';
 
         return {
           pinoHttp: {
             level: logLevel,
+            autoLogging: logHttpRequests,
             // In production emit raw JSON; in dev use pino-pretty for readability
             ...(isProduction
               ? {}

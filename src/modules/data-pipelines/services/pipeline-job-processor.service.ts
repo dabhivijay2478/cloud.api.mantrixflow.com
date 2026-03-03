@@ -165,7 +165,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
       const run = await this.pipelineService.runPipeline(
         pipelineId,
         userId || 'system',
-        triggerType,
+        triggerType as 'manual' | 'scheduled' | 'api' | 'polling',
         { batchSize: batchSize || 500 },
       );
       const completedRun = await this.waitForRunCompletion(run.id);

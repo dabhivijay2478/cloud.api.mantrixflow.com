@@ -1,0 +1,22 @@
+{
+  "sources": [
+    {
+      "id": "source-postgres",
+      "label": "PostgreSQL",
+      "category": "Database",
+      "cdc": true
+    },
+    {
+      "id": "source-mongodb-v2",
+      "label": "MongoDB",
+      "category": "Database",
+      "cdc": false
+    }
+  ],
+  "destinations": [
+    {
+      "id": "postgres",
+      "label": "PostgreSQL"
+    }
+  ]
+}

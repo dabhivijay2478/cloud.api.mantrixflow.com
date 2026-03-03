@@ -47,14 +47,8 @@ export const pipelineSourceSchemas = pgTable('pipeline_source_schemas', {
   /** Primary key columns */
   primaryKeys: jsonb('primary_keys').$type<string[]>(),
 
-  /** Foreign key relationships */
-  foreignKeys: jsonb('foreign_keys').$type<ForeignKey[]>(),
-
   /** Estimated row count */
   estimatedRowCount: jsonb('estimated_row_count').$type<number>(),
-
-  /** Table size in MB */
-  sizeMB: jsonb('size_mb').$type<number>(),
 
   /** Schema validation result */
   validationResult: jsonb('validation_result').$type<SourceSchemaValidationResult>(),
@@ -101,16 +95,6 @@ export interface DiscoveredColumn {
   maxLength?: number;
   isPrimaryKey?: boolean;
   isForeignKey?: boolean;
-}
-
-/**
- * Foreign key relationship
- */
-export interface ForeignKey {
-  column: string;
-  referencedTable: string;
-  referencedColumn: string;
-  referencedSchema?: string;
 }
 
 /**

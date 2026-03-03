@@ -11,7 +11,7 @@ import { firstValueFrom } from 'rxjs';
 import { normalizeEtlBaseUrl } from '../../../common/utils/etl-url';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
-import type { WriteResult, ColumnInfo } from '../types/common.types';
+import type { ColumnInfo } from '../types/common.types';
 import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../database/schemas';
 
 @Injectable()
@@ -43,7 +43,7 @@ export class PythonETLService {
     if (!this.pythonServiceUrl) {
       const hint =
         raw != null && String(raw).trim().length > 0
-          ? ` Value was normalized to an invalid URL (e.g. missing host). Set a valid base URL like http://localhost:8001 in apps/api/.env (from the api directory so .env is loaded).`
+          ? ` Value was normalized to an invalid URL (e.g. missing host). Set a valid base URL like http://localhost:8000 in apps/api/.env (from the api directory so .env is loaded).`
           : ' Set ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL in apps/api/.env and run the API from the api directory so .env is loaded.';
       throw new Error(
         `ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL must be a valid URL with host.${hint}`,
@@ -67,7 +67,7 @@ export class PythonETLService {
   private assertValidRequestUrl(url: string, label: string): void {
     if (!url || typeof url !== 'string') {
       throw new Error(
-        `Python ETL ${label}: request URL is missing. Check ETL_PYTHON_SERVICE_URL (e.g. http://localhost:8001) and run the API from apps/api so .env is loaded.`,
+        `Python ETL ${label}: request URL is missing. Check ETL_PYTHON_SERVICE_URL (e.g. http://localhost:8000) and run the API from apps/api so .env is loaded.`,
       );
     }
     try {
@@ -77,7 +77,7 @@ export class PythonETLService {
       }
     } catch (err: any) {
       throw new Error(
-        `Python ETL ${label}: invalid URL "${url}". ${err?.message ?? ''} Set ETL_PYTHON_SERVICE_URL in apps/api/.env to a valid base URL (e.g. http://localhost:8001).`,
+        `Python ETL ${label}: invalid URL "${url}". ${err?.message ?? ''} Set ETL_PYTHON_SERVICE_URL in apps/api/.env to a valid base URL (e.g. http://localhost:8000).`,
       );
     }
   }
@@ -130,327 +130,187 @@ export class PythonETLService {
   }
 
   /**
-   * Collect data from source
+   * Preview first N rows from source (dlt-based, no transform/emit).
    */
-  async collect(options: {
+  async preview(options: {
     sourceSchema: PipelineSourceSchema;
     connectionConfig: any;
-    organizationId: string;
-    userId: string;
     limit?: number;
-    offset?: number;
-    cursor?: string;
-    syncMode?: 'full' | 'incremental';
-    checkpoint?: any;
   }): Promise<{
-    rows: any[];
-    totalRows?: number;
-    nextCursor?: string;
-    hasMore?: boolean;
-    metadata?: any;
+    records: any[];
+    columns: string[];
+    total: number;
+    stream: string;
   }> {
-    const {
-      sourceSchema,
-      connectionConfig,
-      limit = 500,
-      offset = 0,
-      cursor,
-      syncMode = 'full',
-      checkpoint,
-    } = options;
+    const { sourceSchema, connectionConfig, limit = 50 } = options;
 
-    try {
-      const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
-      const collectUrl = `${this.pythonServiceUrl}/collect/${sourceType}`;
-      this.assertValidRequestUrl(collectUrl, 'collect');
-
-      // Sanitize checkpoint: remove keys that Singer rejects for incremental sync
-      // (e.g. 'xmin' from XMIN replication — invalid for bookmark-based incremental)
-      const sanitizedCheckpoint = this.sanitizeCheckpoint(checkpoint);
-
-      const response = await firstValueFrom(
-        this.httpService.post(
-          collectUrl,
-          {
-            source_type: sourceType,
-            connection_config: connectionConfig,
-            source_config: sourceSchema.sourceConfig || {},
-            table_name: sourceSchema.sourceTable,
-            schema_name: sourceSchema.sourceSchema,
-            query: sourceSchema.sourceQuery,
-            sync_mode: syncMode,
-            checkpoint: sanitizedCheckpoint,
-            limit,
-            offset,
-            cursor: cursor || null,
-          },
-          this.buildRequestConfig(300000), // 5 minutes for collection (was 60s)
-        ),
+    let sourceType: string;
+    if (sourceSchema.sourceType) {
+      sourceType = this.normalizeSourceType(sourceSchema.sourceType);
+    } else {
+      sourceType = this.normalizeSourceType(
+        (await this.getDataSourceType(sourceSchema.dataSourceId!)) || 'postgresql',
       );
-
-      return {
-        rows: response.data.rows || [],
-        totalRows: response.data.total_rows,
-        nextCursor: response.data.next_cursor,
-        hasMore: response.data.has_more || false,
-        metadata: {
-          // Include checkpoint in metadata so pipeline service can access it
-          checkpoint: response.data.checkpoint,
-          ...response.data.metadata,
-        },
-      };
-    } catch (error: any) {
-      const detail = this.extractPythonError(error, 'Collection');
-      this.logger.error(`Collection failed: ${detail}`, error.stack);
-      throw new Error(`Collection failed: ${detail}`);
-    }
-  }
-
-  /**
-   * Delta check for incremental polling.
-   */
-  async deltaCheck(options: {
-    sourceSchema: PipelineSourceSchema;
-    connectionConfig: any;
-    checkpoint?: any;
-  }): Promise<{ hasChanges: boolean; checkpoint?: any }> {
-    const { sourceSchema, connectionConfig, checkpoint } = options;
-    const sourceType = this.normalizeSourceType(sourceSchema.sourceType);
-    const deltaUrl = `${this.pythonServiceUrl}/delta-check/${sourceType}`;
-    this.assertValidRequestUrl(deltaUrl, 'delta-check');
-
-    try {
-      const response = await firstValueFrom(
-        this.httpService.post(
-          deltaUrl,
-          {
-            connection_config: connectionConfig,
-            source_config: sourceSchema.sourceConfig || {},
-            table_name: sourceSchema.sourceTable,
-            schema_name: sourceSchema.sourceSchema,
-            query: sourceSchema.sourceQuery,
-            checkpoint: checkpoint || null,
-          },
-          this.buildRequestConfig(60000),
-        ),
-      );
-
-      return {
-        hasChanges: !!response.data?.has_changes,
-        checkpoint: response.data?.checkpoint,
-      };
-    } catch (error: any) {
-      const detail = this.extractPythonError(error, 'Delta check');
-      this.logger.error(`Delta check failed: ${detail}`, error.stack);
-      throw new Error(`Delta check failed: ${detail}`);
-    }
-  }
-
-  /**
-   * Transform data using dbt (custom SQL or dbt model)
-   */
-  async transformData(options: {
-    rows: any[];
-    transformType?: string;
-    dbtModel?: string;
-    customSql?: string;
-  }): Promise<{ transformedRows: any[]; errors: any[] }> {
-    const hasDbt =
-      (options.transformType || 'dbt').toLowerCase() === 'dbt' &&
-      (options.customSql?.trim() || options.dbtModel?.trim());
-    if (hasDbt) {
-      return this.transformDbt({
-        rows: options.rows,
-        dbtModel: options.dbtModel,
-        customSql: options.customSql,
-      });
-    }
-    return { transformedRows: options.rows, errors: [] };
-  }
-
-  /**
-   * Transform data using dbt model or custom SQL from FE
-   */
-  async transformDbt(options: {
-    rows: any[];
-    dbtModel?: string;
-    customSql?: string;
-  }): Promise<{ transformedRows: any[]; errors: any[] }> {
-    const { rows, dbtModel, customSql } = options;
-    const hasCustomSql = customSql?.trim();
-    const hasDbtModel = dbtModel?.trim();
-
-    if (!hasCustomSql && !hasDbtModel) {
-      this.logger.warn('No dbt model or custom SQL provided, returning rows as-is');
-      return { transformedRows: rows, errors: [] };
     }
 
-    try {
-      const transformUrl = `${this.pythonServiceUrl}/transform/dbt`;
-      this.assertValidRequestUrl(transformUrl, 'transform/dbt');
+    const sourceStream =
+      sourceSchema.sourceSchema && sourceSchema.sourceTable
+        ? `${sourceSchema.sourceSchema}.${sourceSchema.sourceTable}`
+        : sourceSchema.sourceTable || '';
 
-      const payload: Record<string, unknown> = {
-        records: rows,
-        dbt_model: hasDbtModel ? dbtModel : null,
-        custom_sql: hasCustomSql ? customSql : null,
-      };
-
-      const response = await firstValueFrom(
-        this.httpService.post(
-          transformUrl,
-          payload,
-          this.buildRequestConfig(300000),
-        ),
-      );
-
-      if (response.data?.error) {
-        throw new Error(response.data.error);
-      }
-
-      return {
-        transformedRows: response.data.records || [],
-        errors: [],
-      };
-    } catch (error: any) {
-      const detail =
-        error?.response?.data?.error ||
-        error?.response?.data?.detail ||
-        error?.message ||
-        'Unknown dbt transform error';
-      this.logger.error(`dbt transform failed: ${detail}`, error?.stack);
-      throw new Error(`Transformation failed: ${detail}`);
+    if (!sourceStream) {
+      throw new Error('Source table/stream is required for preview');
     }
-  }
 
-  /**
-   * Emit data to destination
-   */
-  async emit(options: {
-    destinationSchema: PipelineDestinationSchema;
-    connectionConfig: any;
-    organizationId: string;
-    userId: string;
-    rows: any[];
-    writeMode: 'append' | 'upsert' | 'replace';
-    upsertKey?: string[];
-  }): Promise<WriteResult> {
-    const { destinationSchema, connectionConfig, rows, writeMode, upsertKey } = options;
-
-    try {
-      // Get destination data source type
-      const destDataSource = await this.getDataSourceType(destinationSchema.dataSourceId!);
-      const destType = this.normalizeSourceType(destDataSource);
-      const emitUrl = `${this.pythonServiceUrl}/emit/${destType}`;
-      this.assertValidRequestUrl(emitUrl, 'emit');
-
-      const response = await firstValueFrom(
-        this.httpService.post(
-          emitUrl,
-          {
-            destination_type: destType,
-            connection_config: connectionConfig,
-            destination_config: {}, // Destination-specific config (not stored in schema)
-            table_name: destinationSchema.destinationTable,
-            schema_name: destinationSchema.destinationSchema || undefined,
-            rows: rows,
-            write_mode: writeMode,
-            upsert_key: upsertKey || [],
-          },
-          this.buildRequestConfig(300000), // 5 minutes for emission (was 60s)
-        ),
-      );
-
-      return {
-        rowsWritten: response.data.rows_written || 0,
-        rowsSkipped: response.data.rows_skipped || 0,
-        rowsFailed: response.data.rows_failed || 0,
-        errors: response.data.errors || [],
-      };
-    } catch (error: any) {
-      const detail = this.extractPythonError(error, 'Emission');
-      this.logger.error(`Emission failed: ${detail}`, error.stack);
-      throw new Error(`Emission failed: ${detail}`);
-    }
-  }
-
-  /**
-   * Run a dynamic Meltano-style pipeline. Connections are fetched from DB and passed by caller.
-   * Supports postgres-to-mongodb and mongodb-to-postgres.
-   */
-  async runMeltanoPipeline(options: {
-    direction: 'postgres-to-mongodb' | 'mongodb-to-postgres';
-    sourceConnectionConfig: any;
-    destConnectionConfig: any;
-    sourceTable?: string;
-    sourceSchema?: string;
-    destTable?: string;
-    destSchema?: string;
-    syncMode?: 'full' | 'incremental';
-    writeMode?: 'append' | 'upsert' | 'replace';
-    upsertKey?: string[];
-    transformScript?: string;
-    checkpoint?: any;
-    limit?: number;
-    replicationKey?: string;
-  }): Promise<{
-    rowsRead: number;
-    rowsWritten: number;
-    rowsSkipped: number;
-    rowsFailed: number;
-    checkpoint: any;
-    errors: any[];
-  }> {
-    const {
-      direction,
-      sourceConnectionConfig,
-      destConnectionConfig,
-      sourceTable,
-      sourceSchema = 'public',
-      destTable,
-      destSchema = 'public',
-      syncMode = 'full',
-      writeMode = 'upsert',
-      upsertKey = [],
-      transformScript,
-      checkpoint,
-      limit,
-      replicationKey,
-    } = options;
-
-    const runUrl = `${this.pythonServiceUrl}/run-meltano-pipeline`;
-    this.assertValidRequestUrl(runUrl, 'run-meltano-pipeline');
+    const previewUrl = `${this.pythonServiceUrl}/preview`;
+    this.assertValidRequestUrl(previewUrl, 'preview');
 
     const response = await firstValueFrom(
       this.httpService.post(
-        runUrl,
+        previewUrl,
         {
-          direction,
-          source_connection_config: sourceConnectionConfig,
-          dest_connection_config: destConnectionConfig,
-          source_table: sourceTable,
-          source_schema: sourceSchema,
-          dest_table: destTable ?? sourceTable,
-          dest_schema: destSchema,
-          sync_mode: syncMode,
-          write_mode: writeMode,
-          upsert_key: upsertKey,
-          transform_script: transformScript ?? null,
-          checkpoint: checkpoint ?? null,
-          limit: limit ?? null,
-          replication_key: replicationKey ?? null,
+          source_type: sourceType,
+          source_config: connectionConfig,
+          source_stream: sourceStream,
+          limit,
         },
-        this.buildRequestConfig(600000), // 10 minutes
+        this.buildRequestConfig(30000),
       ),
     );
 
     return {
-      rowsRead: response.data.rows_read ?? 0,
-      rowsWritten: response.data.rows_written ?? 0,
-      rowsSkipped: response.data.rows_skipped ?? 0,
-      rowsFailed: response.data.rows_failed ?? 0,
-      checkpoint: response.data.checkpoint ?? {},
-      errors: response.data.errors ?? [],
+      records: response.data.records || [],
+      columns: response.data.columns || [],
+      total: response.data.total ?? 0,
+      stream: response.data.stream || sourceStream,
     };
+  }
+
+  /**
+   * Run full sync via dlt — single call to ETL /sync/run-sync.
+   * Replaces collect -> transform -> emit loop.
+   */
+  async runSync(options: {
+    jobId: string;
+    pipelineId: string;
+    organizationId: string;
+    sourceSchema: PipelineSourceSchema;
+    destinationSchema: PipelineDestinationSchema;
+    sourceConnectionConfig: any;
+    destConnectionConfig: any;
+    userId: string;
+    syncMode?: 'full' | 'incremental' | 'cdc';
+    writeMode?: 'append' | 'upsert' | 'replace';
+    upsertKey?: string | string[];
+    cursorField?: string;
+    checkpoint?: any;
+    columnMap?: Array<{ from_col: string; to_col: string }>;
+  }): Promise<{
+    rowsSynced: number;
+    syncMode: string;
+    newCursor?: string;
+    newState?: any;
+    error?: string;
+    userMessage?: string;
+  }> {
+    const {
+      jobId,
+      pipelineId,
+      organizationId,
+      sourceSchema,
+      destinationSchema,
+      sourceConnectionConfig,
+      destConnectionConfig,
+      syncMode = 'full',
+      writeMode = 'append',
+      upsertKey,
+      cursorField,
+      checkpoint,
+      columnMap,
+    } = options;
+
+    const sourceType = this.normalizeSourceType(
+      (await this.getDataSourceType(sourceSchema.dataSourceId!)) || 'postgresql',
+    );
+    const destType = this.normalizeSourceType(
+      (await this.getDataSourceType(destinationSchema.dataSourceId!)) || 'postgresql',
+    );
+
+    const sourceStream =
+      sourceSchema.sourceSchema && sourceSchema.sourceTable
+        ? `${sourceSchema.sourceSchema}.${sourceSchema.sourceTable}`
+        : sourceSchema.sourceTable || '';
+
+    if (!sourceStream) {
+      throw new Error('Source table/stream is required');
+    }
+
+    const syncUrl = `${this.pythonServiceUrl}/sync/run-sync`;
+    this.assertValidRequestUrl(syncUrl, 'sync/run-sync');
+
+    const payload: Record<string, unknown> = {
+      job_id: jobId,
+      pipeline_id: pipelineId,
+      organization_id: organizationId,
+      source_conn_id: sourceSchema.dataSourceId,
+      dest_conn_id: destinationSchema.dataSourceId,
+      source_config: sourceConnectionConfig,
+      dest_config: destConnectionConfig,
+      source_type: sourceType,
+      dest_type: destType,
+      source_stream: sourceStream,
+      dest_table: destinationSchema.destinationTable || sourceSchema.sourceTable,
+      sync_mode: syncMode,
+      write_mode: writeMode,
+      upsert_key: Array.isArray(upsertKey) ? upsertKey[0] : upsertKey,
+      cursor_field: cursorField,
+      column_map: columnMap || [],
+      callback_url: '',
+      callback_token: '',
+      dataset_name: `org_${organizationId}`,
+      dest_schema: destinationSchema.destinationSchema || undefined,
+      destination_table_exists: destinationSchema.destinationTableExists ?? false,
+      custom_sql: destinationSchema.customSql || undefined,
+      transform_type: destinationSchema.transformType || 'dlt',
+    };
+
+    if (checkpoint) {
+      payload.initial_state = {
+        pipeline_id: pipelineId,
+        source_type: sourceType,
+        stream_name: sourceStream,
+        sync_mode: syncMode,
+        cursor_field: cursorField,
+        cursor_value: checkpoint?.cursor_value ?? checkpoint?.cursorValue,
+        state_blob: checkpoint,
+      };
+    }
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post(syncUrl, payload, this.buildRequestConfig(600000)),
+      );
+
+      if (response.data?.error) {
+        return {
+          rowsSynced: 0,
+          syncMode,
+          error: response.data.error,
+          userMessage: response.data.user_message,
+        };
+      }
+
+      return {
+        rowsSynced: response.data.rows_synced ?? 0,
+        syncMode: response.data.sync_mode ?? syncMode,
+        newCursor: response.data.new_cursor,
+        newState: response.data.new_state,
+      };
+    } catch (error: any) {
+      const detail = this.extractPythonError(error, 'Sync');
+      this.logger.error(`Sync failed: ${detail}`, error?.stack);
+      throw new Error(`Sync failed: ${detail}`);
+    }
   }
 
   /**
@@ -504,6 +364,21 @@ export class PythonETLService {
     }
 
     return error?.message || `${operation} failed with unknown error`;
+  }
+
+  /**
+   * Delta check for CDC/incremental polling.
+   * new-etl does not yet expose a delta-check endpoint; returns no changes.
+   * When new-etl adds delta-check (e.g. for pg_replication WAL), wire it here.
+   */
+  async deltaCheck(options: {
+    sourceSchema: PipelineSourceSchema;
+    connectionConfig: any;
+    checkpoint: Record<string, unknown>;
+  }): Promise<{ hasChanges: boolean; checkpoint?: Record<string, unknown> }> {
+    void options.sourceSchema;
+    void options.connectionConfig;
+    return { hasChanges: false, checkpoint: options.checkpoint };
   }
 
   /**

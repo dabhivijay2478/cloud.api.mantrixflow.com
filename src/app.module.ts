@@ -10,7 +10,6 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 import { DataSourceModule } from './modules/data-sources/data-source.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
-import { EtlModule } from './modules/etl/etl.module';
 import { InternalModule } from './modules/internal/internal.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
@@ -38,7 +37,6 @@ import { UserModule } from './modules/users/user.module';
     ConnectorsModule,
     DataSourceModule,
     DataPipelineModule,
-    EtlModule,
     InternalModule,
     OrganizationModule,
     UserModule,

@@ -37,6 +37,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { type ErrorCode, ERROR_CODES } from '../../common/constants';
 import {
   createDeleteResponse,
   createListResponse,
@@ -139,7 +140,14 @@ export class PipelineController {
     name: 'offset',
     required: false,
     type: Number,
-    description: 'Items to skip (default: 0)',
+    description: 'Items to skip (default: 0). Ignored when cursor is provided.',
+  })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    type: String,
+    description:
+      'Cursor for cursor-based pagination (created_at ISO string). Use for large orgs (1M+ pipelines).',
   })
   @ApiResponse({ status: 200, description: 'List of pipelines' })
   async listPipelines(
@@ -147,6 +155,7 @@ export class PipelineController {
     @Request() req: ExpressRequestType,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('cursor') cursor?: string,
   ) {
     try {
       const userId = this.extractUserId(req);
@@ -158,14 +167,26 @@ export class PipelineController {
         userId,
         limitNum,
         offsetNum,
+        cursor,
       );
 
-      return createListResponse(result.data, `Found ${result.total} pipeline(s)`, {
-        total: result.total,
-        limit: limitNum,
-        offset: offsetNum,
-        hasMore: offsetNum + limitNum < result.total,
-      });
+      const meta =
+        'nextCursor' in result
+          ? {
+              total: result.total >= 0 ? result.total : undefined,
+              limit: limitNum,
+              offset: 0,
+              nextCursor: result.nextCursor as string | null,
+              hasMore: !!result.nextCursor,
+            }
+          : {
+              total: result.total,
+              limit: limitNum,
+              offset: offsetNum,
+              hasMore: offsetNum + limitNum < result.total,
+            };
+
+      return createListResponse(result.data, `Found ${result.data.length} pipeline(s)`, meta);
     } catch (error) {
       this.handleError('list pipelines', error);
     }
@@ -866,24 +887,28 @@ export class PipelineController {
   }
 
   /**
-   * Handle errors consistently
+   * Handle errors consistently. Rethrows HttpException for filter to format.
+   * For other errors, throws HttpException with code/message for filter.
    */
   private handleError(operation: string, error: unknown): never {
+    if (error instanceof HttpException) {
+      throw error;
+    }
+
     let message = error instanceof Error ? error.message : String(error);
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+    let code: ErrorCode = ERROR_CODES.INTERNAL_ERROR;
 
-    // Extract more detailed error information if available
     if (error instanceof Error) {
-      // Log full error details including stack trace
       this.logger.error(`Failed to ${operation}: ${message}`, error.stack);
 
-      // Check for common database errors and provide actionable fixes
       if (message.includes('relation') && message.includes('does not exist')) {
         message =
           `Database table does not exist. Please run migrations:\n` +
           `  cd apps/api && bun run db:migrate\n` +
           `Error: ${message}`;
         statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+        code = ERROR_CODES.SERVICE_UNAVAILABLE;
       } else if (message.includes('column') && message.includes('does not exist')) {
         const columnMatch = message.match(/column "([^"]+)" does not exist/);
         const columnName = columnMatch ? columnMatch[1] : 'unknown';
@@ -892,11 +917,9 @@ export class PipelineController {
           `\nTo fix this, run:\n` +
           `  cd apps/api\n` +
           `  bun run db:migrate\n` +
-          `\nThis will apply all pending migrations including:\n` +
-          `  - 0016_pipeline_incremental_sync_fixes.sql (adds pause_timestamp and other columns)\n` +
-          `  - 0017_add_polling_trigger_type.sql (adds polling to trigger_type enum)\n` +
           `\nOriginal error: ${message}`;
         statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+        code = ERROR_CODES.SERVICE_UNAVAILABLE;
       } else if (message.includes('syntax error')) {
         message = `Database query error: ${message}`;
       }
@@ -904,16 +927,6 @@ export class PipelineController {
       this.logger.error(`Failed to ${operation}: ${message}`);
     }
 
-    if (error instanceof HttpException) {
-      throw error;
-    }
-
-    throw new HttpException(
-      {
-        success: false,
-        error: message,
-      },
-      statusCode,
-    );
+    throw new HttpException({ code, message }, statusCode);
   }
 }

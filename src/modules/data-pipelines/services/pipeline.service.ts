@@ -213,18 +213,27 @@ export class PipelineService {
   }
 
   /**
-   * Get pipelines by organization with pagination
+   * Get pipelines by organization with pagination.
+   * Uses cursor-based pagination when cursor is provided (efficient for 1M+ pipelines).
    */
   async findByOrganizationPaginated(
     organizationId: string,
     userId: string | undefined,
     limit: number = 20,
     offset: number = 0,
+    cursor?: string,
   ) {
     if (userId) {
       await this.checkPipelineViewPermission(userId, organizationId);
     }
 
+    if (cursor) {
+      return this.pipelineRepository.findByOrganizationPaginatedCursor(
+        organizationId,
+        limit,
+        cursor,
+      );
+    }
     return this.pipelineRepository.findByOrganizationPaginated(organizationId, limit, offset);
   }
 
@@ -550,16 +559,10 @@ export class PipelineService {
       });
     }
 
-    const batchSize = Math.min(options?.batchSize || DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE);
-    const retryAttempts = options?.retryAttempts || RETRY_ATTEMPTS;
-
     let totalRowsRead = 0;
     let totalRowsWritten = 0;
     let totalRowsSkipped = 0;
     let totalRowsFailed = 0;
-    let batchCount = 0;
-    let estimatedTotalRows: number | undefined;
-    const allErrors: PipelineError[] = [];
 
     try {
       // For full sync, clear checkpoint to start fresh
@@ -583,400 +586,67 @@ export class PipelineService {
         throw new BadRequestException('Source and destination must have data source IDs');
       }
 
-      // Get transform config (dbt only)
-      const transformType = (destinationSchema.transformType as string) || 'dbt';
-      const dbtModel = destinationSchema.dbtModel as string | undefined;
-      const customSql = destinationSchema.customSql as string | undefined;
+      // dlt-based sync: single runSync call (replaces collect -> transform -> emit)
+      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        sourceSchema.dataSourceId!,
+        userId,
+      );
+      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
+        pipeline.organizationId,
+        destinationSchema.dataSourceId!,
+        userId,
+      );
 
-      const hasDbt =
-        transformType === 'dbt' &&
-        (dbtModel?.trim() || customSql?.trim());
-      if (!hasDbt) {
-        throw new BadRequestException(
-          'Transform is required: set customSql or dbtModel when transformType is dbt',
-        );
+      const configuredWriteMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
+      const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
+      const effectiveWriteMode =
+        configuredUpsertKey && configuredUpsertKey.length > 0 ? 'upsert' : configuredWriteMode;
+
+      const syncResult = await this.pythonETLService.runSync({
+        jobId: runId,
+        pipelineId: pipeline.id,
+        organizationId: pipeline.organizationId,
+        sourceSchema,
+        destinationSchema,
+        sourceConnectionConfig,
+        destConnectionConfig,
+        userId,
+        syncMode: syncType as 'full' | 'incremental' | 'cdc',
+        writeMode: effectiveWriteMode,
+        upsertKey: configuredUpsertKey,
+        cursorField: pipeline.incrementalColumn || undefined,
+        checkpoint: checkpoint || undefined,
+        columnMap: this.normalizeColumnMap(pipeline.transformations),
+      });
+
+      totalRowsWritten = syncResult.rowsSynced;
+      totalRowsRead = syncResult.rowsSynced;
+      if (syncResult.error) {
+        throw new Error(syncResult.userMessage || syncResult.error);
+      }
+      if (syncResult.newState) {
+        await this.lifecycleService.saveCheckpoint(pipeline.id, syncResult.newState, userId);
       }
 
-      // Collect data with batching
-      // Python handles all pagination, checkpoint management, and CDC logic
-      let hasMore = true;
-      let offset = isFullSync ? 0 : checkpoint?.offset || 0;
-      let cursor: string | undefined = isFullSync ? undefined : checkpoint?.cursor;
-
-      // Log checkpoint restoration if applicable
-      if (!isFullSync && checkpoint?.rowsProcessed) {
-        this.activity.info(
-          'sync.collect',
-          `Resuming from checkpoint: ${checkpoint.rowsProcessed} rows already processed`,
-          {
-            pipelineId: pipeline.id,
-            runId,
-            metadata: { checkpoint },
-          },
-        );
-      }
-
-      while (hasMore) {
-        batchCount++;
-        const batchStartTime = Date.now();
-
-        // STEP 1: Collect data from source (with retry)
-        let sourceData: { rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean };
-
-        this.activity.debug('sync.collect', `Batch ${batchCount}: Collecting data`, {
+      if (this.pipelineQueueService.isReady()) {
+        await this.pipelineQueueService.publishStatusUpdate({
           pipelineId: pipeline.id,
-          runId,
-          metadata: { batchCount, offset },
+          organizationId: pipeline.organizationId,
+          status: 'running',
+          rowsProcessed: totalRowsWritten,
+          newRowsCount: totalRowsWritten,
+          timestamp: new Date().toISOString(),
         });
-
-        // Get connection config for source
-        const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
-          pipeline.organizationId,
-          sourceSchema.dataSourceId!,
-          userId,
-        );
-
-        for (let attempt = 0; attempt < retryAttempts; attempt++) {
-          try {
-            // Call Python ETL service - Python handles all CDC/incremental logic
-            // Python will determine WAL CDC, checkpoint management, incremental detection, etc.
-            sourceData = await this.pythonETLService.collect({
-              sourceSchema,
-              connectionConfig: sourceConnectionConfig,
-              organizationId: pipeline.organizationId,
-              userId,
-              syncMode: syncType,
-              checkpoint: checkpoint || undefined, // Pass current checkpoint to Python
-              limit: batchSize,
-              offset,
-              cursor,
-            });
-
-            // Python returns updated checkpoint in metadata - use it for next batch and save it
-            const resultMetadata = (sourceData as any).metadata;
-            if (resultMetadata?.checkpoint) {
-              // Merge Python checkpoint with current progress tracking
-              checkpoint = {
-                ...(resultMetadata.checkpoint as PipelineCheckpoint),
-                rowsProcessed: totalRowsWritten, // Keep track of actual rows written so far
-                totalRows: sourceData.totalRows || estimatedTotalRows, // Use Python's total_rows if available
-              };
-              // Save checkpoint immediately so it persists for next run (CDC support)
-              await this.lifecycleService.saveCheckpoint(pipeline.id, checkpoint, userId);
-              this.logger.debug(`Checkpoint saved: ${JSON.stringify(checkpoint).slice(0, 200)}...`);
-            }
-            break;
-          } catch (error) {
-            if (attempt === retryAttempts - 1) {
-              throw error;
-            }
-            this.activity.warn(
-              'sync.retry',
-              `Collect attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms`,
-              {
-                pipelineId: pipeline.id,
-                runId,
-                metadata: { attempt: attempt + 1, phase: 'collect' },
-              },
-            );
-            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
-          }
-        }
-
-        if (!sourceData! || sourceData!.rows.length === 0) {
-          this.activity.info('sync.collect', 'No more data to process', {
-            pipelineId: pipeline.id,
-            runId,
-          });
-          break;
-        }
-
-        // Update estimated total if available
-        // Python returns total_rows which is the actual total in source
-        if (
-          sourceData.totalRows &&
-          (!estimatedTotalRows || estimatedTotalRows !== sourceData.totalRows)
-        ) {
-          estimatedTotalRows = sourceData.totalRows;
-        }
-
-        // Also check checkpoint for total_records from Python bookmarks (more authoritative)
-        const resultMetadataForTotal = (sourceData as any).metadata;
-        if (resultMetadataForTotal?.checkpoint) {
-          const pythonCheckpoint = resultMetadataForTotal.checkpoint as any;
-          if (pythonCheckpoint?.bookmarks) {
-            const bookmarks = pythonCheckpoint.bookmarks;
-            const streamId = Object.keys(bookmarks)[0];
-            if (streamId && bookmarks[streamId]?.total_records) {
-              const pythonTotalRecords = bookmarks[streamId].total_records;
-              if (
-                pythonTotalRecords &&
-                (!estimatedTotalRows || estimatedTotalRows !== pythonTotalRecords)
-              ) {
-                estimatedTotalRows = pythonTotalRecords;
-              }
-            }
-          }
-        }
-
-        totalRowsRead += sourceData.rows.length;
-
-        // Calculate progress
-        const percentage = estimatedTotalRows
-          ? Math.min(100, Math.round((totalRowsRead / estimatedTotalRows) * 100))
-          : undefined;
-
-        this.activity.info('sync.collect', `Collected ${sourceData.rows.length} rows`, {
-          pipelineId: pipeline.id,
-          runId,
-          metadata: {
-            batchCount,
-            rowsThisBatch: sourceData.rows.length,
-            totalRowsRead,
-            estimatedTotalRows,
-            percentage,
-          },
-        });
-
-        // Primary keys are determined from destination schema upsertKey if available
-        const primaryKeys = (destinationSchema.upsertKey as string[]) || [];
-
-        // ROOT FIX: Determine write mode for CDC-friendly data preservation
-        // Priority:
-        // 1. If explicit upsertKey configured in destination, use UPSERT
-        // 2. If primary keys mapped, use UPSERT (prevents duplicates on re-runs)
-        // 3. Use destination schema writeMode (append/upsert/replace)
-        // 4. Default to APPEND (never truncate by default)
-        const configuredWriteMode = destinationSchema.writeMode as
-          | 'append'
-          | 'upsert'
-          | 'replace'
-          | undefined;
-        const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
-
-        let effectiveWriteMode: 'append' | 'upsert' | 'replace' = 'append';
-        let effectiveUpsertKey: string[] | undefined = configuredUpsertKey;
-
-        // CDC FIX: Always prefer UPSERT when we have keys to prevent duplicates
-        if (configuredUpsertKey && configuredUpsertKey.length > 0) {
-          // Explicit upsert key configured - use UPSERT
-          effectiveWriteMode = 'upsert';
-          this.logger.log(
-            `Using UPSERT mode with configured key: ${configuredUpsertKey.join(', ')}`,
-          );
-        } else if (primaryKeys.length > 0) {
-          // Primary keys from column mappings - use UPSERT for data integrity
-          effectiveWriteMode = 'upsert';
-          effectiveUpsertKey = primaryKeys;
-          this.logger.log(`Using UPSERT mode with primary keys: ${primaryKeys.join(', ')}`);
-        } else if (configuredWriteMode) {
-          // Use configured write mode (only REPLACE if explicitly set by user)
-          effectiveWriteMode = configuredWriteMode;
-          // WARN: replace mode truncates table - should only be explicit choice
-          if (configuredWriteMode === 'replace' && batchCount > 1) {
-            // Don't truncate on subsequent batches
-            effectiveWriteMode = 'append';
-          }
-        }
-        // else: default remains 'append' - safest default for data preservation
-
-        this.activity.debug(
-          'sync.emit',
-          `Writing ${sourceData.rows.length} rows (mode: ${effectiveWriteMode})`,
-          {
-            pipelineId: pipeline.id,
-            runId,
-            metadata: { writeMode: effectiveWriteMode, rowCount: sourceData.rows.length },
-          },
-        );
-
-        // STEP 2: Emit data to destination (with internal transformation)
-        // Get connection config for destination
-        const destConnectionConfig = await this.connectionService.getDecryptedConnection(
-          pipeline.organizationId,
-          destinationSchema.dataSourceId!,
-          userId,
-        );
-
-        for (let attempt = 0; attempt < retryAttempts; attempt++) {
-          try {
-            // Transform data (dbt only)
-            const transformResult = await this.pythonETLService.transformData({
-              rows: sourceData.rows,
-              transformType,
-              dbtModel,
-              customSql,
-            });
-
-            const writeResult = await this.pythonETLService.emit({
-              destinationSchema,
-              connectionConfig: destConnectionConfig,
-              organizationId: pipeline.organizationId,
-              userId,
-              rows: transformResult.transformedRows,
-              writeMode: effectiveWriteMode,
-              upsertKey: effectiveUpsertKey,
-            });
-
-            totalRowsWritten += writeResult.rowsWritten;
-            totalRowsSkipped += writeResult.rowsSkipped;
-            totalRowsFailed += writeResult.rowsFailed;
-
-            const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
-            const rate = (
-              writeResult.rowsWritten / Math.max(parseFloat(batchDuration), 0.1)
-            ).toFixed(0);
-
-            this.activity.info(
-              'sync.progress',
-              `Batch ${batchCount} written: ${writeResult.rowsWritten} rows (${rate} rows/sec)`,
-              {
-                pipelineId: pipeline.id,
-                runId,
-                metadata: {
-                  batchCount,
-                  batchDurationSec: parseFloat(batchDuration),
-                  rowsPerSec: parseInt(rate, 10),
-                  written: writeResult.rowsWritten,
-                  skipped: writeResult.rowsSkipped,
-                  failed: writeResult.rowsFailed,
-                  totalWritten: totalRowsWritten,
-                },
-              },
-            );
-
-            // ROOT FIX: Publish real-time progress update via Socket.io
-            if (this.pipelineQueueService.isReady()) {
-              await this.pipelineQueueService.publishStatusUpdate({
-                pipelineId: pipeline.id,
-                organizationId: pipeline.organizationId,
-                status: 'running',
-                rowsProcessed: totalRowsWritten,
-                newRowsCount: writeResult.rowsWritten,
-                timestamp: new Date().toISOString(),
-              });
-            }
-
-            if (writeResult.errors && writeResult.errors.length > 0) {
-              this.activity.warn(
-                'sync.emit',
-                `${writeResult.errors.length} errors in batch ${batchCount}`,
-                {
-                  pipelineId: pipeline.id,
-                  runId,
-                  metadata: { errorCount: writeResult.errors.length },
-                },
-              );
-              allErrors.push(...writeResult.errors);
-            }
-            break;
-          } catch (error) {
-            if (attempt === retryAttempts - 1) {
-              throw error;
-            }
-            this.activity.warn(
-              'sync.retry',
-              `Emit attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms`,
-              {
-                pipelineId: pipeline.id,
-                runId,
-                metadata: { attempt: attempt + 1, phase: 'emit' },
-              },
-            );
-            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
-          }
-        }
-
-        // Update pagination
-        // ROOT FIX: Correct pagination logic - ensure all records are processed
-        // hasMore = true if collector says there's more OR we got a full batch (might be more)
-        // hasMore = false if we got partial batch (< batchSize) AND collector says no more
-        hasMore = sourceData.hasMore === true || sourceData.rows.length === batchSize;
-        offset += sourceData.rows.length; // Use actual rows collected, not batchSize
-        cursor = sourceData.nextCursor;
-
-        // Safety check: If we got fewer rows than batchSize, we've likely reached the end
-        // But trust the collector's hasMore flag if it's explicitly set
-        if (sourceData.rows.length < batchSize && sourceData.hasMore !== true) {
-          hasMore = false;
-          this.activity.debug(
-            'sync.collect',
-            `End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`,
-            {
-              pipelineId: pipeline.id,
-              runId,
-            },
-          );
-        }
-
-        // Python returns updated checkpoint in metadata - save it
-        const resultMetadata = (sourceData as any).metadata;
-        if (resultMetadata?.checkpoint) {
-          // Extract total_records from Python checkpoint bookmarks if available
-          const pythonCheckpoint = resultMetadata.checkpoint as any;
-          let pythonTotalRecords = sourceData.totalRows || estimatedTotalRows;
-          if (pythonCheckpoint?.bookmarks) {
-            const bookmarks = pythonCheckpoint.bookmarks;
-            const streamId = Object.keys(bookmarks)[0]; // Get first stream
-            if (streamId && bookmarks[streamId]?.total_records) {
-              pythonTotalRecords = bookmarks[streamId].total_records;
-            }
-          }
-
-          // Use checkpoint returned from Python (Python handles all CDC/checkpoint logic)
-          // Merge with current progress to ensure rowsProcessed is accurate
-          const updatedCheckpoint: PipelineCheckpoint = {
-            ...(resultMetadata.checkpoint as PipelineCheckpoint),
-            rowsProcessed: totalRowsWritten, // Always use actual rows written, not Python's value
-            totalRows: pythonTotalRecords, // Use Python's total_records from bookmarks as authoritative source
-            lastSyncAt: new Date().toISOString(),
-            offset,
-            cursor,
-            currentBatch: batchCount,
-          };
-          await this.lifecycleService.saveCheckpoint(pipeline.id, updatedCheckpoint, userId);
-          checkpoint = updatedCheckpoint;
-        } else {
-          // Fallback: update basic checkpoint info if Python didn't return one
-          const currentCheckpoint: PipelineCheckpoint = {
-            ...(checkpoint || {}),
-            lastSyncAt: new Date().toISOString(),
-            offset,
-            cursor,
-            rowsProcessed: totalRowsWritten,
-            totalRows: estimatedTotalRows,
-            currentBatch: batchCount,
-          };
-          await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
-          checkpoint = currentCheckpoint;
-        }
-
-        // Update progress in database
-        await this.pipelineRepository.updateRun(runId, {
-          rowsRead: totalRowsRead,
-          rowsWritten: totalRowsWritten,
-          rowsSkipped: totalRowsSkipped,
-          rowsFailed: totalRowsFailed,
-        });
-
-        // Log to activity every 5 batches or 5000 rows
-        if (batchCount % 5 === 0 || totalRowsWritten % 5000 < batchSize) {
-          await this.activityLogService.logPipelineRunAction(
-            pipeline.organizationId,
-            userId,
-            PIPELINE_ACTIONS.BATCH_COMPLETED,
-            runId,
-            pipeline.id,
-            pipeline.name,
-            {
-              batchNumber: batchCount,
-              rowsProcessed: totalRowsWritten,
-              totalRows: estimatedTotalRows,
-              percentage,
-            },
-          );
-        }
       }
+
+      // Update progress in database
+      await this.pipelineRepository.updateRun(runId, {
+        rowsRead: totalRowsRead,
+        rowsWritten: totalRowsWritten,
+        rowsSkipped: totalRowsSkipped,
+        rowsFailed: totalRowsFailed,
+      });
 
       // Update run with final results
       const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
@@ -997,7 +667,9 @@ export class PipelineService {
       // ROOT FIX: For incremental/CDC pipelines, set status to 'listing' so CDC polling picks them up
       // every 5 min (regardless of schedule). For full-only pipelines, use 'idle'.
       const targetStatus =
-        pipeline.syncMode === 'incremental' ? PipelineStatus.LISTING : PipelineStatus.IDLE;
+        pipeline.syncMode === 'incremental' || pipeline.syncMode === 'cdc'
+          ? PipelineStatus.LISTING
+          : PipelineStatus.IDLE;
 
       // Update totalRowsProcessed - cumulative across all runs
       const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;
@@ -1010,7 +682,7 @@ export class PipelineService {
 
       if (scheduleType !== 'none') {
         nextScheduledRunAt = this.calculateNextScheduledRun(scheduleType, scheduleValue);
-      } else if (pipeline.syncMode === 'incremental') {
+      } else if (pipeline.syncMode === 'incremental' || pipeline.syncMode === 'cdc') {
         // Default 2-minute polling for incremental/CDC mode
         nextScheduledRunAt = new Date(Date.now() + 2 * 60 * 1000);
       }
@@ -1296,17 +968,7 @@ export class PipelineService {
       errors.push('Destination schema must have a destination table');
     }
 
-    // Validate transform (dbt only)
-    const transformType = (destinationSchema.transformType as string) || 'dbt';
-    const hasDbt =
-      transformType === 'dbt' &&
-      (destinationSchema.dbtModel?.trim() ||
-        (destinationSchema.customSql as string)?.trim());
-    if (!hasDbt) {
-      errors.push(
-        'Transform is required: set customSql or dbtModel when transformType is dbt',
-      );
-    }
+    // dlt handles transform via schema hints — no customSql/dbt required
 
     // Python handles incremental sync validation - no need to validate here
 
@@ -1326,7 +988,7 @@ export class PipelineService {
   }
 
   /**
-   * Dry run pipeline (test without writing)
+   * Dry run pipeline (preview source data without writing — dlt-based)
    */
   async dryRunPipeline(
     pipelineId: string,
@@ -1338,60 +1000,33 @@ export class PipelineService {
       throw new NotFoundException(`Pipeline ${pipelineId} not found`);
     }
 
-    const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
+    const { pipeline, sourceSchema } = pipelineWithSchemas;
 
     await this.checkPipelineViewPermission(userId, pipeline.organizationId);
 
-    // Get connection configs
     const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
       pipeline.organizationId,
       sourceSchema.dataSourceId!,
       userId,
     );
 
-    // Collect sample data
-    const sourceData = await this.pythonETLService.collect({
+    const preview = await this.pythonETLService.preview({
       sourceSchema,
       connectionConfig: sourceConnectionConfig,
-      organizationId: pipeline.organizationId,
-      userId,
       limit: sampleSize,
     });
 
-    // Transform sample data (dbt only)
-    const transformType = (destinationSchema.transformType as string) || 'dbt';
-    const dbtModel = destinationSchema.dbtModel as string | undefined;
-    const customSql = destinationSchema.customSql as string | undefined;
-    const hasDbt =
-      transformType === 'dbt' &&
-      (dbtModel?.trim() || customSql?.trim());
-
-    if (!hasDbt) {
-      throw new BadRequestException(
-        'Transform is required: set customSql or dbtModel when transformType is dbt',
-      );
-    }
-
-    const transformResult = await this.pythonETLService.transformData({
-      rows: sourceData.rows,
-      transformType,
-      dbtModel,
-      customSql,
-    });
-    const transformedSample = transformResult.transformedRows;
-
-    // Log sample transformed data
-    if (transformedSample.length > 0) {
+    if (preview.records.length > 0) {
       this.logger.log(
-        `Dry run sample transformed data: ${JSON.stringify(transformedSample[0], null, 2)}`,
+        `Dry run preview sample: ${JSON.stringify(preview.records[0], null, 2)}`,
       );
     }
 
     return {
-      wouldWrite: transformedSample.length,
-      sourceRowCount: sourceData.totalRows,
-      sampleRows: sourceData.rows,
-      transformedSample,
+      wouldWrite: preview.total,
+      sourceRowCount: preview.total,
+      sampleRows: preview.records,
+      transformedSample: preview.records,
       errors: [],
       appliedMappings: [],
     };
@@ -1570,7 +1205,7 @@ export class PipelineService {
   }
 
   /**
-   * Execute bidirectional pipeline asynchronously
+   * Execute bidirectional pipeline asynchronously (dlt runSync)
    */
   private async executeBidirectionalAsync(
     runId: string,
@@ -1586,126 +1221,54 @@ export class PipelineService {
     },
   ): Promise<void> {
     const startTime = Date.now();
-    const batchSize = options?.batchSize || 1000;
-    let totalRowsRead = 0;
     let totalRowsWritten = 0;
 
     try {
-      // Update run to running
       await this.pipelineRepository.updateRun(runId, {
         status: 'running',
         jobState: 'running',
       });
 
-      // Get transform config (dbt only)
-      const transformType = (destinationSchema.transformType as string) || 'dbt';
-      const dbtModel = destinationSchema.dbtModel as string | undefined;
-      const customSql = destinationSchema.customSql as string | undefined;
-      const hasDbt =
-        transformType === 'dbt' &&
-        (dbtModel?.trim() || customSql?.trim());
-
-      if (!hasDbt) {
-        throw new BadRequestException(
-          'Transform is required: set customSql or dbtModel when transformType is dbt',
-        );
-      }
-
-      // Get connection configs
       const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
         pipeline.organizationId,
         sourceSchema.dataSourceId!,
         userId,
       );
-
-      // Collect all data (for simplicity, batching can be added later)
-      this.activity.info('sync.collect', `Collecting data from ${sourceSchemaInfo.sourceType}`, {
-        pipelineId: pipeline.id,
-        runId,
-      });
-
-      const sourceData = await this.pythonETLService.collect({
-        sourceSchema,
-        connectionConfig: sourceConnectionConfig,
-        organizationId: pipeline.organizationId,
-        userId,
-        limit: batchSize * 10, // Collect more for batch processing
-        offset: 0,
-      });
-
-      if (!sourceData || sourceData.rows.length === 0) {
-        this.activity.info('sync.collect', 'No data to transform', {
-          pipelineId: pipeline.id,
-          runId,
-        });
-        await this.pipelineRepository.updateRun(runId, {
-          status: 'success',
-          jobState: 'completed',
-          rowsRead: 0,
-          rowsWritten: 0,
-          completedAt: new Date(),
-          durationSeconds: Math.floor((Date.now() - startTime) / 1000),
-        });
-        return;
-      }
-
-      totalRowsRead = sourceData.rows.length;
-      this.activity.info('sync.collect', `Collected ${totalRowsRead} rows`, {
-        pipelineId: pipeline.id,
-        runId,
-      });
-
-      // Transform using Python service
-      this.activity.info(
-        'sync.transform',
-        `Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`,
-        {
-          pipelineId: pipeline.id,
-          runId,
-        },
-      );
-
-      const transformResult = await this.pythonETLService.transformData({
-        rows: sourceData.rows,
-        transformType,
-        dbtModel,
-        customSql,
-      });
-
-      // Group by entity if needed (simplified - assumes single entity for now)
-      const transformedData: Record<string, any[]> = {
-        default: transformResult.transformedRows,
-      };
-
-      // Emit to destination
-      this.activity.info('sync.emit', `Writing to ${destSchemaInfo.sourceType}`, {
-        pipelineId: pipeline.id,
-        runId,
-      });
-
       const destConnectionConfig = await this.connectionService.getDecryptedConnection(
         pipeline.organizationId,
         destinationSchema.dataSourceId!,
         userId,
       );
 
-      const writeResults: Record<string, WriteResult> = {};
-      for (const [entity, rows] of Object.entries(transformedData)) {
-        const result = await this.pythonETLService.emit({
-          destinationSchema,
-          connectionConfig: destConnectionConfig,
-          organizationId: pipeline.organizationId,
-          userId,
-          rows,
-          writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
-          upsertKey: options?.upsertKeys?.[entity],
-        });
-        writeResults[entity] = result;
-      }
+      const configuredWriteMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
+      const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || options?.upsertKeys?.default;
+      const effectiveWriteMode =
+        configuredUpsertKey && configuredUpsertKey.length > 0 ? 'upsert' : configuredWriteMode;
 
-      // Calculate totals
-      for (const [_entity, result] of Object.entries(writeResults)) {
-        totalRowsWritten += result.rowsWritten;
+      this.activity.info('sync.collect', `Syncing from ${sourceSchemaInfo.sourceType} → ${destSchemaInfo.sourceType}`, {
+        pipelineId: pipeline.id,
+        runId,
+      });
+
+      const syncResult = await this.pythonETLService.runSync({
+        jobId: runId,
+        pipelineId: pipeline.id,
+        organizationId: pipeline.organizationId,
+        sourceSchema,
+        destinationSchema,
+        sourceConnectionConfig,
+        destConnectionConfig,
+        userId,
+        syncMode: 'full',
+        writeMode: effectiveWriteMode,
+        upsertKey: configuredUpsertKey,
+        cursorField: pipeline.incrementalColumn || undefined,
+        columnMap: this.normalizeColumnMap(pipeline.transformations),
+      });
+
+      totalRowsWritten = syncResult.rowsSynced;
+      if (syncResult.error) {
+        throw new Error(syncResult.userMessage || syncResult.error);
       }
 
       const duration = Date.now() - startTime;
@@ -1716,7 +1279,7 @@ export class PipelineService {
           pipelineId: pipeline.id,
           runId,
           organizationId: pipeline.organizationId,
-          metadata: { totalRowsRead, totalRowsWritten, durationMs: duration },
+          metadata: { totalRowsWritten, durationMs: duration },
         },
       );
 
@@ -1724,7 +1287,7 @@ export class PipelineService {
       await this.pipelineRepository.updateRun(runId, {
         status: 'success',
         jobState: 'completed',
-        rowsRead: totalRowsRead,
+        rowsRead: totalRowsWritten,
         rowsWritten: totalRowsWritten,
         completedAt: new Date(),
         durationSeconds: Math.floor(duration / 1000),
@@ -1743,14 +1306,14 @@ export class PipelineService {
         pipelineId: pipeline.id,
         runId,
         organizationId: pipeline.organizationId,
-        metadata: { errorMessage, totalRowsRead, totalRowsWritten, durationMs: duration },
+        metadata: { errorMessage, totalRowsWritten, durationMs: duration },
       });
 
       // Update run as failed
       await this.pipelineRepository.updateRun(runId, {
         status: 'failed',
         jobState: 'failed',
-        rowsRead: totalRowsRead,
+        rowsRead: totalRowsWritten,
         rowsWritten: totalRowsWritten,
         completedAt: new Date(),
         durationSeconds: Math.floor(duration / 1000),
@@ -1835,5 +1398,23 @@ export class PipelineService {
         // Default to 2 minutes for CDC/incremental
         return new Date(now.getTime() + 2 * 60 * 1000);
     }
+  }
+
+  /**
+   * Normalize transformations to dlt column_map format [{ from_col, to_col }]
+   */
+  private normalizeColumnMap(
+    transformations: unknown,
+  ): Array<{ from_col: string; to_col: string }> | undefined {
+    if (!transformations || !Array.isArray(transformations)) return undefined;
+    const mapped = transformations
+      .map((t: any) => {
+        if (t?.from_col && t?.to_col) return { from_col: t.from_col, to_col: t.to_col };
+        if (t?.sourceColumn && t?.destinationColumn)
+          return { from_col: t.sourceColumn, to_col: t.destinationColumn };
+        return null;
+      })
+      .filter((x): x is { from_col: string; to_col: string } => x !== null);
+    return mapped.length > 0 ? mapped : undefined;
   }
 }

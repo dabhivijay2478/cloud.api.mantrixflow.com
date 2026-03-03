@@ -51,7 +51,7 @@ import {
 } from '../../common/dto/api-response.dto';
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import { EtlService } from '../etl/etl.service';
+import { ConnectorMetadataService } from '../connectors/connector-metadata.service';
 import { DataSourceService, type CreateDataSourceDto } from './data-source.service';
 import { ConnectionService, type CreateConnectionDto } from './connection.service';
 
@@ -74,7 +74,7 @@ export class DataSourceController {
   constructor(
     private readonly dataSourceService: DataSourceService,
     private readonly connectionService: ConnectionService,
-    private readonly etlService: EtlService,
+    private readonly connectorMetadataService: ConnectorMetadataService,
   ) {}
 
   /**
@@ -189,7 +189,7 @@ export class DataSourceController {
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiResponse({ status: 200, description: 'Connectors retrieved successfully' })
   async listConnectors(@Param('organizationId', ParseUUIDPipe) _organizationId: string) {
-    const data = await this.etlService.listConnectors();
+    const data = await this.connectorMetadataService.listConnectors();
     return createSuccessResponse(data);
   }
 
@@ -210,30 +210,36 @@ export class DataSourceController {
   }
 
   /**
-   * Get data source by ID
+   * Test connection config (pre-save, ad-hoc)
+   * Uses NestJS in-memory connection test - no Python ETL required
    */
-  @Get(':id')
+  @Post('test-connection')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Get data source',
-    description: 'Get data source details by ID',
+    summary: 'Test connection config',
+    description: 'Test connection configuration before saving (PostgreSQL, MongoDB, etc.)',
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Data source retrieved successfully' })
-  async getDataSource(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req: ExpressRequestType,
+  @ApiResponse({ status: 200, description: 'Connection test result' })
+  async testConnection(
+    @Param('organizationId', ParseUUIDPipe) _organizationId: string,
+    @Body() body: { connectionType?: string; connection_type?: string; config?: Record<string, unknown> },
   ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
+    const connectionType = (body.connectionType ?? body.connection_type) as string;
+    const config = body.config as Record<string, unknown>;
+    if (!connectionType || typeof connectionType !== 'string') {
+      throw new BadRequestException('connectionType (or connection_type) is required');
     }
-
-    const dataSource = await this.dataSourceService.getDataSourceById(organizationId, id, userId);
-
-    return createSuccessResponse(dataSource);
+    if (!config || typeof config !== 'object') {
+      throw new BadRequestException('config is required');
+    }
+    const normalizedType = connectionType.toLowerCase();
+    const effectiveType = normalizedType === 'postgresql' ? 'postgres' : normalizedType;
+    const result = await this.connectionService.testConnectionConfig(
+      effectiveType,
+      config as Record<string, any>,
+    );
+    return createSuccessResponse(result);
   }
 
   /**
@@ -325,6 +331,57 @@ export class DataSourceController {
   }
 
   /**
+   * Discover full schema (columns, primary_keys, streams) from data source
+   * Used by Add Collector / pipeline flow. Proxies to ETL discover-schema.
+   */
+  @Post(':sourceId/discover-schema')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Discover schema',
+    description: 'Discover tables, columns, primary keys from data source (full response)',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Schema discovered successfully' })
+  async discoverSchema(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const dataSource = await this.dataSourceService.getDataSourceById(
+      organizationId,
+      sourceId,
+      userId,
+    );
+    const sourceConfig = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      sourceId,
+      userId,
+    );
+
+    const sourceType = toEtlSourceType(dataSource.sourceType);
+    const schemaName = (body.schema_name ?? body.schemaName ?? 'public') as string;
+    const tableName = (body.table_name ?? body.tableName) as string | undefined;
+    const query = body.query as string | undefined;
+
+    const result = await this.connectorMetadataService.discoverFull({
+      source_type: sourceType,
+      source_config: sourceConfig,
+      schema_name: schemaName,
+      table_name: tableName,
+      query,
+    });
+
+    return createSuccessResponse(result);
+  }
+
+  /**
    * Preview data from data source using ETL (Airbyte)
    * Discovers streams and returns sample rows for the selected stream
    */
@@ -365,10 +422,10 @@ export class DataSourceController {
 
     let streamToPreview = sourceStream;
     if (!streamToPreview) {
-      const discoverResult = (await this.etlService.discover({
+      const discoverResult = await this.connectorMetadataService.discover({
         source_type: sourceType,
         source_config: sourceConfig,
-      })) as { streams?: Array<{ name: string }> };
+      });
       const streams = discoverResult?.streams ?? [];
       streamToPreview = streams[0]?.name;
       if (!streamToPreview) {
@@ -376,12 +433,12 @@ export class DataSourceController {
       }
     }
 
-    const previewResult = (await this.etlService.preview({
+    const previewResult = await this.connectorMetadataService.preview({
       source_type: sourceType,
       source_config: sourceConfig,
       source_stream: streamToPreview,
       limit,
-    })) as { records?: unknown[]; columns?: unknown[]; total?: number; stream?: string; warning?: string };
+    });
 
     return createSuccessResponse({
       stream: previewResult.stream ?? streamToPreview,
@@ -426,42 +483,14 @@ export class DataSourceController {
     );
     const sourceType = toEtlSourceType(dataSource.sourceType);
 
-    const discoverResult = (await this.etlService.discover({
+    const discoverResult = await this.connectorMetadataService.discover({
       source_type: sourceType,
       source_config: sourceConfig,
-    })) as { streams?: Array<{ name: string; columns?: string[] }> };
+    });
 
     return createSuccessResponse({
       streams: discoverResult.streams ?? [],
     });
-  }
-
-  /**
-   * Delete data source (soft delete)
-   * NestJS handles data source deletion
-   */
-  @Delete(':id')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Delete data source',
-    description: 'Soft delete a data source (NestJS handles deletion)',
-  })
-  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
-  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
-  @ApiResponse({ status: 200, description: 'Data source deleted successfully' })
-  async deleteDataSource(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req: ExpressRequestType,
-  ) {
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new Error('User not authenticated');
-    }
-
-    await this.dataSourceService.deleteDataSource(organizationId, id, userId);
-
-    return createDeleteResponse(id, 'Data source deleted successfully');
   }
 
   /**
@@ -490,5 +519,62 @@ export class DataSourceController {
     await this.connectionService.deleteConnection(organizationId, sourceId, userId);
 
     return createSuccessResponse({ deletedId: sourceId }, 'Connection deleted successfully');
+  }
+
+  /**
+   * Get data source by ID
+   * IMPORTANT: This must come AFTER :sourceId/* routes to avoid route conflicts.
+   */
+  @Get(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Get data source',
+    description: 'Get data source details by ID',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Data source retrieved successfully' })
+  async getDataSource(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const dataSource = await this.dataSourceService.getDataSourceById(organizationId, id, userId);
+
+    return createSuccessResponse(dataSource);
+  }
+
+  /**
+   * Delete data source (soft delete)
+   * NestJS handles data source deletion
+   * IMPORTANT: This must come AFTER :sourceId/* routes to avoid route conflicts.
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete data source',
+    description: 'Soft delete a data source (NestJS handles deletion)',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'id', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Data source deleted successfully' })
+  async deleteDataSource(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    await this.dataSourceService.deleteDataSource(organizationId, id, userId);
+
+    return createDeleteResponse(id, 'Data source deleted successfully');
   }
 }

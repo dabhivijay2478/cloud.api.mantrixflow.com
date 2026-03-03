@@ -146,9 +146,9 @@ export class ApiListResponse<T = unknown> {
     additionalProperties: true,
   })
   pagination?: {
-    total: number;
+    total?: number;
     limit: number;
-    offset: number;
+    offset?: number;
     hasMore: boolean;
     nextCursor?: string | null; // Cursor for next page (cursor-based pagination)
   };
@@ -158,9 +158,9 @@ export class ApiListResponse<T = unknown> {
     message: string = 'Items retrieved successfully',
     statusCode: number = 200,
     pagination?: {
-      total: number;
+      total?: number;
       limit: number;
-      offset: number;
+      offset?: number;
       hasMore: boolean;
       nextCursor?: string | null;
     },
@@ -228,9 +228,9 @@ export function createListResponse<T>(
   data: T[],
   message?: string,
   pagination?: {
-    total: number;
+    total?: number;
     limit: number;
-    offset: number;
+    offset?: number;
     hasMore: boolean;
     nextCursor?: string | null;
   },

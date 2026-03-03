@@ -12,6 +12,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   ne,
   or,
@@ -220,6 +221,65 @@ export class PipelineRepository {
         destinationSchema: row.destinationSchema,
       })),
       total: Number(countResult[0]?.count || 0),
+    };
+  }
+
+  /**
+   * Find pipelines by organization with cursor-based pagination.
+   * Efficient for large datasets (1M+ pipelines) — avoids offset degradation.
+   * Cursor is created_at (ISO string) of the last item from previous page.
+   */
+  async findByOrganizationPaginatedCursor(
+    organizationId: string,
+    limit: number = 20,
+    cursor?: string,
+  ): Promise<
+    PaginatedResult<
+      Pipeline & {
+        sourceSchema?: PipelineSourceSchema | null;
+        destinationSchema?: PipelineDestinationSchema | null;
+      }
+    > & { nextCursor: string | null }
+  > {
+    const conditions = [
+      eq(pipelines.organizationId, organizationId),
+      isNull(pipelines.deletedAt),
+    ];
+    if (cursor) {
+      conditions.push(lt(pipelines.createdAt, new Date(cursor)));
+    }
+
+    const rows = await this.db
+      .select({
+        pipeline: pipelines,
+        sourceSchema: pipelineSourceSchemas,
+        destinationSchema: pipelineDestinationSchemas,
+      })
+      .from(pipelines)
+      .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+      .leftJoin(
+        pipelineDestinationSchemas,
+        eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+      )
+      .where(and(...conditions))
+      .orderBy(desc(pipelines.createdAt))
+      .limit(limit + 1);
+
+    const hasMore = rows.length > limit;
+    const dataRows = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor =
+      hasMore && dataRows.length > 0
+        ? (dataRows[dataRows.length - 1]?.pipeline.createdAt as Date)?.toISOString() ?? null
+        : null;
+
+    return {
+      data: dataRows.map((row) => ({
+        ...row.pipeline,
+        sourceSchema: row.sourceSchema,
+        destinationSchema: row.destinationSchema,
+      })),
+      total: -1, // Not computed for cursor pagination (expensive at scale)
+      nextCursor,
     };
   }
 

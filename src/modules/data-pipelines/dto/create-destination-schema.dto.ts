@@ -59,16 +59,16 @@ export class CreateDestinationSchemaDto {
   destinationTableExists?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Transform type: dbt',
-    example: 'dbt',
-    default: 'dbt',
+    description: 'Transform type: dlt (data load tool, default) or dbt. Use dlt for direct sync; dbt requires customSql or dbtModel.',
+    example: 'dlt',
+    default: 'dlt',
   })
   @IsOptional()
   @IsString()
   transformType?: string;
 
   @ApiPropertyOptional({
-    description: 'dbt model name when transformType is dbt',
+    description: 'dbt model name - only when transformType is dbt',
     example: 'stg_company_role_combined',
   })
   @IsOptional()
@@ -77,7 +77,7 @@ export class CreateDestinationSchemaDto {
   dbtModel?: string;
 
   @ApiPropertyOptional({
-    description: 'Custom SQL - runs through dbt against raw_input (e.g. select id, company_name as name from raw_input)',
+    description: 'Custom SQL - only when transformType is dbt. Ignored for dlt.',
   })
   @IsOptional()
   @IsString()

@@ -3,12 +3,12 @@
  * Module for data source and connection management
  */
 
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
-import { EtlModule } from '../etl/etl.module';
+import { ConnectorsModule } from '../connectors/connectors.module';
 import { OrganizationModule } from '../organizations/organization.module';
 import { UserModule } from '../users/user.module';
 import { DataSourceController } from './data-source.controller';
@@ -21,7 +21,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
 @Module({
   imports: [
     ActivityLogModule,
-    EtlModule,
+    forwardRef(() => ConnectorsModule),
     OrganizationModule,
     UserModule,
     HttpModule.register({
