@@ -14,11 +14,20 @@ import { ConnectionService } from '../../data-sources/connection.service';
 import type { ColumnInfo } from '../types/common.types';
 import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../database/schemas';
 
+/** Default timeout values (override via env) */
+const DEFAULT_DISCOVER_TIMEOUT_MS = 30_000;
+const DEFAULT_PREVIEW_TIMEOUT_MS = 30_000;
+const DEFAULT_SYNC_TIMEOUT_MS = 600_000;
+
 @Injectable()
 export class PythonETLService {
   private readonly logger = new Logger(PythonETLService.name);
   private readonly pythonServiceUrl: string;
   private readonly pythonServiceAuthToken: string;
+
+  private readonly discoverTimeoutMs: number;
+  private readonly previewTimeoutMs: number;
+  private readonly syncTimeoutMs: number;
 
   constructor(
     private readonly httpService: HttpService,
@@ -30,7 +39,6 @@ export class PythonETLService {
       this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
       this.configService.get<string>('PYTHON_SERVICE_URL');
     this.pythonServiceUrl = normalizeEtlBaseUrl(raw);
-    // ETL uses Supabase JWT verification — pass service role key (valid JWT)
     this.pythonServiceAuthToken =
       this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ||
       this.configService.get<string>('ETL_PYTHON_SERVICE_TOKEN') ||
@@ -50,6 +58,13 @@ export class PythonETLService {
       );
     }
     this.logger.log(`Python ETL Service URL: ${this.pythonServiceUrl}`);
+
+    this.discoverTimeoutMs =
+      this.configService.get<number>('ETL_DISCOVER_TIMEOUT_MS') ?? DEFAULT_DISCOVER_TIMEOUT_MS;
+    this.previewTimeoutMs =
+      this.configService.get<number>('ETL_PREVIEW_TIMEOUT_MS') ?? DEFAULT_PREVIEW_TIMEOUT_MS;
+    this.syncTimeoutMs =
+      this.configService.get<number>('ETL_SYNC_TIMEOUT_MS') ?? DEFAULT_SYNC_TIMEOUT_MS;
   }
 
   private buildRequestConfig(timeout: number) {
@@ -62,7 +77,7 @@ export class PythonETLService {
   }
 
   /**
-   * Ensures the request URL is valid before passing to axios (avoids "Invalid URL" from axios).
+   * Ensures the request URL is valid before passing to axios.
    */
   private assertValidRequestUrl(url: string, label: string): void {
     if (!url || typeof url !== 'string') {
@@ -113,7 +128,7 @@ export class PythonETLService {
             schema_name: sourceSchema.sourceSchema,
             query: sourceSchema.sourceQuery,
           },
-          this.buildRequestConfig(30000),
+          this.buildRequestConfig(this.discoverTimeoutMs),
         ),
       );
 
@@ -174,7 +189,7 @@ export class PythonETLService {
           source_stream: sourceStream,
           limit,
         },
-        this.buildRequestConfig(30000),
+        this.buildRequestConfig(this.previewTimeoutMs),
       ),
     );
 
@@ -204,7 +219,6 @@ export class PythonETLService {
     upsertKey?: string | string[];
     cursorField?: string;
     checkpoint?: any;
-    columnMap?: Array<{ from_col: string; to_col: string }>;
   }): Promise<{
     rowsSynced: number;
     syncMode: string;
@@ -226,7 +240,6 @@ export class PythonETLService {
       upsertKey,
       cursorField,
       checkpoint,
-      columnMap,
     } = options;
 
     const sourceType = this.normalizeSourceType(
@@ -248,12 +261,15 @@ export class PythonETLService {
     const syncUrl = `${this.pythonServiceUrl}/sync/run-sync`;
     this.assertValidRequestUrl(syncUrl, 'sync/run-sync');
 
+    const discoveredColumns = (sourceSchema as any).discoveredColumns as
+      | Array<{ name: string }>
+      | undefined;
+    const selectedColumns = discoveredColumns?.map((c) => c.name) ?? undefined;
+
     const payload: Record<string, unknown> = {
       job_id: jobId,
       pipeline_id: pipelineId,
       organization_id: organizationId,
-      source_conn_id: sourceSchema.dataSourceId,
-      dest_conn_id: destinationSchema.dataSourceId,
       source_config: sourceConnectionConfig,
       dest_config: destConnectionConfig,
       source_type: sourceType,
@@ -262,16 +278,18 @@ export class PythonETLService {
       dest_table: destinationSchema.destinationTable || sourceSchema.sourceTable,
       sync_mode: syncMode,
       write_mode: writeMode,
-      upsert_key: Array.isArray(upsertKey) ? upsertKey[0] : upsertKey,
+      upsert_key: upsertKey != null
+        ? (Array.isArray(upsertKey) ? upsertKey : [upsertKey])
+        : undefined,
       cursor_field: cursorField,
-      column_map: columnMap || [],
-      callback_url: '',
-      callback_token: '',
       dataset_name: `org_${organizationId}`,
       dest_schema: destinationSchema.destinationSchema || undefined,
       destination_table_exists: destinationSchema.destinationTableExists ?? false,
       custom_sql: destinationSchema.customSql || undefined,
       transform_type: destinationSchema.transformType || 'dlt',
+      transform_script: destinationSchema.transformScript || undefined,
+      dbt_model: (destinationSchema as any).dbtModel || undefined,
+      selected_columns: selectedColumns,
     };
 
     if (checkpoint) {
@@ -288,7 +306,7 @@ export class PythonETLService {
 
     try {
       const response = await firstValueFrom(
-        this.httpService.post(syncUrl, payload, this.buildRequestConfig(600000)),
+        this.httpService.post(syncUrl, payload, this.buildRequestConfig(this.syncTimeoutMs)),
       );
 
       if (response.data?.error) {
@@ -329,20 +347,17 @@ export class PythonETLService {
       throw new Error(`Data source ${sourceSchema.dataSourceId} not found`);
     }
 
-    // Use getDecryptedConnection for internal system calls
     return await this.connectionService.getDecryptedConnection(
       organizationId,
       sourceSchema.dataSourceId,
-      'system', // System user for internal calls
+      'system',
     );
   }
 
   /**
    * Extract the actual error detail from a Python FastAPI error response.
-   * FastAPI returns { "detail": "..." } in the body, but Axios only shows the status code.
    */
   private extractPythonError(error: any, operation: string): string {
-    // FastAPI error body: { detail: "Singer collect failed: ..." }
     const pythonDetail =
       error?.response?.data?.detail ||
       error?.response?.data?.message ||
@@ -353,12 +368,10 @@ export class PythonETLService {
       return `${operation} failed (HTTP ${status}): ${pythonDetail}`;
     }
 
-    // Axios timeout
     if (error?.code === 'ECONNABORTED') {
       return `${operation} timed out — Python ETL service did not respond in time`;
     }
 
-    // Connection refused (Python service not running)
     if (error?.code === 'ECONNREFUSED') {
       return `${operation} failed — Python ETL service is not running at ${this.pythonServiceUrl}`;
     }
@@ -369,7 +382,6 @@ export class PythonETLService {
   /**
    * Delta check for CDC/incremental polling.
    * new-etl does not yet expose a delta-check endpoint; returns no changes.
-   * When new-etl adds delta-check (e.g. for pg_replication WAL), wire it here.
    */
   async deltaCheck(options: {
     sourceSchema: PipelineSourceSchema;
@@ -379,32 +391,6 @@ export class PythonETLService {
     void options.sourceSchema;
     void options.connectionConfig;
     return { hasChanges: false, checkpoint: options.checkpoint };
-  }
-
-  /**
-   * Sanitize checkpoint state before passing to Singer taps.
-   * Removes invalid bookmark keys (e.g. 'xmin' from XMIN replication)
-   * that cause "invalid keys found in state" errors in incremental sync.
-   */
-  private sanitizeCheckpoint(checkpoint: any): any {
-    if (!checkpoint) return null;
-    const illegalBookmarkKeys = new Set(['xmin']);
-    try {
-      const clean = JSON.parse(JSON.stringify(checkpoint));
-      if (clean.bookmarks && typeof clean.bookmarks === 'object') {
-        for (const streamId of Object.keys(clean.bookmarks)) {
-          const bookmark = clean.bookmarks[streamId];
-          if (bookmark && typeof bookmark === 'object') {
-            for (const key of illegalBookmarkKeys) {
-              delete bookmark[key];
-            }
-          }
-        }
-      }
-      return clean;
-    } catch {
-      return checkpoint;
-    }
   }
 
   /**

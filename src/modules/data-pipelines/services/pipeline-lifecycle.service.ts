@@ -79,10 +79,8 @@ export class PipelineLifecycleService {
       ...(newStatus === PipelineStatus.FAILED ? { lastError: message } : {}),
     });
 
-    // Log to console
     const logMessage = `🔄 Pipeline ${pipeline.name} (${pipelineId}): ${currentStatus} → ${newStatus}${message ? ` - ${message}` : ''}`;
     this.logger.log(logMessage);
-    console.log(logMessage);
 
     // Log to activity
     await this.activityLogService.logPipelineAction(
@@ -115,9 +113,7 @@ export class PipelineLifecycleService {
    */
   async initializePipeline(pipelineId: string, userId: string): Promise<StatusTransitionResult> {
     const message = 'Pipeline is initializing, validating configuration...';
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`🚀 INITIALIZING PIPELINE`);
-    console.log(`${'='.repeat(60)}`);
+    this.logger.log('🚀 INITIALIZING PIPELINE');
 
     return this.transitionStatus(pipelineId, PipelineStatus.INITIALIZING, userId, message);
   }
@@ -134,7 +130,7 @@ export class PipelineLifecycleService {
     const syncType = isFullSync ? 'full sync' : 'incremental sync';
     const message = `Starting ${syncType}${totalRows ? ` (${totalRows.toLocaleString()} rows expected)` : ''}`;
 
-    console.log(`\n📊 ${message.toUpperCase()}`);
+    this.logger.log(`📊 ${message.toUpperCase()}`);
 
     const result = await this.transitionStatus(
       pipelineId,
@@ -171,7 +167,7 @@ export class PipelineLifecycleService {
   ): Promise<StatusTransitionResult> {
     const message = `Entering LISTING mode, polling every ${pollingIntervalSeconds}s for changes`;
 
-    console.log(`\n👁️ ${message}`);
+    this.logger.log(`👁️ ${message}`);
 
     await this.pipelineRepository.update(pipelineId, {
       pollingIntervalSeconds,
@@ -210,7 +206,7 @@ export class PipelineLifecycleService {
   ): Promise<StatusTransitionResult> {
     const message = `Entering LISTENING mode with ${cdcType} CDC`;
 
-    console.log(`\n📡 ${message}`);
+    this.logger.log(`📡 ${message}`);
 
     const result = await this.transitionStatus(
       pipelineId,
@@ -245,8 +241,7 @@ export class PipelineLifecycleService {
   ): Promise<StatusTransitionResult> {
     const message = `Sync completed: ${stats.rowsProcessed.toLocaleString()} rows in ${stats.durationSeconds}s`;
 
-    console.log(`\n✅ ${message}`);
-    console.log(`${'='.repeat(60)}\n`);
+    this.logger.log(`✅ ${message}`);
 
     return this.transitionStatus(pipelineId, PipelineStatus.COMPLETED, userId, message, stats);
   }
@@ -263,8 +258,7 @@ export class PipelineLifecycleService {
     const errorMessage = error instanceof Error ? error.message : error;
     const message = `Pipeline failed: ${errorMessage}${partialStats?.rowsProcessed ? ` (${partialStats.rowsProcessed} rows processed before failure)` : ''}`;
 
-    console.error(`\n❌ ${message}`);
-    console.log(`${'='.repeat(60)}\n`);
+    this.logger.error(`❌ ${message}`);
 
     return this.transitionStatus(pipelineId, PipelineStatus.FAILED, userId, message, {
       error: errorMessage,
@@ -294,9 +288,7 @@ export class PipelineLifecycleService {
       checkpoint as Record<string, unknown>,
     );
 
-    const logMessage = `💾 Checkpoint saved: ${checkpoint.rowsProcessed?.toLocaleString() || 0} rows processed`;
-    this.logger.log(logMessage);
-    console.log(logMessage);
+    this.logger.log(`💾 Checkpoint saved: ${checkpoint.rowsProcessed?.toLocaleString() || 0} rows processed`);
 
     await this.activityLogService.logPipelineAction(
       pipeline.organizationId,
@@ -366,9 +358,7 @@ export class PipelineLifecycleService {
     const progressBar = this.createProgressBar(progress.percentage || 0);
     const statsLine = `Batch ${progress.currentBatch}${progress.totalBatches ? `/${progress.totalBatches}` : ''} | ${progress.rowsProcessed.toLocaleString()}${progress.rowsTotal ? `/${progress.rowsTotal.toLocaleString()}` : ''} rows`;
 
-    // Console output
-    console.log(`📦 ${progressBar} ${statsLine}`);
-    console.log(`   └─ ${progress.message}`);
+    this.logger.log(`📦 ${progressBar} ${statsLine} └─ ${progress.message}`);
 
     // Log to activity for significant milestones (every 10% or every 5000 rows)
     const shouldLogActivity =
@@ -431,21 +421,13 @@ export class PipelineLifecycleService {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
     if (!pipeline) return;
 
-    // Console summary
-    console.log(`\n${'─'.repeat(50)}`);
-    console.log(`📊 SYNC SUMMARY - ${stats.syncType.toUpperCase()}`);
-    console.log(`${'─'.repeat(50)}`);
-    console.log(`   Pipeline: ${pipeline.name}`);
-    console.log(`   Rows Read:    ${stats.rowsRead.toLocaleString()}`);
-    console.log(`   Rows Written: ${stats.rowsWritten.toLocaleString()}`);
-    console.log(`   Rows Skipped: ${stats.rowsSkipped.toLocaleString()}`);
-    console.log(`   Rows Failed:  ${stats.rowsFailed.toLocaleString()}`);
-    console.log(`   Batches:      ${stats.batchCount}`);
-    console.log(`   Duration:     ${stats.durationSeconds}s`);
-    console.log(
-      `   Rate:         ${(stats.rowsWritten / Math.max(stats.durationSeconds, 1)).toFixed(0)} rows/sec`,
+    const rate = (stats.rowsWritten / Math.max(stats.durationSeconds, 1)).toFixed(0);
+    this.logger.log(
+      `📊 SYNC SUMMARY - ${stats.syncType.toUpperCase()} | ${pipeline.name} | ` +
+        `Read: ${stats.rowsRead.toLocaleString()} Written: ${stats.rowsWritten.toLocaleString()} ` +
+        `Skipped: ${stats.rowsSkipped.toLocaleString()} Failed: ${stats.rowsFailed.toLocaleString()} | ` +
+        `${stats.durationSeconds}s (${rate} rows/sec)`,
     );
-    console.log(`${'─'.repeat(50)}\n`);
 
     // Log to activity
     await this.activityLogService.logPipelineRunAction(
@@ -483,13 +465,9 @@ export class PipelineLifecycleService {
     if (!pipeline) return;
 
     if (result.changesDetected > 0) {
-      console.log(
-        `🔍 Poll executed: ${result.changesDetected} changes detected, triggering sync...`,
-      );
+      this.logger.log(`🔍 Poll executed: ${result.changesDetected} changes detected, triggering sync...`);
     } else {
-      console.log(
-        `🔍 Poll executed: No changes detected, next poll at ${result.nextPollAt.toISOString()}`,
-      );
+      this.logger.log(`🔍 Poll executed: No changes detected, next poll at ${result.nextPollAt.toISOString()}`);
     }
 
     await this.activityLogService.logPipelineAction(
@@ -517,7 +495,7 @@ export class PipelineLifecycleService {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
     if (!pipeline) return;
 
-    console.log(
+    this.logger.log(
       `📡 CDC: ${changeInfo.recordCount} ${changeInfo.changeType}(s) detected from ${changeInfo.source}`,
     );
 

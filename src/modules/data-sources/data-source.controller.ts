@@ -364,6 +364,11 @@ export class DataSourceController {
       sourceId,
       userId,
     );
+    if (!sourceConfig || typeof sourceConfig !== 'object') {
+      throw new BadRequestException(
+        'Connection not configured for this data source. Please add connection credentials first.',
+      );
+    }
 
     const sourceType = toEtlSourceType(dataSource.sourceType);
     const schemaName = (body.schema_name ?? body.schemaName ?? 'public') as string;

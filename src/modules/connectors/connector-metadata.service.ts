@@ -102,20 +102,32 @@ export class ConnectorMetadataService {
       throw new Error('ETL service not configured. Set ETL_PYTHON_SERVICE_URL.');
     }
     const etlSourceType = this.toEtlSourceType(options.source_type);
-    const res = await firstValueFrom(
-      this.httpService.post(
-        `${this.baseUrl}/discover-schema/${etlSourceType}`,
-        {
-          source_type: etlSourceType,
-          connection_config: options.source_config,
-          source_config: options.source_config,
-          schema_name: options.schema_name ?? 'public',
-          table_name: options.table_name,
-          query: options.query,
-        },
-        { headers: this.headers(), timeout: 30000 },
-      ),
-    );
+    let res: { data?: any };
+    try {
+      res = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/discover-schema/${etlSourceType}`,
+          {
+            source_type: etlSourceType,
+            connection_config: options.source_config ?? {},
+            source_config: options.source_config ?? {},
+            schema_name: options.schema_name ?? 'public',
+            table_name: options.table_name,
+            query: options.query,
+          },
+          { headers: this.headers(), timeout: 30000 },
+        ),
+      );
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.detail ??
+        err?.response?.data?.message ??
+        err?.message;
+      this.logger.error(`ETL discover-schema failed: ${detail}`);
+      throw new Error(
+        `Schema discovery failed: ${detail || 'ETL service returned an error'}`,
+      );
+    }
     const data = res.data ?? {};
     const columns = (data.columns ?? []) as Array<{
       name: string;

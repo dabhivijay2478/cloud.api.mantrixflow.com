@@ -67,15 +67,22 @@ export class DestinationSchemaService {
       throw new ForbiddenException('Data source does not belong to this organization');
     }
 
-    // Validate transform: customSql/dbtModel required only when transformType is dbt
-    // Default to 'dlt' when not provided (new pipeline flow uses dlt; dbt requires explicit opt-in)
-    const rawType = dto.transformType?.trim() || 'dlt';
+    // Validate transform: customSql/dbtModel required when transformType is dbt; transformScript when script
+    const rawType = dto.transformType?.trim() || 'script';
     const transformType = rawType.toLowerCase();
     if (transformType === 'dbt') {
       const hasDbt = dto.dbtModel?.trim() || dto.customSql?.trim();
       if (!hasDbt) {
         throw new BadRequestException(
           'Transform is required: set customSql or dbtModel when transformType is dbt',
+        );
+      }
+    }
+    if (transformType === 'script') {
+      const hasScript = (dto as { transformScript?: string }).transformScript?.trim();
+      if (!hasScript) {
+        throw new BadRequestException(
+          'Transform script is required: set transformScript when transformType is script',
         );
       }
     }
@@ -94,6 +101,7 @@ export class DestinationSchemaService {
       transformType: transformType,
       dbtModel: dto.dbtModel || null,
       customSql: dto.customSql || null,
+      transformScript: (dto as { transformScript?: string }).transformScript || null,
       writeMode: (dto.writeMode as string) || 'append',
       upsertKey: (dto.upsertKey as string[]) || null,
       name: dto.name || `${destinationTable}_destination`,

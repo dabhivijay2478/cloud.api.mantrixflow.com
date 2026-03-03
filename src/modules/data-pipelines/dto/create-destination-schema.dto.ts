@@ -77,11 +77,18 @@ export class CreateDestinationSchemaDto {
   dbtModel?: string;
 
   @ApiPropertyOptional({
-    description: 'Custom SQL - only when transformType is dbt. Ignored for dlt.',
+    description: 'Custom SQL - only when transformType is dbt.',
   })
   @IsOptional()
   @IsString()
   customSql?: string;
+
+  @ApiPropertyOptional({
+    description: 'Python transform script - only when transformType is script. Must define def transform(row) -> dict.',
+  })
+  @IsOptional()
+  @IsString()
+  transformScript?: string;
 
   @ApiPropertyOptional({
     description: 'Write mode for destination',

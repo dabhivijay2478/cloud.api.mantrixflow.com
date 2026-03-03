@@ -34,11 +34,8 @@ import type {
   DryRunResult,
   ValidationResult,
   BatchOptions,
-  PipelineError,
-  WriteResult,
 } from '../types/common.types';
-import type { SchemaInfo } from '../types/common.types';
-import { PipelineStatus, PipelineCheckpoint } from '../types/pipeline-lifecycle.types';
+import { PipelineStatus } from '../types/pipeline-lifecycle.types';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
@@ -60,9 +57,6 @@ export interface CreatePipelineInput extends CreatePipelineDto {
  * Configurable per-pipeline via options.batchSize
  */
 const DEFAULT_BATCH_SIZE = 500;
-const MAX_BATCH_SIZE = 10000;
-const RETRY_ATTEMPTS = 3;
-const RETRY_DELAY_MS = 2000;
 
 @Injectable()
 export class PipelineService {
@@ -617,7 +611,6 @@ export class PipelineService {
         upsertKey: configuredUpsertKey,
         cursorField: pipeline.incrementalColumn || undefined,
         checkpoint: checkpoint || undefined,
-        columnMap: this.normalizeColumnMap(pipeline.transformations),
       });
 
       totalRowsWritten = syncResult.rowsSynced;
@@ -1102,233 +1095,6 @@ export class PipelineService {
   }
 
   // ============================================================================
-  // BIDIRECTIONAL PIPELINE EXECUTION (NoSQL ↔ SQL)
-  // ============================================================================
-
-  /**
-   * Execute a pipeline with bidirectional transformation support
-   * Handles complex transformations between NoSQL and SQL sources
-   *
-   * Use this for:
-   * - MongoDB → PostgreSQL (flattening nested documents)
-   * - PostgreSQL → MongoDB (embedding related data)
-   */
-  async executeBidirectionalPipeline(
-    pipelineId: string,
-    userId: string,
-    options?: {
-      batchSize?: number;
-      upsertKeys?: Record<string, string[]>;
-    },
-  ): Promise<PipelineRun> {
-    const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
-    if (!pipelineWithSchemas) {
-      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
-    }
-
-    const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
-
-    // Validate source and destination
-    if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
-      throw new BadRequestException('Source and destination must have data source IDs');
-    }
-
-    // Get source and destination data source info
-    const sourceDataSource = await this.dataSourceRepository.findById(sourceSchema.dataSourceId);
-    const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
-
-    if (!sourceDataSource || !destDataSource) {
-      throw new BadRequestException('Source or destination data source not found');
-    }
-
-    // Determine schema types
-    const relationalTypes = [
-      'postgres',
-      'postgresql',
-      'mysql',
-      'mariadb',
-      'sqlite',
-      'mssql',
-      'oracle',
-    ];
-    const isRelational = (type: string) => relationalTypes.includes(type?.toLowerCase());
-
-    const sourceSchemaInfo: SchemaInfo = {
-      columns: [],
-      primaryKeys: [],
-      isRelational: isRelational(sourceDataSource.sourceType),
-      sourceType: sourceDataSource.sourceType,
-      entityName: sourceSchema.sourceTable || undefined,
-    };
-
-    const destSchemaInfo: SchemaInfo = {
-      columns: [],
-      primaryKeys: [],
-      isRelational: isRelational(destDataSource.sourceType),
-      sourceType: destDataSource.sourceType,
-      entityName: destinationSchema.destinationTable || undefined,
-    };
-
-    this.logger.log(
-      `Bidirectional pipeline: ${sourceDataSource.sourceType} (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'}) → ` +
-        `${destDataSource.sourceType} (${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`,
-    );
-
-    // Create run record
-    const run = await this.pipelineRepository.createRun({
-      pipelineId,
-      organizationId: pipeline.organizationId,
-      status: 'pending',
-      jobState: 'pending',
-      triggerType: 'manual',
-      triggeredBy: userId,
-      startedAt: new Date(),
-    });
-
-    // Execute asynchronously
-    this.executeBidirectionalAsync(
-      run.id,
-      pipeline,
-      sourceSchema,
-      destinationSchema,
-      sourceSchemaInfo,
-      destSchemaInfo,
-      userId,
-      options,
-    ).catch((error) => {
-      this.logger.error(
-        `Bidirectional pipeline execution failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-
-    return run;
-  }
-
-  /**
-   * Execute bidirectional pipeline asynchronously (dlt runSync)
-   */
-  private async executeBidirectionalAsync(
-    runId: string,
-    pipeline: Pipeline,
-    sourceSchema: PipelineSourceSchema,
-    destinationSchema: PipelineDestinationSchema,
-    sourceSchemaInfo: SchemaInfo,
-    destSchemaInfo: SchemaInfo,
-    userId: string,
-    options?: {
-      batchSize?: number;
-      upsertKeys?: Record<string, string[]>;
-    },
-  ): Promise<void> {
-    const startTime = Date.now();
-    let totalRowsWritten = 0;
-
-    try {
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'running',
-        jobState: 'running',
-      });
-
-      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
-        pipeline.organizationId,
-        sourceSchema.dataSourceId!,
-        userId,
-      );
-      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
-        pipeline.organizationId,
-        destinationSchema.dataSourceId!,
-        userId,
-      );
-
-      const configuredWriteMode = (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append';
-      const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || options?.upsertKeys?.default;
-      const effectiveWriteMode =
-        configuredUpsertKey && configuredUpsertKey.length > 0 ? 'upsert' : configuredWriteMode;
-
-      this.activity.info('sync.collect', `Syncing from ${sourceSchemaInfo.sourceType} → ${destSchemaInfo.sourceType}`, {
-        pipelineId: pipeline.id,
-        runId,
-      });
-
-      const syncResult = await this.pythonETLService.runSync({
-        jobId: runId,
-        pipelineId: pipeline.id,
-        organizationId: pipeline.organizationId,
-        sourceSchema,
-        destinationSchema,
-        sourceConnectionConfig,
-        destConnectionConfig,
-        userId,
-        syncMode: 'full',
-        writeMode: effectiveWriteMode,
-        upsertKey: configuredUpsertKey,
-        cursorField: pipeline.incrementalColumn || undefined,
-        columnMap: this.normalizeColumnMap(pipeline.transformations),
-      });
-
-      totalRowsWritten = syncResult.rowsSynced;
-      if (syncResult.error) {
-        throw new Error(syncResult.userMessage || syncResult.error);
-      }
-
-      const duration = Date.now() - startTime;
-      this.activity.info(
-        'pipeline.completed',
-        `Bidirectional pipeline completed: ${totalRowsWritten} rows written in ${(duration / 1000).toFixed(1)}s`,
-        {
-          pipelineId: pipeline.id,
-          runId,
-          organizationId: pipeline.organizationId,
-          metadata: { totalRowsWritten, durationMs: duration },
-        },
-      );
-
-      // Update run as success
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'success',
-        jobState: 'completed',
-        rowsRead: totalRowsWritten,
-        rowsWritten: totalRowsWritten,
-        completedAt: new Date(),
-        durationSeconds: Math.floor(duration / 1000),
-      });
-
-      // Update pipeline
-      await this.pipelineRepository.update(pipeline.id, {
-        lastRunStatus: 'success',
-        lastRunAt: new Date(),
-      });
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-
-      this.activity.error('pipeline.failed', `Bidirectional pipeline failed: ${errorMessage}`, {
-        pipelineId: pipeline.id,
-        runId,
-        organizationId: pipeline.organizationId,
-        metadata: { errorMessage, totalRowsWritten, durationMs: duration },
-      });
-
-      // Update run as failed
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'failed',
-        jobState: 'failed',
-        rowsRead: totalRowsWritten,
-        rowsWritten: totalRowsWritten,
-        completedAt: new Date(),
-        durationSeconds: Math.floor(duration / 1000),
-        errorMessage: errorMessage,
-      });
-
-      // Update pipeline
-      await this.pipelineRepository.update(pipeline.id, {
-        lastRunStatus: 'failed',
-        lastRunAt: new Date(),
-      });
-    }
-  }
-
-  // ============================================================================
   // AUTHORIZATION HELPERS
   // ============================================================================
 
@@ -1400,21 +1166,4 @@ export class PipelineService {
     }
   }
 
-  /**
-   * Normalize transformations to dlt column_map format [{ from_col, to_col }]
-   */
-  private normalizeColumnMap(
-    transformations: unknown,
-  ): Array<{ from_col: string; to_col: string }> | undefined {
-    if (!transformations || !Array.isArray(transformations)) return undefined;
-    const mapped = transformations
-      .map((t: any) => {
-        if (t?.from_col && t?.to_col) return { from_col: t.from_col, to_col: t.to_col };
-        if (t?.sourceColumn && t?.destinationColumn)
-          return { from_col: t.sourceColumn, to_col: t.destinationColumn };
-        return null;
-      })
-      .filter((x): x is { from_col: string; to_col: string } => x !== null);
-    return mapped.length > 0 ? mapped : undefined;
-  }
 }

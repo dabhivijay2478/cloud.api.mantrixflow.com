@@ -41,8 +41,11 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   /** dbt model name - only when transformType is 'dbt' */
   dbtModel: varchar('dbt_model', { length: 255 }),
 
-  /** Custom SQL - only when transformType is 'dbt'; ignored for dlt */
+  /** Custom SQL - only when transformType is 'dbt' */
   customSql: text('custom_sql'),
+
+  /** Python transform script - only when transformType is 'script' */
+  transformScript: text('transform_script'),
 
   // ============================================================================
   // WRITE CONFIGURATION
