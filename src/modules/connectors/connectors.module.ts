@@ -7,7 +7,7 @@ import { DataSourceModule } from '../data-sources/data-source.module';
 @Module({
   imports: [
     HttpModule.register({
-      timeout: 10000,
+      timeout: 120_000, // ETL discover/preview can take 60s+; per-request timeout overrides when set
       maxRedirects: 5,
     }),
     forwardRef(() => DataSourceModule),

@@ -12,6 +12,7 @@ import {
   PipelineCheckpoint,
   PipelineProgress,
   StatusTransitionResult,
+  SyncSummaryStats,
   isValidStatusTransition,
   getStatusDescription,
 } from '../types/pipeline-lifecycle.types';
@@ -408,15 +409,7 @@ export class PipelineLifecycleService {
     pipelineId: string,
     runId: string,
     userId: string | null,
-    stats: {
-      syncType: 'full' | 'incremental';
-      rowsRead: number;
-      rowsWritten: number;
-      rowsSkipped: number;
-      rowsFailed: number;
-      durationSeconds: number;
-      batchCount: number;
-    },
+    stats: SyncSummaryStats,
   ): Promise<void> {
     const pipeline = await this.pipelineRepository.findById(pipelineId);
     if (!pipeline) return;
@@ -433,7 +426,7 @@ export class PipelineLifecycleService {
     await this.activityLogService.logPipelineRunAction(
       pipeline.organizationId,
       userId,
-      stats.syncType === 'full'
+      stats.syncType === 'full' || stats.syncType === 'full_table'
         ? PIPELINE_ACTIONS.FULL_SYNC_COMPLETED
         : PIPELINE_ACTIONS.INCREMENTAL_SYNC_COMPLETED,
       runId,

@@ -1,4 +1,5 @@
 import {
+  bigint,
   integer,
   jsonb,
   pgEnum,
@@ -68,13 +69,16 @@ export const pipelineRuns = pgTable('pipeline_runs', {
   errorCode: varchar('error_code', { length: 50 }),
   errorStack: text('error_stack'),
 
-  // Resolved destination table info (locked during setup phase)
-  resolvedDestinationSchema: varchar('resolved_destination_schema', { length: 255 }),
-  resolvedDestinationTable: varchar('resolved_destination_table', { length: 255 }),
-  resolvedColumnMappings: jsonb('resolved_column_mappings'),
-  destinationTableWasCreated: varchar('destination_table_was_created', { length: 10 }),
-  lastSyncCursor: text('last_sync_cursor'),
   jobStateUpdatedAt: timestamp('job_state_updated_at'),
+
+  // Singer ETL fields
+  collectionMethodUsed: text('collection_method_used'),
+  emitMethodUsed: text('emit_method_used'),
+  rowsDeleted: integer('rows_deleted').default(0),
+  lsnStart: bigint('lsn_start', { mode: 'number' }),
+  lsnEnd: bigint('lsn_end', { mode: 'number' }),
+  sourceTool: text('source_tool').default('tap-postgres'),
+  destTool: text('dest_tool').default('target-postgres'),
 
   // Metadata
   runMetadata: jsonb('run_metadata').$type<RunMetadata>(),

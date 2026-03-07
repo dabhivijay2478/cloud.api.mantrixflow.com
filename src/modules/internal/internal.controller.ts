@@ -193,7 +193,6 @@ export class InternalController {
         status: runStatus,
         jobState: status === 'completed' ? 'completed' : 'failed',
         rowsWritten: rowsSynced ?? 0,
-        lastSyncCursor: new_cursor ?? undefined,
         runMetadata: runMetadata as any,
         errorMessage: errorMessage ?? undefined,
         completedAt: new Date(),

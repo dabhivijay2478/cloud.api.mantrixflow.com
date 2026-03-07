@@ -177,9 +177,18 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
           continue;
         }
 
-        // Enqueue the scheduled run as a full sync job
+        const run = await this.pipelineRepository.createRun({
+          pipelineId: pipeline.id,
+          organizationId: pipeline.organizationId,
+          status: 'pending',
+          jobState: 'queued',
+          triggerType: 'scheduled',
+          triggeredBy: pipeline.createdBy || undefined,
+          startedAt: new Date(),
+        });
         await this.pipelineQueueService.enqueueFullSync({
           pipelineId: pipeline.id,
+          runId: run.id,
           organizationId: pipeline.organizationId,
           userId: pipeline.createdBy || 'system',
           triggerType: 'scheduled',

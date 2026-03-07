@@ -16,8 +16,8 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ActivityLoggerService } from '../../../common/logger';
 import { PipelineRepository } from '../repositories/pipeline.repository';
-import { PipelineService } from './pipeline.service';
 import { PythonETLService } from './python-etl.service';
+import { ConnectionService } from '../../data-sources/connection.service';
 import {
   PgmqQueueService,
   PgmqMessage,
@@ -32,13 +32,8 @@ import {
   PGMQ_VT_LONG_SEC,
   PGMQ_VT_SHORT_SEC,
   PGMQ_PARALLEL_WORKERS,
+  PGMQ_MAX_DISPATCH_RETRIES,
 } from '../../queue';
-
-/** How often to poll the run DB for completion (ms) */
-const RUN_POLL_INTERVAL_MS = 2_000;
-
-/** Max time to wait for a pipeline run to complete (ms) */
-const RUN_WAIT_TIMEOUT_MS = 4 * 60 * 60 * 1_000; // 4 hours
 
 @Injectable()
 export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
@@ -48,10 +43,10 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
   private isShuttingDown = false;
 
   constructor(
-    private readonly pipelineService: PipelineService,
     private readonly pipelineRepository: PipelineRepository,
     private readonly queueService: PgmqQueueService,
     private readonly pythonETLService: PythonETLService,
+    private readonly connectionService: ConnectionService,
     private readonly activity: ActivityLoggerService,
   ) {}
 
@@ -146,45 +141,105 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
   private async handleFullSync(
     msg: PgmqMessage<PgmqJobPayload<FullSyncJobData>>,
   ): Promise<void> {
-    const { data, retryCount = 0, maxRetries = 5 } = msg.message;
-    const { pipelineId, organizationId, userId, triggerType, batchSize } = data;
-    this.activity.info('job.full_sync', `Starting full sync for pipeline ${pipelineId}`, {
+    const { data, retryCount = 0, maxRetries = PGMQ_MAX_DISPATCH_RETRIES } = msg.message;
+    const { pipelineId, runId, organizationId, userId, triggerType } = data;
+    this.activity.info('job.full_sync', `Dispatching full sync for pipeline ${pipelineId}`, {
       pipelineId,
       organizationId,
       userId,
-      metadata: { triggerType, batchSize, msgId: msg.msg_id },
+      metadata: { triggerType, runId, msgId: msg.msg_id },
     });
     try {
-      const pipeline = await this.pipelineRepository.findById(pipelineId);
-      if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found`);
-      if (pipeline.status === 'running') {
-        this.logger.warn(`[FULL-SYNC] Pipeline ${pipelineId} already running — skipping`);
-        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.PIPELINE_JOBS, msg.msg_id);
-        return;
+      const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+      if (!pipelineWithSchemas) throw new Error(`Pipeline ${pipelineId} not found`);
+      const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
+
+      if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
+        throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
       }
-      const run = await this.pipelineService.runPipeline(
-        pipelineId,
+
+      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
+        organizationId,
+        sourceSchema.dataSourceId,
         userId || 'system',
-        triggerType as 'manual' | 'scheduled' | 'api' | 'polling',
-        { batchSize: batchSize || 500 },
       );
-      const completedRun = await this.waitForRunCompletion(run.id);
-      if (completedRun.status !== 'success') {
-        throw new Error(
-          completedRun.errorMessage ||
-            `Run ${completedRun.id} ended with status ${completedRun.status}`,
-        );
-      }
-      await this.queueService.publishStatusUpdate({
+      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
+        organizationId,
+        destinationSchema.dataSourceId,
+        userId || 'system',
+      );
+
+      await this.pipelineRepository.updateRun(runId, {
+        status: 'running',
+        jobState: 'running',
+        startedAt: new Date(),
+      });
+      await this.pipelineRepository.update(pipelineId, {
+        status: 'running',
+        lastRunAt: new Date(),
+      });
+
+      const result = await this.pythonETLService.runSync({
+        jobId: runId,
         pipelineId,
         organizationId,
-        status: 'completed',
-        rowsProcessed: completedRun.rowsWritten || 0,
-        timestamp: new Date().toISOString(),
+        sourceSchema,
+        destinationSchema,
+        sourceConnectionConfig,
+        destConnectionConfig,
+        userId: userId || 'system',
+        syncMode: 'full',
+        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+        upsertKey: destinationSchema.upsertKey as string[] | undefined,
+        hardDelete: false,
       });
-      this.logger.log(`[FULL-SYNC] Completed for pipeline ${pipelineId}`);
+
+      if ('retry' in result && result.retry) {
+        this.logger.warn(`[FULL-SYNC] ETL pod at capacity — requeuing pipeline ${pipelineId}`);
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'pending',
+          jobState: 'queued',
+        });
+        await this.pipelineRepository.update(pipelineId, { status: 'idle' });
+        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.PIPELINE_JOBS, msg.msg_id);
+        if (retryCount < maxRetries) {
+          await this.queueService.requeueWithBackoff(
+            PGMQ_QUEUE_NAMES.PIPELINE_JOBS,
+            msg.message,
+            retryCount,
+          );
+          this.logger.warn(
+            `[FULL-SYNC] Requeued pipeline ${pipelineId} (attempt ${retryCount + 1}/${maxRetries})`,
+          );
+        } else {
+          await this.pipelineRepository.updateRun(runId, {
+            status: 'failed',
+            jobState: 'failed',
+            errorMessage: 'Exhausted dispatch retries — all ETL pods at capacity',
+            completedAt: new Date(),
+          });
+          this.logger.error(`[FULL-SYNC] Exhausted dispatch retries for pipeline ${pipelineId}`);
+        }
+        return;
+      }
+
+      this.logger.log(
+        `[FULL-SYNC] Dispatched pipeline ${pipelineId} run ${runId} to ETL — callback will finalize`,
+      );
       await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.PIPELINE_JOBS, msg.msg_id);
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[FULL-SYNC] Job failed for ${pipelineId}: ${errorMsg}`);
+      if (runId) {
+        try {
+          await this.pipelineRepository.updateRun(runId, {
+            status: 'failed',
+            jobState: 'failed',
+            errorMessage: errorMsg.substring(0, 1000),
+            completedAt: new Date(),
+          });
+        } catch (_) { /* best effort */ }
+      }
       await this.handleFailure(
         PGMQ_QUEUE_NAMES.PIPELINE_JOBS,
         msg,
@@ -205,63 +260,118 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
   private async handleIncrementalSync(
     msg: PgmqMessage<PgmqJobPayload<IncrementalSyncJobData>>,
   ): Promise<void> {
-    const { data, retryCount = 0, maxRetries = 5 } = msg.message;
-    const { pipelineId, organizationId, userId, triggerType, batchSize } = data;
+    const { data, retryCount = 0, maxRetries = PGMQ_MAX_DISPATCH_RETRIES } = msg.message;
+    const { pipelineId, runId, organizationId, userId, triggerType } = data;
     this.activity.info(
       'job.incremental_sync',
-      `Starting incremental sync for pipeline ${pipelineId}`,
+      `Dispatching LOG_BASED sync for pipeline ${pipelineId}`,
       {
         pipelineId,
         organizationId,
         userId,
-        metadata: { triggerType, batchSize, msgId: msg.msg_id },
+        metadata: { triggerType, runId, msgId: msg.msg_id },
       },
     );
     try {
-      const pipeline = await this.pipelineRepository.findById(pipelineId);
-      if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found`);
+      const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
+      if (!pipelineWithSchemas) throw new Error(`Pipeline ${pipelineId} not found`);
+      const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
+
       if (!['listing', 'idle', 'completed', 'failed'].includes(pipeline.status || '')) {
         this.logger.warn(
-          `[INCREMENTAL-SYNC] Pipeline ${pipelineId} is ${pipeline.status} — skipping`,
+          `[LOG_BASED] Pipeline ${pipelineId} is ${pipeline.status} — skipping`,
         );
-        await this.queueService.archiveMessage(
-          PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC,
-          msg.msg_id,
-        );
+        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, msg.msg_id);
         return;
       }
-      const mappedTrigger =
-        triggerType === 'polling'
-          ? 'polling'
-          : triggerType === 'resume'
-            ? 'manual'
-            : 'scheduled';
-      const run = await this.pipelineService.runPipeline(
-        pipelineId,
-        userId || pipeline.createdBy || 'system',
-        mappedTrigger,
-        { batchSize: batchSize || 500 },
-      );
-      const completedRun = await this.waitForRunCompletion(run.id);
-      if (completedRun.status !== 'success') {
-        throw new Error(
-          completedRun.errorMessage ||
-            `Run ${completedRun.id} ended with status ${completedRun.status}`,
-        );
+
+      if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
+        throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
       }
-      await this.queueService.publishStatusUpdate({
+
+      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
+        organizationId,
+        sourceSchema.dataSourceId,
+        userId || 'system',
+      );
+      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
+        organizationId,
+        destinationSchema.dataSourceId,
+        userId || 'system',
+      );
+
+      await this.pipelineRepository.updateRun(runId, {
+        status: 'running',
+        jobState: 'running',
+        startedAt: new Date(),
+      });
+      await this.pipelineRepository.update(pipelineId, {
+        status: 'running',
+        lastRunAt: new Date(),
+      });
+
+      const result = await this.pythonETLService.runSync({
+        jobId: runId,
         pipelineId,
         organizationId,
-        status: 'listing',
-        rowsProcessed: completedRun.rowsWritten || 0,
-        timestamp: new Date().toISOString(),
+        sourceSchema,
+        destinationSchema,
+        sourceConnectionConfig,
+        destConnectionConfig,
+        userId: userId || 'system',
+        syncMode: 'cdc',
+        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+        upsertKey: destinationSchema.upsertKey as string[] | undefined,
+        hardDelete: false,
+        replicationSlotName: (pipeline.replicationSlotName as string) || undefined,
       });
-      this.logger.log(`[INCREMENTAL-SYNC] Completed for pipeline ${pipelineId}`);
-      await this.queueService.archiveMessage(
-        PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC,
-        msg.msg_id,
+
+      if ('retry' in result && result.retry) {
+        this.logger.warn(`[LOG_BASED] ETL pod at capacity — requeuing pipeline ${pipelineId}`);
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'pending',
+          jobState: 'queued',
+        });
+        await this.pipelineRepository.update(pipelineId, { status: 'listing' });
+        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, msg.msg_id);
+        if (retryCount < maxRetries) {
+          await this.queueService.requeueWithBackoff(
+            PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC,
+            msg.message,
+            retryCount,
+          );
+          this.logger.warn(
+            `[LOG_BASED] Requeued pipeline ${pipelineId} (attempt ${retryCount + 1}/${maxRetries})`,
+          );
+        } else {
+          await this.pipelineRepository.updateRun(runId, {
+            status: 'failed',
+            jobState: 'failed',
+            errorMessage: 'Exhausted dispatch retries — all ETL pods at capacity',
+            completedAt: new Date(),
+          });
+          this.logger.error(`[LOG_BASED] Exhausted dispatch retries for pipeline ${pipelineId}`);
+        }
+        return;
+      }
+
+      this.logger.log(
+        `[LOG_BASED] Dispatched pipeline ${pipelineId} run ${runId} to ETL — callback will finalize`,
       );
+      await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, msg.msg_id);
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[LOG_BASED] Job failed for ${pipelineId}: ${errorMsg}`);
+      if (runId) {
+        try {
+          await this.pipelineRepository.updateRun(runId, {
+            status: 'failed',
+            jobState: 'failed',
+            errorMessage: errorMsg.substring(0, 1000),
+            completedAt: new Date(),
+          });
+        } catch (_) { /* best effort */ }
+      }
       await this.handleFailure(
         PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC,
         msg,
@@ -270,7 +380,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         pipelineId,
         organizationId,
         error,
-        'INCREMENTAL-SYNC',
+        'LOG_BASED',
       );
     }
   }
@@ -335,8 +445,18 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
       pipelineId,
       organizationId,
     });
+    const run = await this.pipelineRepository.createRun({
+      pipelineId,
+      organizationId,
+      status: 'pending',
+      jobState: 'queued',
+      triggerType: 'polling',
+      triggeredBy: pipeline.createdBy || undefined,
+      startedAt: new Date(),
+    });
     await this.queueService.enqueueIncrementalSync({
       pipelineId,
+      runId: run.id,
       organizationId,
       userId: pipeline.createdBy || 'system',
       triggerType: 'polling',
@@ -350,21 +470,19 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
 
   private async checkForChanges(
     pipelineId: string,
-    checkpoint: Record<string, unknown> | null,
+    _checkpoint: Record<string, unknown> | null,
   ): Promise<{ hasChanges: boolean; checkpoint?: Record<string, unknown> }> {
     try {
       const pipeline = await this.pipelineRepository.findByIdForCDC(pipelineId);
       if (!pipeline?.sourceSchema) return { hasChanges: false };
-      const connectionConfig = await this.pythonETLService.getConnectionConfig(
-        pipeline.sourceSchema,
-        pipeline.organizationId,
-      );
-      const result = await this.pythonETLService.deltaCheck({
-        sourceSchema: pipeline.sourceSchema,
-        connectionConfig,
-        checkpoint: checkpoint || {},
-      });
-      return { hasChanges: result.hasChanges, checkpoint: result.checkpoint };
+      // With Singer LOG_BASED CDC, we always assume changes may exist and
+      // let the tap determine what's new by reading from the WAL bookmark.
+      // The tap handles all change detection internally via replication slot.
+      const syncMode = pipeline.syncMode || 'full';
+      if (syncMode === 'cdc' || syncMode === 'log_based') {
+        return { hasChanges: true };
+      }
+      return { hasChanges: false };
     } catch (error) {
       this.logger.warn(`[DELTA-CHECK] Failed for ${pipelineId}: ${error}`);
       return { hasChanges: false };
@@ -374,17 +492,6 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
   // ════════════════════════════════════════════════════════════════
   // SHARED HELPERS
   // ════════════════════════════════════════════════════════════════
-
-  private async waitForRunCompletion(runId: string) {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt <= RUN_WAIT_TIMEOUT_MS) {
-      const run = await this.pipelineRepository.findRunById(runId);
-      if (!run) throw new Error(`Pipeline run ${runId} not found while waiting`);
-      if (['success', 'failed', 'cancelled'].includes(run.status || '')) return run;
-      await new Promise((resolve) => setTimeout(resolve, RUN_POLL_INTERVAL_MS));
-    }
-    throw new Error(`Timed out waiting for run ${runId} completion`);
-  }
 
   private async handleFailure(
     queueName: string,

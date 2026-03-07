@@ -455,6 +455,51 @@ export class DataSourceController {
   }
 
   /**
+   * Test connection to data source before discover
+   */
+  @Post(':sourceId/test-connection')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Test connection',
+    description: 'Test connectivity to data source before running discover',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Connection test result' })
+  async testConnection(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const dataSource = await this.dataSourceService.getDataSourceById(
+      organizationId,
+      sourceId,
+      userId,
+    );
+    const sourceConfig = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      sourceId,
+      userId,
+    );
+    const sourceType = toEtlSourceType(dataSource.sourceType);
+
+    const result = await this.connectorMetadataService.testConnection({
+      source_type: sourceType,
+      source_config: sourceConfig,
+    });
+
+    return createSuccessResponse({
+      success: result.success,
+      message: result.success ? 'Connection successful' : result.error,
+    });
+  }
+
+  /**
    * Discover streams from data source using ETL (Airbyte)
    */
   @Post(':sourceId/discover')

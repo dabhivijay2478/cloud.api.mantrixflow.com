@@ -1,7 +1,7 @@
 /**
  * Connector Metadata Service
  * listConnectors: reads from static config (no ETL call).
- * discover, preview, getCdcSetup, health: call Python ETL (apps/new-etl).
+ * discover, preview, health: call Singer-based Python ETL (apps/new-etl).
  */
 
 import { Injectable, Logger } from '@nestjs/common';
@@ -49,6 +49,43 @@ export class ConnectorMetadataService {
     };
   }
 
+  /**
+   * Test connection to source via ETL — POST /test-connection.
+   * Call before discover to validate connectivity.
+   */
+  async testConnection(options: {
+    source_type: string;
+    source_config: Record<string, unknown>;
+  }): Promise<{ success: boolean; error?: string }> {
+    if (!this.baseUrl) {
+      return { success: false, error: 'ETL service not configured' };
+    }
+    try {
+      const res = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/test-connection`,
+          {
+            connection_config: options.source_config ?? {},
+            source_config: options.source_config ?? {},
+          },
+          { headers: this.headers(), timeout: 10_000 },
+        ),
+      );
+      const success = res.data?.success === true;
+      return {
+        success,
+        error: success ? undefined : (res.data?.error ?? 'Connection test failed'),
+      };
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.detail ??
+        err?.response?.data?.error ??
+        err?.message;
+      this.logger.warn(`ETL test connection failed: ${detail}`);
+      return { success: false, error: String(detail ?? 'Connection test failed') };
+    }
+  }
+
   async health(): Promise<object> {
     if (!this.baseUrl) return { status: 'unconfigured' };
     try {
@@ -82,8 +119,8 @@ export class ConnectorMetadataService {
   }
 
   /**
-   * Discover full schema from ETL (columns, primary_keys, streams, etc.)
-   * Used by discover-schema endpoint for Add Collector / pipeline flow.
+   * Discover full schema from Singer ETL — POST /discover.
+   * Returns parsed columns, primary_keys, streams from tap-postgres --discover.
    */
   async discoverFull(options: {
     source_type: string;
@@ -101,21 +138,16 @@ export class ConnectorMetadataService {
     if (!this.baseUrl) {
       throw new Error('ETL service not configured. Set ETL_PYTHON_SERVICE_URL.');
     }
-    const etlSourceType = this.toEtlSourceType(options.source_type);
     let res: { data?: any };
     try {
       res = await firstValueFrom(
         this.httpService.post(
-          `${this.baseUrl}/discover-schema/${etlSourceType}`,
+          `${this.baseUrl}/discover`,
           {
-            source_type: etlSourceType,
             connection_config: options.source_config ?? {},
-            source_config: options.source_config ?? {},
             schema_name: options.schema_name ?? 'public',
-            table_name: options.table_name,
-            query: options.query,
           },
-          { headers: this.headers(), timeout: 30000 },
+          { headers: this.headers(), timeout: 120_000 },
         ),
       );
     } catch (err: any) {
@@ -123,55 +155,84 @@ export class ConnectorMetadataService {
         err?.response?.data?.detail ??
         err?.response?.data?.message ??
         err?.message;
-      this.logger.error(`ETL discover-schema failed: ${detail}`);
+      this.logger.error(`ETL discover failed: ${detail}`);
       throw new Error(
         `Schema discovery failed: ${detail || 'ETL service returned an error'}`,
       );
     }
     const data = res.data ?? {};
-    const columns = (data.columns ?? []) as Array<{
-      name: string;
-      type?: string;
-      table?: string;
-      nullable?: boolean;
-    }>;
-    const streams = (data.streams ?? []) as Array<{ name: string }>;
 
-    // Normalize: ensure columns have table when missing (derive from stream name)
-    if (columns.length > 0 && streams.length > 0) {
-      const normalizedColumns = columns.map((col) => {
-        if (col.table) return col;
-        // Single stream: use table name from stream
-        if (streams.length === 1) {
-          const parts = streams[0]!.name.split('.');
-          const tableName = parts.length > 1 ? parts[1]! : streams[0]!.name;
-          return { ...col, table: tableName };
-        }
-        return col;
-      });
-      return {
-        columns: normalizedColumns,
-        primary_keys: data.primary_keys ?? [],
-        estimated_row_count: data.estimated_row_count,
-        streams,
-        schemas: data.schemas,
-      };
+    // Singer ETL returns { streams: [...], raw_catalog: {...} }
+    // Each stream has: stream_name, tap_stream_id, columns, primary_keys, replication_methods
+    const singerStreams = (data.streams ?? []) as Array<{
+      stream_name: string;
+      tap_stream_id: string;
+      columns: Array<{ name: string; type: string; nullable: boolean; is_primary_key?: boolean }>;
+      primary_keys: string[];
+      replication_methods: string[];
+      log_based_eligible: boolean;
+    }>;
+
+    // Filter by table_name if provided
+    let matchedStreams = singerStreams;
+    if (options.table_name) {
+      matchedStreams = singerStreams.filter(
+        (s) =>
+          s.stream_name.endsWith(`.${options.table_name}`) ||
+          s.stream_name === options.table_name ||
+          s.tap_stream_id.includes(options.table_name!),
+      );
+      if (matchedStreams.length === 0) matchedStreams = singerStreams;
     }
+
+    // Flatten columns from all matched streams
+    const columns: Array<{ name: string; type?: string; table?: string; nullable?: boolean }> = [];
+    const primaryKeys: string[] = [];
+    const streamNames: Array<{ name: string }> = [];
+
+    // Group streams by schema for the schemas response
+    const schemaMap = new Map<string, Array<{ name: string; schema: string; type?: string }>>();
+
+    for (const s of matchedStreams) {
+      const parts = s.stream_name.split('-');
+      const schemaName = parts.length >= 2 ? parts[parts.length - 2] : 'public';
+      const tableName = parts.length >= 2 ? parts[parts.length - 1] : s.stream_name;
+
+      streamNames.push({ name: s.stream_name });
+
+      for (const col of s.columns) {
+        columns.push({
+          name: col.name,
+          type: col.type,
+          table: tableName,
+          nullable: col.nullable,
+        });
+      }
+      if (s.primary_keys.length > 0) {
+        primaryKeys.push(...s.primary_keys);
+      }
+
+      if (!schemaMap.has(schemaName!)) {
+        schemaMap.set(schemaName!, []);
+      }
+      schemaMap.get(schemaName!)!.push({
+        name: tableName!,
+        schema: schemaName!,
+        type: 'table',
+      });
+    }
+
+    const schemas = Array.from(schemaMap.entries()).map(([name, tables]) => ({
+      name,
+      tables,
+    }));
 
     return {
       columns,
-      primary_keys: data.primary_keys ?? [],
-      estimated_row_count: data.estimated_row_count,
-      streams,
-      schemas: data.schemas,
+      primary_keys: [...new Set(primaryKeys)],
+      streams: streamNames,
+      schemas,
     };
-  }
-
-  private toEtlSourceType(type: string): string {
-    const t = (type ?? 'postgres').toLowerCase();
-    if (t === 'postgres' || t === 'postgresql') return 'source-postgres';
-    if (t === 'mongodb') return 'source-mongodb-v2';
-    return t.startsWith('source-') ? t : `source-${t}`;
   }
 
   async preview(options: {
@@ -190,17 +251,15 @@ export class ConnectorMetadataService {
       return { records: [], columns: [], total: 0, stream: options.source_stream };
     }
     try {
-      const sourceType = this.normalizeSourceType(options.source_type);
       const res = await firstValueFrom(
         this.httpService.post(
           `${this.baseUrl}/preview`,
           {
-            source_type: sourceType,
-            source_config: options.source_config,
+            connection_config: options.source_config,
             source_stream: options.source_stream,
             limit: options.limit ?? 50,
           },
-          { headers: this.headers(), timeout: 30000 },
+          { headers: this.headers(), timeout: 120_000 },
         ),
       );
       return res.data ?? {};
@@ -212,29 +271,15 @@ export class ConnectorMetadataService {
     }
   }
 
-  private normalizeSourceType(type: string): string {
-    const t = type.toLowerCase();
-    if (t === 'postgres') return 'postgresql';
-    return t;
-  }
-
   async getCdcSetup(sourceType: string): Promise<object> {
-    if (!this.baseUrl) {
-      return { source_type: sourceType, message: 'ETL service not configured' };
-    }
-    try {
-      const res = await firstValueFrom(
-        this.httpService.get(`${this.baseUrl}/connectors/${encodeURIComponent(sourceType)}/cdc-setup`, {
-          headers: this.headers(),
-          timeout: 5000,
-        }),
-      );
-      return res.data;
-    } catch (err) {
-      this.logger.warn(
-        `ETL cdc-setup failed for ${sourceType}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return { source_type: sourceType, error: String(err) };
-    }
+    return {
+      source_type: sourceType,
+      instructions: [
+        'Ensure wal2json extension is installed on your PostgreSQL server',
+        'Set wal_level = logical in postgresql.conf',
+        'Restart PostgreSQL after configuration changes',
+        'The ETL server will automatically create replication slots when using LOG_BASED mode',
+      ],
+    };
   }
 }

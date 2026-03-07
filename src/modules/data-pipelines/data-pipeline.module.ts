@@ -37,6 +37,7 @@ import { OrganizationModule } from '../organizations/organization.module';
 import { PipelineController } from './pipeline.controller';
 import { SourceSchemaController } from './source-schema.controller';
 import { DestinationSchemaController } from './destination-schema.controller';
+import { InternalEtlController } from './internal.controller';
 
 // Services
 import { PipelineService } from './services/pipeline.service';
@@ -77,14 +78,14 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
-      timeout: 30000, // 30 second timeout
+      timeout: 120_000, // ETL discover/preview/sync; per-request timeout overrides when set
       maxRedirects: 5,
       headers: {
         'User-Agent': 'DataPipeline/1.0',
       },
     }),
   ],
-  controllers: [PipelineController, SourceSchemaController, DestinationSchemaController],
+  controllers: [PipelineController, SourceSchemaController, DestinationSchemaController, InternalEtlController],
   providers: [
     // Database provider using Drizzle ORM
     {

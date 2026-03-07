@@ -25,6 +25,10 @@ import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-de
 import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
 import { WriteMode } from '../dto/create-destination-schema.dto';
 import type { SchemaValidationResult, ValidationResult } from '../types/common.types';
+import { validateColumnTypeCompatibility } from '../types/common.types';
+import { PipelineRepository } from '../repositories/pipeline.repository';
+import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
+import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
 
 /**
  * Internal DTO with organization context
@@ -44,6 +48,8 @@ export class DestinationSchemaService {
     readonly _connectionService: ConnectionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
+    private readonly pipelineRepository: PipelineRepository,
+    private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
   ) {}
 
   /**
@@ -226,10 +232,16 @@ export class DestinationSchemaService {
   }
 
   /**
-   * Validate destination schema against actual database schema
-   * Note: Full validation now handled by Python service via discover-schema endpoint
+   * Validate destination schema against actual database schema.
+   * When the destination table already exists, discovers its columns via the
+   * Python ETL and compares them against the linked source schema's
+   * discoveredColumns to catch type incompatibilities early.
    */
-  async validateSchema(id: string, userId: string): Promise<SchemaValidationResult> {
+  async validateSchema(
+    id: string,
+    userId: string,
+    sourceSchemaId?: string,
+  ): Promise<SchemaValidationResult> {
     const schema = await this.destinationSchemaRepository.findById(id);
     if (!schema) {
       throw new NotFoundException(`Destination schema ${id} not found`);
@@ -245,30 +257,68 @@ export class DestinationSchemaService {
       };
     }
 
-    // Basic validation - full schema validation can be done via Python service discover-schema
     const errors: string[] = [];
     const warnings: string[] = [];
+    let missingColumns: string[] | undefined;
+    let typeMismatches: SchemaValidationResult['typeMismatches'];
 
     if (!schema.destinationTable) {
       errors.push('Destination table is required');
     }
 
-    // customSql/dbtModel only required for dbt; dlt creates tables automatically
     const schemaTransformType = (schema.transformType || 'dlt').toLowerCase();
     if (schemaTransformType === 'dbt' && !schema.customSql?.trim() && !schema.dbtModel?.trim()) {
       warnings.push('No custom SQL or dbt model defined');
+    }
+
+    // --- Column type compatibility check ---
+    if (schema.destinationTableExists && schema.destinationTable && errors.length === 0) {
+      try {
+        const sourceColumns = await this.resolveSourceColumns(
+          id,
+          schema.organizationId,
+          sourceSchemaId,
+        );
+
+        if (sourceColumns && sourceColumns.length > 0) {
+          const destColumns = await this.discoverDestinationColumns(
+            schema.dataSourceId,
+            schema.organizationId,
+            schema.destinationSchema ?? 'public',
+            schema.destinationTable,
+            userId,
+          );
+
+          if (destColumns && destColumns.length > 0) {
+            const compat = validateColumnTypeCompatibility(
+              sourceColumns.map((c) => ({ name: c.name, dataType: c.dataType })),
+              destColumns.map((c) => ({ name: c.name, dataType: c.dataType })),
+            );
+            errors.push(...compat.errors);
+            warnings.push(...compat.warnings);
+            if (compat.typeMismatches.length > 0) typeMismatches = compat.typeMismatches;
+            if (compat.missingColumns.length > 0) missingColumns = compat.missingColumns;
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Column type check skipped: ${err?.message ?? err}`);
+        warnings.push('Could not verify column type compatibility — validation will be retried at sync time');
+      }
     }
 
     const validationResult: SchemaValidationResult = {
       valid: errors.length === 0,
       errors,
       warnings: warnings.length > 0 ? warnings : undefined,
+      missingColumns,
+      typeMismatches,
     };
 
-    // Update schema with validation result (include validatedAt for DestinationSchemaValidationResult)
     const resultWithTimestamp: DestinationSchemaValidationResult = {
       ...validationResult,
       warnings: validationResult.warnings ?? [],
+      missingColumns: validationResult.missingColumns,
+      typeMismatches: validationResult.typeMismatches,
       validatedAt: new Date().toISOString(),
     };
     await this.destinationSchemaRepository.update(id, {
@@ -276,7 +326,6 @@ export class DestinationSchemaService {
       lastValidatedAt: new Date(),
     });
 
-    // Log activity
     await this.activityLogService.logActivity({
       organizationId: schema.organizationId,
       userId,
@@ -287,10 +336,65 @@ export class DestinationSchemaService {
       metadata: {
         valid: validationResult.valid,
         errorsCount: validationResult.errors.length,
+        typeMismatchCount: typeMismatches?.length ?? 0,
       },
     });
 
     return validationResult;
+  }
+
+  /**
+   * Resolve source columns for the pipeline that references this destination schema.
+   * Tries the explicitly-provided sourceSchemaId first, then looks up the pipeline.
+   */
+  private async resolveSourceColumns(
+    destSchemaId: string,
+    organizationId: string,
+    sourceSchemaId?: string,
+  ): Promise<DiscoveredColumn[] | null> {
+    if (sourceSchemaId) {
+      const src = await this.sourceSchemaRepository.findById(sourceSchemaId);
+      if (src?.discoveredColumns) return src.discoveredColumns as DiscoveredColumn[];
+    }
+
+    const pipelinesForOrg = await this.pipelineRepository.findByOrganization(organizationId);
+    const linked = pipelinesForOrg.find((p) => p.destinationSchemaId === destSchemaId);
+    if (!linked?.sourceSchemaId) return null;
+
+    const src = await this.sourceSchemaRepository.findById(linked.sourceSchemaId);
+    return (src?.discoveredColumns as DiscoveredColumn[]) ?? null;
+  }
+
+  /**
+   * Discover the actual column types of an existing destination table via the
+   * Python ETL /discover endpoint.
+   */
+  private async discoverDestinationColumns(
+    dataSourceId: string,
+    organizationId: string,
+    destSchema: string,
+    destTable: string,
+    userId: string,
+  ): Promise<Array<{ name: string; dataType: string }>> {
+    const connectionConfig = await this._connectionService.getDecryptedConnection(
+      organizationId,
+      dataSourceId,
+      'system',
+    );
+
+    const fakeSourceSchema = {
+      sourceSchema: destSchema,
+      sourceTable: destTable,
+    } as any;
+
+    const result = await this._pythonETLService.discoverSchema({
+      sourceSchema: fakeSourceSchema,
+      connectionConfig,
+      organizationId,
+      userId,
+    });
+
+    return result.columns.map((c) => ({ name: c.name, dataType: c.dataType }));
   }
 
   /**

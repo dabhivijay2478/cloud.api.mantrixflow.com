@@ -127,6 +127,12 @@ export const dataSourceConnections = pgTable(
     // Connection test results
     testResult: jsonb('test_result'),
 
+    // Singer CDC fields
+    collectionMethod: varchar('collection_method', { length: 50 }).default('full_refresh'),
+    replicationSlotName: varchar('replication_slot_name', { length: 63 }),
+    cdcSlotHealth: jsonb('cdc_slot_health'),
+    schemaEvolutionLog: jsonb('schema_evolution_log'),
+
     // Timestamps
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
