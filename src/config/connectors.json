@@ -4,6 +4,8 @@
       "id": "source-postgres",
       "label": "PostgreSQL",
       "type": "postgres",
+      "aliases": ["postgresql", "pg", "pgvector", "redshift"],
+      "registry_type": "postgres",
       "category": "Database",
       "cdc": true,
       "cdc_providers": [
@@ -217,7 +219,9 @@
     {
       "id": "postgres",
       "label": "PostgreSQL",
-      "type": "postgres"
+      "type": "postgres",
+      "aliases": ["postgresql", "pg", "pgvector", "redshift", "target-postgres", "destination-postgres"],
+      "registry_type": "postgres"
     }
   ]
 }

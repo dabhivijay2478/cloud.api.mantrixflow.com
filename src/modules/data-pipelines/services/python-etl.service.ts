@@ -3,16 +3,17 @@
  * HTTP client for calling Python FastAPI Singer-based ETL microservice
  */
 
-import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { normalizeEtlBaseUrl } from '../../../common/utils/etl-url';
-import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
-import { ConnectionService } from '../../data-sources/connection.service';
-import type { ColumnInfo, IntrospectedColumn } from '../types/common.types';
-import type { PipelineSourceSchema, PipelineDestinationSchema } from '../../../database/schemas';
+import type { PipelineDestinationSchema, PipelineSourceSchema } from '../../../database/schemas';
 import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
+import { resolveSourceConnectorType } from '../../connectors/utils/connector-resolver';
+import { ConnectionService } from '../../data-sources/connection.service';
+import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import type { ColumnInfo, IntrospectedColumn } from '../types/common.types';
 import { parseTransformOutputMappings } from '../utils/transform-parser';
 
 const DEFAULT_DISCOVER_TIMEOUT_MS = 120_000;
@@ -274,9 +275,7 @@ export class PythonETLService {
     }
     // 2. Fall back to discovered columns (tap may use "string" for UUID)
     if (Object.keys(result).length === 0 && discoveredColumns?.length) {
-      const srcMap = new Map(
-        discoveredColumns.map((c) => [c.name.toLowerCase(), c.dataType]),
-      );
+      const srcMap = new Map(discoveredColumns.map((c) => [c.name.toLowerCase(), c.dataType]));
       for (const [outCol, srcCol] of mappings) {
         const dataType = srcMap.get(srcCol.toLowerCase());
         if (!dataType) continue;
@@ -371,7 +370,8 @@ export class PythonETLService {
     const nestjsCallbackUrl = `${this.nestjsInternalUrl}/api/internal/etl-callback`;
     const nestjsStateUrl = `${this.nestjsInternalUrl}/api/internal/singer-state`;
 
-    const emitMethod = writeMode === 'upsert' ? 'upsert' : writeMode === 'replace' ? 'replace' : 'append';
+    const emitMethod =
+      writeMode === 'upsert' ? 'upsert' : writeMode === 'replace' ? 'replace' : 'append';
 
     let introspectedSource: { columns: IntrospectedColumn[] } | null = null;
     let introspectedDest: { columns: IntrospectedColumn[] } | null = null;
@@ -423,9 +423,8 @@ export class PythonETLService {
       transform_script: destinationSchema.transformScript || undefined,
       output_column_sql_types: outputColumnSqlTypes || undefined,
       emit_method: emitMethod,
-      upsert_key: upsertKey != null
-        ? (Array.isArray(upsertKey) ? upsertKey : [upsertKey])
-        : undefined,
+      upsert_key:
+        upsertKey != null ? (Array.isArray(upsertKey) ? upsertKey : [upsertKey]) : undefined,
       hard_delete: hardDelete ?? false,
       nestjs_callback_url: nestjsCallbackUrl,
       nestjs_state_url: nestjsStateUrl,
@@ -543,9 +542,7 @@ export class PythonETLService {
 
   /** Map connection type to Singer registry key. Only PostgreSQL is supported. */
   private toRegistryType(type: string): string {
-    const t = (type || 'postgres').toLowerCase();
-    if (t === 'postgres' || t === 'postgresql' || t === 'pgvector' || t === 'redshift') return 'postgres';
-    throw new Error('Only PostgreSQL is supported');
+    return resolveSourceConnectorType(type).registryType;
   }
 
   /**

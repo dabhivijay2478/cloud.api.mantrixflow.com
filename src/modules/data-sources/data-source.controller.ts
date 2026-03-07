@@ -35,7 +35,6 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common';
-import type { Request as ExpressRequest } from 'express';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -44,6 +43,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Request as ExpressRequest } from 'express';
 import {
   createDeleteResponse,
   createListResponse,
@@ -52,18 +52,16 @@ import {
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { ConnectorMetadataService } from '../connectors/connector-metadata.service';
+import { resolveSourceConnectorType } from '../connectors/utils/connector-resolver';
 import { CdcVerifyService } from './cdc-verify.service';
-import { DataSourceService, type CreateDataSourceDto } from './data-source.service';
-import { ConnectionService, type CreateConnectionDto } from './connection.service';
+import {
+  ConnectionService,
+  type CreateConnectionDto,
+  type CreateDataSourceWithConnectionDto,
+} from './connection.service';
+import { type CreateDataSourceDto, DataSourceService } from './data-source.service';
 
 type ExpressRequestType = ExpressRequest;
-
-function toEtlSourceType(type: string): string {
-  const t = (type ?? 'postgres').toLowerCase();
-  if (t === 'postgres' || t === 'postgresql' || t === 'source-postgres' || t === 'pgvector' || t === 'redshift')
-    return 'source-postgres';
-  throw new BadRequestException('Only PostgreSQL is supported');
-}
 
 @ApiTags('data-sources')
 @ApiBearerAuth('JWT-auth')
@@ -116,8 +114,7 @@ export class DataSourceController {
       name,
       description: (body.description as string | undefined) || undefined,
       sourceType,
-      connectorRole:
-        connectorRole === 'destination' ? 'destination' : undefined,
+      connectorRole: connectorRole === 'destination' ? 'destination' : undefined,
       metadata:
         body.metadata && typeof body.metadata === 'object'
           ? (body.metadata as Record<string, unknown>)
@@ -126,6 +123,71 @@ export class DataSourceController {
 
     const dataSource = await this.dataSourceService.createDataSource(organizationId, userId, dto);
     return createSuccessResponse(dataSource, 'Data source created successfully');
+  }
+
+  /**
+   * Create data source and connection atomically (prevents orphaned data sources)
+   */
+  @Post('with-connection')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create data source with connection',
+    description:
+      'Create a data source and its connection in a single transaction. Use this when adding a new connector to avoid orphaned records on failure.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiResponse({ status: 201, description: 'Data source and connection created successfully' })
+  async createDataSourceWithConnection(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const name = body.name as string | undefined;
+    if (!name || typeof name !== 'string') {
+      throw new BadRequestException('name is required');
+    }
+
+    const connectionType = (body.connectionType || body.connection_type) as string | undefined;
+    if (!connectionType || typeof connectionType !== 'string') {
+      throw new BadRequestException('connectionType (or connection_type) is required');
+    }
+
+    const config = body.config as Record<string, unknown> | undefined;
+    if (!config || typeof config !== 'object') {
+      throw new BadRequestException('config is required');
+    }
+
+    const connectorRole = (body.connectorRole || body.connector_role) as
+      | 'source'
+      | 'destination'
+      | undefined;
+
+    const dto: CreateDataSourceWithConnectionDto = {
+      name: name.trim(),
+      connectionType,
+      connectorRole: connectorRole === 'destination' ? 'destination' : undefined,
+      config: config as Record<string, any>,
+    };
+
+    const result = await this.connectionService.createDataSourceWithConnection(
+      organizationId,
+      userId,
+      dto,
+    );
+
+    return createSuccessResponse(
+      {
+        id: result.dataSource.id,
+        name: result.dataSource.name,
+        connection: result.connection,
+      },
+      'Data source and connection created successfully',
+    );
   }
 
   /**
@@ -223,7 +285,11 @@ export class DataSourceController {
   @ApiResponse({ status: 200, description: 'Connection test result' })
   async testConnectionConfig(
     @Param('organizationId', ParseUUIDPipe) _organizationId: string,
-    @Body() body: { connectionType?: string; connection_type?: string; config?: Record<string, unknown> },
+    @Body() body: {
+      connectionType?: string;
+      connection_type?: string;
+      config?: Record<string, unknown>;
+    },
   ) {
     const connectionType = (body.connectionType ?? body.connection_type) as string;
     const config = body.config as Record<string, unknown>;
@@ -233,10 +299,8 @@ export class DataSourceController {
     if (!config || typeof config !== 'object') {
       throw new BadRequestException('config is required');
     }
-    const normalizedType = connectionType.toLowerCase();
-    const effectiveType = normalizedType === 'postgresql' ? 'postgres' : normalizedType;
     const result = await this.connectionService.testConnectionConfig(
-      effectiveType,
+      connectionType,
       config as Record<string, any>,
     );
     return createSuccessResponse(result);
@@ -370,7 +434,7 @@ export class DataSourceController {
       );
     }
 
-    const sourceType = toEtlSourceType(dataSource.sourceType);
+    const sourceType = resolveSourceConnectorType(dataSource.sourceType).registryType;
     const schemaName = (body.schema_name ?? body.schemaName ?? 'public') as string;
     const tableName = (body.table_name ?? body.tableName) as string | undefined;
     const query = body.query as string | undefined;
@@ -421,7 +485,7 @@ export class DataSourceController {
       userId,
     );
 
-    const sourceType = toEtlSourceType(dataSource.sourceType);
+    const sourceType = resolveSourceConnectorType(dataSource.sourceType).registryType;
     const sourceStream = body.source_stream as string | undefined;
     const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
 
@@ -486,7 +550,7 @@ export class DataSourceController {
       sourceId,
       userId,
     );
-    const sourceType = toEtlSourceType(dataSource.sourceType);
+    const sourceType = resolveSourceConnectorType(dataSource.sourceType).registryType;
 
     const result = await this.connectorMetadataService.testConnection({
       source_type: sourceType,
@@ -531,7 +595,7 @@ export class DataSourceController {
       sourceId,
       userId,
     );
-    const sourceType = toEtlSourceType(dataSource.sourceType);
+    const sourceType = resolveSourceConnectorType(dataSource.sourceType).registryType;
 
     const discoverResult = await this.connectorMetadataService.discover({
       source_type: sourceType,
@@ -565,11 +629,7 @@ export class DataSourceController {
       throw new Error('User not authenticated');
     }
 
-    const result = await this.cdcVerifyService.getCdcStatus(
-      organizationId,
-      sourceId,
-      userId,
-    );
+    const result = await this.cdcVerifyService.getCdcStatus(organizationId, sourceId, userId);
 
     return createSuccessResponse(result);
   }
@@ -581,7 +641,8 @@ export class DataSourceController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Verify CDC step',
-    description: 'Verify a single CDC prerequisite step (wal_level, wal2json, replication_role, replication_test)',
+    description:
+      'Verify a single CDC prerequisite step (wal_level, wal2json, replication_role, replication_test)',
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })

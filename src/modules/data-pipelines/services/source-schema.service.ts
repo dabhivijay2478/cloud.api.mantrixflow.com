@@ -14,11 +14,12 @@ import {
 import type { PipelineSourceSchema } from '../../../database/schemas';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { SOURCE_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
-import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import { normalizeConnectorType } from '../../connectors/utils/connector-resolver';
 import { ConnectionService } from '../../data-sources/connection.service';
+import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import type { CreateSourceSchemaDto, UpdateSourceSchemaDto } from '../dto';
+import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import type { ValidationResult } from '../types/common.types';
 
 /**
@@ -45,17 +46,7 @@ export class SourceSchemaService {
    * e.g. "postgres" | "pg" | "pgvector" | "redshift" → "postgresql"
    */
   private normalizeSourceType(type: string): string {
-    const t = type.toLowerCase().trim();
-    if (
-      t === 'postgres' ||
-      t === 'pg' ||
-      t === 'pgvector' ||
-      t === 'redshift' ||
-      t === 'postgresql'
-    ) {
-      return 'postgresql';
-    }
-    return t;
+    return normalizeConnectorType(type);
   }
 
   /**

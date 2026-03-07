@@ -1,6 +1,10 @@
 /**
  * Drizzle Database Configuration
  * Factory function to create Drizzle database instance with ConfigService
+ *
+ * Uses same connection logic as migrate.ts: prefer DATABASE_DIRECT_URL or port 5432
+ * when DATABASE_URL uses pooler (6543), so that transactions work and schema matches
+ * migrations.
  */
 
 import type { ConfigService } from '@nestjs/config';
@@ -8,10 +12,17 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schemas';
 
 export const createDrizzleDatabase = (configService: ConfigService) => {
-  const connectionString = configService.get<string>('DATABASE_URL');
+  const databaseUrl = configService.get<string>('DATABASE_URL');
+  const directUrl = configService.get<string>('DATABASE_DIRECT_URL');
+
+  const connectionString =
+    directUrl ||
+    (databaseUrl?.includes(':6543')
+      ? databaseUrl.replace(':6543', ':5432')
+      : databaseUrl);
 
   if (!connectionString) {
-    throw new Error('DATABASE_URL environment variable is not set');
+    throw new Error('DATABASE_URL or DATABASE_DIRECT_URL environment variable is required');
   }
 
   // Use require for postgres to handle CommonJS properly

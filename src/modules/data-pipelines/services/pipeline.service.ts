@@ -13,46 +13,50 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ActivityLoggerService } from '../../../common/logger';
+import {
+  areSourceDbMutationsAllowed,
+  SOURCE_DB_MUTATION_POLICY_MESSAGE,
+} from '../../../common/utils/source-db-mutation-policy';
 import type {
-  PipelineDestinationSchema,
-  PipelineSourceSchema,
   Pipeline,
+  PipelineDestinationSchema,
   PipelineRun,
+  PipelineSourceSchema,
 } from '../../../database/schemas';
+import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import {
   PIPELINE_ACTIONS,
   PIPELINE_RUN_ACTIONS,
 } from '../../activity-logs/constants/activity-log-types';
-import { DataSourceConnectionRepository } from '../../data-sources/repositories/data-source-connection.repository';
-import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
+import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import { DataSourceConnectionRepository } from '../../data-sources/repositories/data-source-connection.repository';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { PythonETLService } from './python-etl.service';
-import { PipelineLifecycleService } from './pipeline-lifecycle.service';
+import { PgmqQueueService } from '../../queue';
+import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
+import { ScheduleType } from '../dto/create-pipeline.dto';
+import { PipelineRepository } from '../repositories/pipeline.repository';
+import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
+import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import type {
-  DryRunResult,
-  ValidationResult,
   BatchOptions,
-  Transformation,
+  DryRunResult,
   SchemaValidationResult,
+  Transformation,
+  ValidationResult,
 } from '../types/common.types';
 import {
   checkTypeCompatibility,
   singerTypeToPgType,
   validateSingerVsDestination,
 } from '../types/common.types';
-import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
-import { DestinationSchemaService } from './destination-schema.service';
 import { PipelineStatus } from '../types/pipeline-lifecycle.types';
-import { PipelineRepository } from '../repositories/pipeline.repository';
-import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
-import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
-import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
-import { ScheduleType } from '../dto/create-pipeline.dto';
-import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PgmqQueueService } from '../../queue';
 import { parseTransformOutputMappings } from '../utils/transform-parser';
+import { DestinationSchemaService } from './destination-schema.service';
+import { PipelineLifecycleService } from './pipeline-lifecycle.service';
+import { PipelineSchedulerService } from './pipeline-scheduler.service';
+import { PythonETLService } from './python-etl.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -61,7 +65,6 @@ export interface CreatePipelineInput extends CreatePipelineDto {
   organizationId: string;
   userId: string;
 }
-
 
 @Injectable()
 export class PipelineService {
@@ -139,11 +142,7 @@ export class PipelineService {
     // allow_column_alter=False) will crash on any type mismatch.  We
     // detect this upfront so the user gets a clear 400 error.
     if (destinationSchema.destinationTableExists && sourceSchema.discoveredColumns) {
-      await this.validateSingerVsDestinationTypes(
-        sourceSchema,
-        destinationSchema,
-        organizationId,
-      );
+      await this.validateSingerVsDestinationTypes(sourceSchema, destinationSchema, organizationId);
     }
 
     // Determine schedule type
@@ -419,10 +418,11 @@ export class PipelineService {
     }
 
     // CDC verification guard: block LOG_BASED/INCREMENTAL_SYNC when CDC not verified
-    const isCdcOrLogBased =
-      pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
-    const needsInitialSync =
-      isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
+    const isCdcOrLogBased = pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+    if (isCdcOrLogBased && !areSourceDbMutationsAllowed()) {
+      throw new BadRequestException(SOURCE_DB_MUTATION_POLICY_MESSAGE);
+    }
+    const needsInitialSync = isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
     if (isCdcOrLogBased && !needsInitialSync) {
       const sourceSchema = pipelineWithSchemas.sourceSchema;
       if (sourceSchema?.dataSourceId) {
@@ -471,10 +471,8 @@ export class PipelineService {
     // Enqueue to PGMQ — PipelineJobProcessor will dequeue and dispatch to ETL pod
     // Route by syncMode: full → FullSync; cdc/log_based → FullSync if no initial sync yet, else IncrementalSync
     if (this.pipelineQueueService.isReady()) {
-      const isCdcOrLogBased =
-        pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
-      const needsInitialSync =
-        isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
+      const isCdcOrLogBased = pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+      const needsInitialSync = isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
       const isIncrementalCursor = pipeline.syncMode === 'incremental';
 
       if (isCdcOrLogBased && needsInitialSync) {
@@ -486,7 +484,9 @@ export class PipelineService {
           userId,
           triggerType,
         });
-        this.logger.log(`Pipeline ${pipelineId} run ${run.id} enqueued to FULL_SYNC (Run Initial Sync)`);
+        this.logger.log(
+          `Pipeline ${pipelineId} run ${run.id} enqueued to FULL_SYNC (Run Initial Sync)`,
+        );
       } else if (isCdcOrLogBased || isIncrementalCursor) {
         await this.pipelineQueueService.enqueueIncrementalSync({
           pipelineId,
@@ -528,7 +528,11 @@ export class PipelineService {
    * Get sync state (cursor/LSN/binlog) for incremental/CDC pipelines.
    * NestJS owns state — stored in pipeline.checkpoint.
    */
-  async getSyncState(pipelineId: string, organizationId: string, userId: string): Promise<{
+  async getSyncState(
+    pipelineId: string,
+    organizationId: string,
+    userId: string,
+  ): Promise<{
     pipeline_id: string;
     state: Record<string, unknown> | null;
     message: string;
@@ -550,7 +554,11 @@ export class PipelineService {
   /**
    * Reset sync state — next run will do a full sync.
    */
-  async resetSyncState(pipelineId: string, organizationId: string, userId: string): Promise<{
+  async resetSyncState(
+    pipelineId: string,
+    organizationId: string,
+    userId: string,
+  ): Promise<{
     pipeline_id: string;
     deleted: boolean;
     message: string;
@@ -771,9 +779,7 @@ export class PipelineService {
     });
 
     if (preview.records.length > 0) {
-      this.logger.log(
-        `Dry run preview sample: ${JSON.stringify(preview.records[0], null, 2)}`,
-      );
+      this.logger.log(`Dry run preview sample: ${JSON.stringify(preview.records[0], null, 2)}`);
     }
 
     return {
@@ -877,9 +883,7 @@ export class PipelineService {
 
       const src = colMap.get(t.sourceColumn.toLowerCase());
       if (!src) {
-        messages.push(
-          `Cast on "${t.sourceColumn}": source column not found in discovered schema`,
-        );
+        messages.push(`Cast on "${t.sourceColumn}": source column not found in discovered schema`);
         continue;
       }
 
@@ -944,9 +948,7 @@ export class PipelineService {
         tableName: destTable,
       });
     } catch (err: any) {
-      this.logger.warn(
-        `Destination introspection failed (non-blocking): ${err?.message}`,
-      );
+      this.logger.warn(`Destination introspection failed (non-blocking): ${err?.message}`);
       return;
     }
 
@@ -957,9 +959,7 @@ export class PipelineService {
     const transformScript = destinationSchema.transformScript;
     if (transformScript) {
       const mappings = parseTransformOutputMappings(transformScript);
-      const srcMap = new Map(
-        discoveredColumns.map((c) => [c.name.toLowerCase(), c]),
-      );
+      const srcMap = new Map(discoveredColumns.map((c) => [c.name.toLowerCase(), c]));
       singerCols = [];
       for (const [outCol, srcCol] of mappings) {
         const src = srcMap.get(srcCol.toLowerCase());
@@ -979,10 +979,7 @@ export class PipelineService {
       }));
     }
 
-    const { errors, mismatches } = validateSingerVsDestination(
-      singerCols,
-      introspected.columns,
-    );
+    const { errors, mismatches } = validateSingerVsDestination(singerCols, introspected.columns);
 
     if (errors.length > 0) {
       this.logger.error(
@@ -1066,5 +1063,4 @@ export class PipelineService {
         return new Date(now.getTime() + 2 * 60 * 1000);
     }
   }
-
 }

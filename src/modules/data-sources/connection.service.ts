@@ -4,26 +4,28 @@
  * Handles encryption, validation, testing, and schema discovery for all connection types
  */
 
+import { HttpService } from '@nestjs/axios';
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
 import { Pool } from 'pg';
-import { normalizeEtlBaseUrl } from '../../common/utils/etl-url';
+import { firstValueFrom } from 'rxjs';
 import { EncryptionService } from '../../common/encryption/encryption.service';
-import type { DataSourceConnection } from '../../database/schemas/data-sources';
-import { ActivityLogService } from '../activity-logs/activity-log.service';
-import { CONNECTION_ACTIONS } from '../activity-logs/constants/activity-log-types';
-import { OrganizationRoleService } from '../organizations/services/organization-role.service';
-import { DataSourceRepository } from './repositories/data-source.repository';
-import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
+import { normalizeEtlBaseUrl } from '../../common/utils/etl-url';
+import { areSourceDbMutationsAllowed } from '../../common/utils/source-db-mutation-policy';
+import type { DrizzleDatabase } from '../../database/drizzle/database';
+import {
+  type DataSourceConnection,
+  dataSourceConnections,
+  dataSources,
+} from '../../database/schemas/data-sources';
 import type {
   APIConfig,
   BigQueryConfig,
@@ -31,9 +33,29 @@ import type {
   S3Config,
   SnowflakeConfig,
 } from '../../database/schemas/data-sources/data-source-connections.schema';
+import { ActivityLogService } from '../activity-logs/activity-log.service';
+import {
+  CONNECTION_ACTIONS,
+  DATASOURCE_ACTIONS,
+} from '../activity-logs/constants/activity-log-types';
+import {
+  normalizeConnectorType,
+  resolveSourceConnectorType,
+} from '../connectors/utils/connector-resolver';
+import { OrganizationRoleService } from '../organizations/services/organization-role.service';
+import { UserService } from '../users/user.service';
+import { DataSourceRepository } from './repositories/data-source.repository';
+import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
 
 export interface CreateConnectionDto {
   connectionType: string;
+  config: Record<string, any>;
+}
+
+export interface CreateDataSourceWithConnectionDto {
+  name: string;
+  connectionType: string;
+  connectorRole?: 'source' | 'destination';
   config: Record<string, any>;
 }
 
@@ -48,11 +70,13 @@ export class ConnectionService implements OnModuleInit {
   private readonly pythonServiceUrl: string;
 
   constructor(
+    @Inject('DRIZZLE_DB') private readonly db: DrizzleDatabase,
     private readonly connectionRepository: DataSourceConnectionRepository,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly encryptionService: EncryptionService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
+    private readonly userService: UserService,
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
@@ -67,6 +91,10 @@ export class ConnectionService implements OnModuleInit {
     }
   }
 
+  private get testConnectionTimeoutMs(): number {
+    return this.configService.get<number>('ETL_TEST_CONNECTION_TIMEOUT_MS') ?? 60_000;
+  }
+
   onModuleInit(): void {
     // Best-effort background migration for legacy plaintext credentials.
     void this.migrateLegacyConnectionConfigs();
@@ -77,8 +105,9 @@ export class ConnectionService implements OnModuleInit {
    */
   private encryptConfig(connectionType: string, config: Record<string, any>): Record<string, any> {
     const encrypted = { ...config };
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
 
-    switch (connectionType) {
+    switch (normalizedType) {
       case 'postgres':
         if (encrypted.password) {
           encrypted.password = this.encryptionService.encrypt(encrypted.password);
@@ -245,8 +274,9 @@ export class ConnectionService implements OnModuleInit {
     config: Record<string, any>,
   ): Record<string, any> {
     const normalized = { ...config };
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
 
-    switch (connectionType) {
+    switch (normalizedType) {
       case 'postgres':
         if (normalized.password) {
           normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
@@ -396,7 +426,8 @@ export class ConnectionService implements OnModuleInit {
 
   private hasLegacySensitiveValues(connectionType: string, config: Record<string, any>): boolean {
     const checks: unknown[] = [];
-    switch (connectionType) {
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
+    switch (normalizedType) {
       case 'postgres':
         checks.push(
           config.password,
@@ -485,42 +516,43 @@ export class ConnectionService implements OnModuleInit {
 
   private decryptConfig(connectionType: string, config: Record<string, any>): Record<string, any> {
     const decrypted = { ...config };
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
 
     try {
-      switch (connectionType) {
+      switch (normalizedType) {
         case 'postgres':
           if (decrypted.password) {
             decrypted.password = this.decryptFieldWithLegacySupport(
               decrypted.password,
-              connectionType,
+              normalizedType,
               'password',
             );
           }
           if (decrypted.ssl?.ca_cert) {
             decrypted.ssl.ca_cert = this.decryptFieldWithLegacySupport(
               decrypted.ssl.ca_cert,
-              connectionType,
+              normalizedType,
               'ssl.ca_cert',
             );
           }
           if (decrypted.ssl?.client_cert) {
             decrypted.ssl.client_cert = this.decryptFieldWithLegacySupport(
               decrypted.ssl.client_cert,
-              connectionType,
+              normalizedType,
               'ssl.client_cert',
             );
           }
           if (decrypted.ssl?.client_key) {
             decrypted.ssl.client_key = this.decryptFieldWithLegacySupport(
               decrypted.ssl.client_key,
-              connectionType,
+              normalizedType,
               'ssl.client_key',
             );
           }
           if (decrypted.ssh_tunnel?.private_key) {
             decrypted.ssh_tunnel.private_key = this.decryptFieldWithLegacySupport(
               decrypted.ssh_tunnel.private_key,
-              connectionType,
+              normalizedType,
               'ssh_tunnel.private_key',
             );
           }
@@ -529,14 +561,14 @@ export class ConnectionService implements OnModuleInit {
           if (decrypted.access_key_id) {
             decrypted.access_key_id = this.decryptFieldWithLegacySupport(
               decrypted.access_key_id,
-              connectionType,
+              normalizedType,
               'access_key_id',
             );
           }
           if (decrypted.secret_access_key) {
             decrypted.secret_access_key = this.decryptFieldWithLegacySupport(
               decrypted.secret_access_key,
-              connectionType,
+              normalizedType,
               'secret_access_key',
             );
           }
@@ -545,14 +577,14 @@ export class ConnectionService implements OnModuleInit {
           if (decrypted.auth_token) {
             decrypted.auth_token = this.decryptFieldWithLegacySupport(
               decrypted.auth_token,
-              connectionType,
+              normalizedType,
               'auth_token',
             );
           }
           if (decrypted.api_key) {
             decrypted.api_key = this.decryptFieldWithLegacySupport(
               decrypted.api_key,
-              connectionType,
+              normalizedType,
               'api_key',
             );
           }
@@ -561,7 +593,7 @@ export class ConnectionService implements OnModuleInit {
           if (decrypted.credentials?.private_key) {
             decrypted.credentials.private_key = this.decryptFieldWithLegacySupport(
               decrypted.credentials.private_key,
-              connectionType,
+              normalizedType,
               'credentials.private_key',
             );
           }
@@ -570,13 +602,13 @@ export class ConnectionService implements OnModuleInit {
           if (decrypted.password) {
             decrypted.password = this.decryptFieldWithLegacySupport(
               decrypted.password,
-              connectionType,
+              normalizedType,
               'password',
             );
           }
           break;
         default:
-          this.decryptApiConnectorFields(decrypted, connectionType);
+          this.decryptApiConnectorFields(decrypted, normalizedType);
           break;
       }
     } catch (error) {
@@ -595,8 +627,9 @@ export class ConnectionService implements OnModuleInit {
    */
   maskSensitiveFields(connectionType: string, config: Record<string, any>): Record<string, any> {
     const masked = JSON.parse(JSON.stringify(config)); // Deep clone
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
 
-    switch (connectionType) {
+    switch (normalizedType) {
       case 'postgres':
         if (masked.password) {
           masked.password = '****';
@@ -664,7 +697,8 @@ export class ConnectionService implements OnModuleInit {
    * Airbyte connectors use generic validation when no specific validator exists.
    */
   validateConnectionConfig(connectionType: string, config: Record<string, any>): void {
-    switch (connectionType) {
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
+    switch (normalizedType) {
       case 'postgres':
         this.validatePostgresConfig(config as PostgresConfig);
         break;
@@ -742,6 +776,127 @@ export class ConnectionService implements OnModuleInit {
   }
 
   /**
+   * Create data source and connection atomically in a single transaction.
+   * Prevents orphaned data sources when connection creation fails.
+   * AUTHORIZATION: Only ADMIN or OWNER can create data sources
+   */
+  async createDataSourceWithConnection(
+    organizationId: string,
+    userId: string,
+    dto: CreateDataSourceWithConnectionDto,
+  ): Promise<{ dataSource: { id: string; name: string }; connection: DataSourceConnection }> {
+    // Ensure user exists
+    try {
+      await this.userService.getUserById(userId);
+    } catch (e) {
+      this.logger.warn(`User ${userId} not found: ${e instanceof Error ? e.message : String(e)}`);
+      throw new BadRequestException('User not found. Please complete sign-in and try again.');
+    }
+
+    // AUTHORIZATION
+    const canManage = await this.roleService.canManageDataSources(userId, organizationId);
+    if (!canManage) {
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can create data sources');
+    }
+
+    // Check for duplicate name
+    const existing = await this.dataSourceRepository.findByName(organizationId, dto.name);
+    if (existing && !existing.deletedAt) {
+      throw new BadRequestException(
+        `Data source with name "${dto.name}" already exists in this organization`,
+      );
+    }
+
+    const connectionType = dto.connectionType;
+    const sourceType = connectionType.toLowerCase();
+    const normalizedConfig = this.normalizeIncomingConfig(connectionType, dto.config);
+    this.validateConnectionConfig(connectionType, normalizedConfig);
+    const encryptedConfig = this.encryptConfig(connectionType, normalizedConfig);
+
+    const connectorRole = dto.connectorRole === 'destination' ? 'destination' : 'source';
+
+    let result: { dataSource: { id: string; name: string }; connection: DataSourceConnection };
+    try {
+      result = await this.db.transaction(async (tx) => {
+        const [dataSource] = await tx
+          .insert(dataSources)
+          .values({
+            organizationId,
+            name: dto.name,
+            description: `Connection for ${dto.name}`,
+            sourceType,
+            connectorRole,
+            isActive: true,
+            metadata: null,
+            createdBy: userId,
+          })
+          .returning();
+
+        if (!dataSource) {
+          throw new BadRequestException('Failed to create data source');
+        }
+
+        const [connection] = await tx
+          .insert(dataSourceConnections)
+          .values({
+            dataSourceId: dataSource.id,
+            connectionType,
+            config: encryptedConfig,
+            status: 'inactive',
+          })
+          .returning();
+
+        if (!connection) {
+          throw new BadRequestException('Failed to create connection');
+        }
+
+        return { dataSource, connection };
+      });
+    } catch (err: unknown) {
+      const cause = (err as { cause?: Error })?.cause ?? (err as Error);
+      const causeMessage = cause?.message ?? String(err);
+      const causeCode = (cause as { code?: string })?.code;
+      this.logger.error('createDataSourceWithConnection failed', {
+        cause: causeMessage,
+        code: causeCode,
+        stack: cause?.stack,
+      });
+      throw new BadRequestException(
+        `Connection creation failed: ${causeMessage}. Ensure database migrations are applied (run: bun run db:migrate).`,
+      );
+    }
+
+    // Log activity (non-transactional, best-effort)
+    try {
+      await this.activityLogService.logDataSourceAction(
+        organizationId,
+        userId,
+        DATASOURCE_ACTIONS.CREATED,
+        result.dataSource.id,
+        result.dataSource.name,
+        { sourceType },
+      );
+      await this.activityLogService.logConnectionAction(
+        organizationId,
+        userId,
+        CONNECTION_ACTIONS.CREATED,
+        result.connection.id,
+        result.dataSource.name,
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to log activity',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    return {
+      dataSource: { id: result.dataSource.id, name: result.dataSource.name },
+      connection: result.connection,
+    };
+  }
+
+  /**
    * Create or update connection for a data source
    * AUTHORIZATION: Only ADMIN or OWNER can configure connections
    */
@@ -762,8 +917,7 @@ export class ConnectionService implements OnModuleInit {
 
     // Verify connection type matches data source type (normalize aliases like "postgres" → "postgresql")
     if (
-      this.normalizeSourceTypeForPython(dto.connectionType) !==
-      this.normalizeSourceTypeForPython(dataSource.sourceType)
+      normalizeConnectorType(dto.connectionType) !== normalizeConnectorType(dataSource.sourceType)
     ) {
       throw new BadRequestException(
         `Connection type "${dto.connectionType}" does not match data source type "${dataSource.sourceType}"`,
@@ -978,7 +1132,7 @@ export class ConnectionService implements OnModuleInit {
 
     // Call ETL cleanup to drop replication slot before deleting (for postgres CDC)
     const slotName = connection.replicationSlotName;
-    if (slotName && this.pythonServiceUrl) {
+    if (slotName && this.pythonServiceUrl && areSourceDbMutationsAllowed()) {
       try {
         const decryptedConfig = this.decryptConfig(
           connection.connectionType,
@@ -1004,6 +1158,10 @@ export class ConnectionService implements OnModuleInit {
           `CDC cleanup failed (proceeding with delete): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    } else if (slotName && !areSourceDbMutationsAllowed()) {
+      this.logger.log(
+        `Skipping replication slot cleanup for connection ${connection.id} because source DB mutations are disabled by policy`,
+      );
     }
 
     // Delete connection
@@ -1063,11 +1221,7 @@ export class ConnectionService implements OnModuleInit {
    * Normalize source type for Python service
    */
   private normalizeSourceTypeForPython(connectionType: string): string {
-    const normalized = connectionType.toLowerCase();
-    if (normalized === 'postgres' || normalized === 'pgvector' || normalized === 'redshift') {
-      return 'postgresql';
-    }
-    return normalized;
+    return resolveSourceConnectorType(connectionType).registryType;
   }
 
   /**
@@ -1138,7 +1292,7 @@ export class ConnectionService implements OnModuleInit {
         pythonResponse = await firstValueFrom(
           this.httpService.post(`${this.pythonServiceUrl}/test-connection`, pythonRequest, {
             headers,
-            timeout: 30000,
+            timeout: this.testConnectionTimeoutMs,
           }),
         );
       } catch (error: any) {
@@ -1234,9 +1388,10 @@ export class ConnectionService implements OnModuleInit {
     connectionType: string,
     config: Record<string, any>,
   ): Promise<{ success: boolean; message: string; details?: any }> {
-    this.logger.log(`[testConnectionConfig] Testing connection type: ${connectionType}`);
+    const normalizedType = normalizeConnectorType(connectionType) || connectionType.toLowerCase();
+    this.logger.log(`[testConnectionConfig] Testing connection type: ${normalizedType}`);
 
-    switch (connectionType) {
+    switch (normalizedType) {
       case 'postgres':
       case 'pgvector':
       case 'redshift':
@@ -1267,25 +1422,25 @@ export class ConnectionService implements OnModuleInit {
         // Return placeholder for not-yet-implemented connections
         return {
           success: false,
-          message: `Connection test for ${connectionType} is not yet implemented. The connection configuration has been saved but cannot be verified at this time.`,
+          message: `Connection test for ${normalizedType} is not yet implemented. The connection configuration has been saved but cannot be verified at this time.`,
           details: {
-            connectionType,
+            connectionType: normalizedType,
             status: 'not_implemented',
             configReceived: Object.keys(config),
           },
         };
 
       default:
-        this.logger.warn(`Unsupported connection type: ${connectionType}`);
+        this.logger.warn(`Unsupported connection type: ${normalizedType}`);
         throw new BadRequestException(
-          `Unsupported connection type: ${connectionType}. Supported types: postgres, pgvector, redshift, s3, api`,
+          `Unsupported connection type: ${normalizedType}. Supported types: postgres, s3, api`,
         );
     }
   }
 
   /**
    * Test PostgreSQL connection via ETL (tap-postgres --test)
-   * Routes to ETL server so logs appear; falls back to Node.js pg if ETL unreachable
+   * No fallback — ETL must succeed or the error is returned.
    */
   private async testPostgresViaEtl(config: PostgresConfig): Promise<{
     success: boolean;
@@ -1293,80 +1448,40 @@ export class ConnectionService implements OnModuleInit {
     details?: any;
   }> {
     if (!this.pythonServiceUrl) {
-      return this.testPostgresConnection(config);
+      throw new BadRequestException(
+        'ETL service not configured. Set ETL_PYTHON_SERVICE_URL or PYTHON_SERVICE_URL.',
+      );
     }
+    const sourceType = 'source-postgres';
+    const pythonRequest = {
+      connection_config: config,
+      source_config: config,
+      source_type: sourceType,
+    };
+    this.logger.log(`Calling ETL test-connection for %s`, config.host || '?');
     try {
-      const sourceType = 'source-postgres';
-      const pythonRequest = {
-        connection_config: config,
-        source_config: config,
-        source_type: sourceType,
-      };
-      this.logger.log(`Calling ETL test-connection for %s`, config.host || '?');
       const res = await firstValueFrom(
         this.httpService.post(`${this.pythonServiceUrl}/test-connection`, pythonRequest, {
           headers: { 'Content-Type': 'application/json' },
-          timeout: 30000,
+          timeout: this.testConnectionTimeoutMs,
         }),
       );
       const data = res.data as { success?: boolean; error?: string; message?: string };
       const success = data?.success === true;
       return {
         success,
-        message: success ? 'Successfully connected to PostgreSQL database' : (data?.error || data?.message || 'Connection test failed'),
+        message: success
+          ? 'Successfully connected to PostgreSQL database'
+          : data?.error || data?.message || 'Connection test failed',
         details: data,
       };
     } catch (error: any) {
-      const detail = error?.response?.data?.detail ?? error?.response?.data?.error ?? error?.message;
-      this.logger.warn(`ETL test-connection failed, falling back to Node.js pg: ${detail}`);
-      return this.testPostgresConnection(config);
-    }
-  }
-
-  /**
-   * Test PostgreSQL connection
-   */
-  private async testPostgresConnection(config: PostgresConfig): Promise<{
-    success: boolean;
-    message: string;
-    details?: any;
-  }> {
-    try {
-      const pool = new Pool({
-        host: config.host,
-        port: config.port,
-        user: config.username,
-        password: config.password,
-        database: config.database,
-        ssl: config.ssl?.enabled
-          ? {
-              rejectUnauthorized: false,
-              ca: config.ssl.ca_cert,
-              cert: config.ssl.client_cert,
-              key: config.ssl.client_key,
-            }
-          : false,
-        connectionTimeoutMillis: 5000, // 5s timeout
-      });
-
-      const client = await pool.connect();
-      try {
-        await client.query('SELECT 1');
-        return {
-          success: true,
-          message: 'Successfully connected to PostgreSQL database',
-        };
-      } finally {
-        client.release();
-        await pool.end();
-      }
-    } catch (error) {
-      this.logger.error(`PostgreSQL connection test failed: ${error.message}`);
-      return {
-        success: false,
-        message: `Connection failed: ${error.message}`,
-        details: error,
-      };
+      const detail =
+        error?.response?.data?.detail ?? error?.response?.data?.error ?? error?.message;
+      this.logger.warn(`ETL test-connection failed: ${detail}`);
+      throw new BadRequestException(
+        `Connection test failed: ${detail ?? 'ETL service did not respond in time'}`,
+      );
     }
   }
 
@@ -1428,7 +1543,9 @@ export class ConnectionService implements OnModuleInit {
     // Decrypt config
     const decryptedConfig = this.decryptConfig(connection.connectionType, connection.config as any);
 
-    const type = (connection.connectionType || dataSource.sourceType || '').toLowerCase();
+    const type =
+      normalizeConnectorType(connection.connectionType || dataSource.sourceType) ||
+      (connection.connectionType || dataSource.sourceType || '').toLowerCase();
     this.logger.log(`Discovering schema for type: ${type}`);
 
     let schema: any = {};
@@ -1570,5 +1687,4 @@ export class ConnectionService implements OnModuleInit {
       await pool.end();
     }
   }
-
 }

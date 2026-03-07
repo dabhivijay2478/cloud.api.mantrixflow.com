@@ -11,15 +11,20 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 // Load environment variables
 dotenv.config();
 
-const connectionString = process.env.DATABASE_URL;
+// Prefer direct connection for migrations (Supabase pooler 6543 can cause DDL issues)
+const connectionString =
+  process.env.DATABASE_DIRECT_URL ||
+  (process.env.DATABASE_URL?.includes(':6543')
+    ? process.env.DATABASE_URL.replace(':6543', ':5432')
+    : process.env.DATABASE_URL);
 
 if (!connectionString) {
-  console.error('❌ DATABASE_URL environment variable is not set');
+  console.error('❌ DATABASE_URL or DATABASE_DIRECT_URL environment variable is required');
   process.exit(1);
 }
 
 async function runMigrations() {
-  const dbUrl = connectionString!; // We know it's defined from the check above
+  const dbUrl = connectionString!;
   console.log('🔄 Starting database migrations...');
   console.log(`📦 Database: ${dbUrl.split('@')[1] || 'unknown'}`);
 

@@ -4,12 +4,22 @@
  * Also provides test-connection (NestJS in-memory, no ETL required).
  */
 
-import { BadRequestException, Body, Controller, Get, Param, Post, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
-import { createSuccessResponse } from '../../common/dto/api-response.dto';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { Public } from '../../common/decorators/public.decorator';
+import { createSuccessResponse } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
-import { ConnectorMetadataService } from './connector-metadata.service';
 import { ConnectionService } from '../data-sources/connection.service';
+import { ConnectorMetadataService } from './connector-metadata.service';
 
 @Controller('connectors')
 @UseGuards(SupabaseAuthGuard)
@@ -22,7 +32,11 @@ export class ConnectorsController {
   @Post('test-connection')
   @HttpCode(HttpStatus.OK)
   async testConnection(
-    @Body() body: { connectionType?: string; connection_type?: string; config?: Record<string, unknown> },
+    @Body() body: {
+      connectionType?: string;
+      connection_type?: string;
+      config?: Record<string, unknown>;
+    },
   ) {
     const connectionType = (body.connectionType ?? body.connection_type) as string;
     const config = body.config as Record<string, unknown>;
@@ -32,10 +46,8 @@ export class ConnectorsController {
     if (!config || typeof config !== 'object') {
       throw new BadRequestException('config is required');
     }
-    const normalizedType = connectionType.toLowerCase();
-    const effectiveType = normalizedType === 'postgresql' ? 'postgres' : normalizedType;
     const result = await this.connectionService.testConnectionConfig(
-      effectiveType,
+      connectionType,
       config as Record<string, any>,
     );
     return createSuccessResponse(result);

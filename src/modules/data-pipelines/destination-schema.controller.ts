@@ -23,7 +23,6 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import type { Request as ExpressRequest } from 'express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -33,6 +32,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Request as ExpressRequest } from 'express';
 import {
   createDeleteResponse,
   createListResponse,
@@ -40,8 +40,8 @@ import {
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { RequiredUUIDPipe } from '../activity-logs/pipes/required-uuid.pipe';
-import { DestinationSchemaService } from './services/destination-schema.service';
 import { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from './dto';
+import { DestinationSchemaService } from './services/destination-schema.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -311,6 +311,34 @@ export class DestinationSchemaController {
       );
     } catch (error) {
       this.handleError('validate configuration', error);
+    }
+  }
+
+  /**
+   * Preview transformed output for the linked pipeline without writing to the destination.
+   */
+  @Post(':id/preview')
+  @ApiOperation({
+    summary: 'Preview transformed output',
+    description: 'Run a read-only preview of the linked pipeline transform.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Preview rows and derived output schema' })
+  async previewDestinationSchema(
+    @Param('organizationId', RequiredUUIDPipe) _organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: { limit?: number },
+  ) {
+    try {
+      const userId = this.extractUserId(req);
+      const limit = Math.min(Math.max(Number(body?.limit) || 10, 1), 100);
+      const result = await this.destinationSchemaService.previewData(id, userId, limit);
+
+      return createSuccessResponse(result, 'Preview generated successfully');
+    } catch (error) {
+      this.handleError('preview destination schema', error);
     }
   }
 

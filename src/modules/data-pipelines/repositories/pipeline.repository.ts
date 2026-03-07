@@ -6,8 +6,8 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   and,
-  count as drizzleCount,
   desc,
+  count as drizzleCount,
   eq,
   inArray,
   isNotNull,
@@ -31,8 +31,8 @@ import type {
 import {
   pipelineDestinationSchemas,
   pipelineRuns,
-  pipelines,
   pipelineSourceSchemas,
+  pipelines,
 } from '../../../database/schemas';
 
 @Injectable()
@@ -93,6 +93,32 @@ export class PipelineRepository {
           isNull(pipelines.deletedAt),
         ),
       )
+      .limit(1);
+
+    return pipeline || null;
+  }
+
+  /**
+   * Find pipeline by destination schema without scanning the full organization.
+   */
+  async findByDestinationSchemaId(
+    destinationSchemaId: string,
+    organizationId?: string,
+  ): Promise<Pipeline | null> {
+    const conditions = [
+      eq(pipelines.destinationSchemaId, destinationSchemaId),
+      isNull(pipelines.deletedAt),
+    ];
+
+    if (organizationId) {
+      conditions.push(eq(pipelines.organizationId, organizationId));
+    }
+
+    const [pipeline] = await this.db
+      .select()
+      .from(pipelines)
+      .where(and(...conditions))
+      .orderBy(desc(pipelines.createdAt))
       .limit(1);
 
     return pipeline || null;
@@ -241,10 +267,7 @@ export class PipelineRepository {
       }
     > & { nextCursor: string | null }
   > {
-    const conditions = [
-      eq(pipelines.organizationId, organizationId),
-      isNull(pipelines.deletedAt),
-    ];
+    const conditions = [eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)];
     if (cursor) {
       conditions.push(lt(pipelines.createdAt, new Date(cursor)));
     }
@@ -269,7 +292,7 @@ export class PipelineRepository {
     const dataRows = hasMore ? rows.slice(0, limit) : rows;
     const nextCursor =
       hasMore && dataRows.length > 0
-        ? (dataRows[dataRows.length - 1]?.pipeline.createdAt as Date)?.toISOString() ?? null
+        ? ((dataRows[dataRows.length - 1]?.pipeline.createdAt as Date)?.toISOString() ?? null)
         : null;
 
     return {

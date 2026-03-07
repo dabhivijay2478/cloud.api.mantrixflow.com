@@ -19,10 +19,10 @@ import {
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { DataSourceConnectionRepository } from '../data-sources/repositories/data-source-connection.repository';
-import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
-import { PipelineRepository } from './repositories/pipeline.repository';
-import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 import { PgmqQueueService } from '../queue';
+import { PipelineRepository } from './repositories/pipeline.repository';
+import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
+import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 import { PipelineStatus } from './types/pipeline-lifecycle.types';
 import { sanitizeEtlError } from './utils/sanitize-etl-error';
 
@@ -31,7 +31,9 @@ interface EtlCallbackPayload {
   pipeline_id: string;
   organization_id: string;
   status: 'completed' | 'failed' | 'interrupted';
+  rows_read?: number;
   rows_upserted?: number;
+  rows_dropped?: number;
   rows_deleted?: number;
   lsn_end?: number;
   singer_state?: Record<string, unknown> | null;
@@ -51,7 +53,7 @@ export class InternalEtlController {
     private readonly pipelineRepository: PipelineRepository,
     private readonly pipelineSourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly connectionRepository: DataSourceConnectionRepository,
-    private readonly lifecycleService: PipelineLifecycleService,
+    readonly _lifecycleService: PipelineLifecycleService,
     private readonly pipelineQueueService: PgmqQueueService,
   ) {}
 
@@ -67,19 +69,17 @@ export class InternalEtlController {
       pipeline_id: pipelineId,
       organization_id: organizationId,
       status,
+      rows_read: rowsRead = 0,
       rows_upserted: rowsUpserted = 0,
-      rows_deleted: rowsDeleted = 0,
-      lsn_end: lsnEnd,
+      rows_dropped: rowsDropped = 0,
       singer_state: singerState,
       error: errorMessage,
       duration_seconds: durationSeconds = 0,
-      source_tool: sourceTool = 'tap-postgres',
-      dest_tool: destTool = 'target-postgres',
       replication_method_used: replicationMethodUsed,
     } = payload;
 
     this.logger.log(
-      `ETL callback: pipeline=${pipelineId} run=${runId} status=${status} rows=${rowsUpserted}`,
+      `ETL callback: pipeline=${pipelineId} run=${runId} status=${status} rows_read=${rowsRead} rows_written=${rowsUpserted} rows_dropped=${rowsDropped}`,
     );
 
     const pipeline = await this.pipelineRepository.findById(pipelineId);
@@ -92,15 +92,17 @@ export class InternalEtlController {
     const runStatus = status === 'completed' ? 'success' : 'failed';
     const jobState = status === 'interrupted' ? 'failed' : 'completed';
     const sanitizedError = sanitizeEtlError(errorMessage);
+    const rowsFailed = status === 'failed' ? Math.max(rowsRead - rowsUpserted - rowsDropped, 1) : 0;
 
     // Update pipeline_runs row
     try {
       await this.pipelineRepository.updateRun(runId, {
         status: runStatus,
         jobState,
-        rowsRead: rowsUpserted,
+        rowsRead,
         rowsWritten: rowsUpserted,
-        rowsFailed: status === 'failed' ? 1 : 0,
+        rowsSkipped: rowsDropped,
+        rowsFailed,
         completedAt: new Date(),
         durationSeconds: Math.round(durationSeconds),
         errorMessage: sanitizedError,
@@ -146,22 +148,17 @@ export class InternalEtlController {
             sourceSchema.dataSourceId,
           );
           if (connection && !connection.replicationSlotName) {
-            const slotName =
-              'mxf_' +
-              connection.id.replace(/-/g, '').slice(0, 8);
-            await this.connectionRepository.updateByDataSourceId(
-              sourceSchema.dataSourceId,
-              { replicationSlotName: slotName },
-            );
+            const slotName = `mxf_${connection.id.replace(/-/g, '').slice(0, 8)}`;
+            await this.connectionRepository.updateByDataSourceId(sourceSchema.dataSourceId, {
+              replicationSlotName: slotName,
+            });
             this.logger.log(
               `Saved replication slot ${slotName} to connection for data source ${sourceSchema.dataSourceId}`,
             );
           }
         }
       } catch (err) {
-        this.logger.error(
-          `Failed to save replication slot for pipeline ${pipelineId}: ${err}`,
-        );
+        this.logger.error(`Failed to save replication slot for pipeline ${pipelineId}: ${err}`);
       }
     }
 
@@ -177,10 +174,8 @@ export class InternalEtlController {
         lastRunStatus: runStatus,
         status: targetStatus,
         totalRowsProcessed: newTotalProcessed,
-        totalRunsSuccessful:
-          (pipeline.totalRunsSuccessful || 0) + (status === 'completed' ? 1 : 0),
-        totalRunsFailed:
-          (pipeline.totalRunsFailed || 0) + (status !== 'completed' ? 1 : 0),
+        totalRunsSuccessful: (pipeline.totalRunsSuccessful || 0) + (status === 'completed' ? 1 : 0),
+        totalRunsFailed: (pipeline.totalRunsFailed || 0) + (status !== 'completed' ? 1 : 0),
         lastSyncAt: new Date(),
         ...(sanitizedError ? { lastError: sanitizedError } : {}),
         ...(setFullRefreshCompletedAt ? { fullRefreshCompletedAt: new Date() } : {}),

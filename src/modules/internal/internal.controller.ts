@@ -7,19 +7,21 @@
  */
 
 import {
-  Controller,
-  Post,
-  Get,
-  Headers,
   Body,
-  Param,
-  UnauthorizedException,
-  Logger,
+  Controller,
+  Headers,
   Inject,
+  Logger,
+  Post,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { pipelineRuns, pipelines } from '../../database/schemas';
+import {
+  resolveDestinationConnectorType,
+  resolveSourceConnectorType,
+} from '../connectors/utils/connector-resolver';
 import { ConnectionService } from '../data-sources/connection.service';
 import { DataSourceRepository } from '../data-sources/repositories/data-source.repository';
 
@@ -35,7 +37,6 @@ export class EtlCallbackDto {
   status!: 'completed' | 'failed';
   rowsSynced?: number;
   errorMessage?: string;
-  userMessage?: string;
   new_cursor?: string;
   newState?: Record<string, unknown>;
   cdc_position?: Record<string, unknown>;
@@ -70,20 +71,12 @@ export class InternalController {
     const [sourceDataSource, destDataSource, sourceConfig, destConfig] = await Promise.all([
       this.dataSourceRepository.findById(source_conn_id),
       this.dataSourceRepository.findById(dest_conn_id),
-      this.connectionService.getDecryptedConnection(
-        organization_id,
-        source_conn_id,
-        'system',
-      ),
-      this.connectionService.getDecryptedConnection(
-        organization_id,
-        dest_conn_id,
-        'system',
-      ),
+      this.connectionService.getDecryptedConnection(organization_id, source_conn_id, 'system'),
+      this.connectionService.getDecryptedConnection(organization_id, dest_conn_id, 'system'),
     ]);
 
-    const sourceType = this.toEtlSourceType(sourceDataSource?.sourceType ?? 'postgres');
-    const destType = this.toEtlDestType(destDataSource?.sourceType ?? 'postgres');
+    const sourceType = resolveSourceConnectorType(sourceDataSource?.sourceType).registryType;
+    const destType = resolveDestinationConnectorType(destDataSource?.sourceType).registryType;
 
     return {
       source: { type: sourceType, config: sourceConfig },
@@ -91,64 +84,8 @@ export class InternalController {
     };
   }
 
-  private toEtlSourceType(type: string): string {
-    const t = (type ?? 'postgres').toLowerCase().trim();
-    if (!t) return 'source-postgres';
-    if (t.startsWith('source-')) return t;
-    const map: Record<string, string> = {
-      postgres: 'source-postgres',
-      postgresql: 'source-postgres',
-      mongodb: 'source-mongodb-v2',
-      mysql: 'source-mysql',
-      mssql: 'source-mssql',
-      sqlserver: 'source-mssql',
-      snowflake: 'source-snowflake',
-      bigquery: 'source-bigquery',
-      s3: 'source-s3',
-      shopify: 'source-shopify',
-      stripe: 'source-stripe',
-      hubspot: 'source-hubspot',
-      salesforce: 'source-salesforce',
-      github: 'source-github',
-      'google-sheets': 'source-google-sheets',
-      'google-analytics': 'source-google-analytics',
-      'facebook-marketing': 'source-facebook-marketing',
-      airtable: 'source-airtable',
-      notion: 'source-notion',
-      slack: 'source-slack',
-      faker: 'source-faker',
-      file: 'source-file',
-    };
-    return map[t] ?? `source-${t}`;
-  }
-
-  private toEtlDestType(type: string): string {
-    const t = (type ?? 'postgres').toLowerCase().trim().replace(/^destination-/, '');
-    if (!t) return 'postgres';
-    const map: Record<string, string> = {
-      postgres: 'postgres',
-      postgresql: 'postgres',
-      mongodb: 'mongodb',
-      mysql: 'mysql',
-      mssql: 'mssql',
-      sqlserver: 'mssql',
-      snowflake: 'snowflake',
-      bigquery: 'bigquery',
-      duckdb: 'duckdb',
-      motherduck: 'motherduck',
-      s3: 's3',
-      redshift: 'redshift',
-      databricks: 'databricks',
-      clickhouse: 'clickhouse',
-    };
-    return map[t] ?? t;
-  }
-
   @Post('etl-callback')
-  async etlCallback(
-    @Headers('x-internal-token') token: string,
-    @Body() body: EtlCallbackDto,
-  ) {
+  async etlCallback(@Headers('x-internal-token') token: string, @Body() body: EtlCallbackDto) {
     if (token !== process.env.INTERNAL_TOKEN) {
       throw new UnauthorizedException('Invalid internal token');
     }
@@ -159,7 +96,6 @@ export class InternalController {
       status,
       rowsSynced,
       errorMessage,
-      userMessage,
       new_cursor,
       newState,
       cdc_position,

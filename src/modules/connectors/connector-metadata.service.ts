@@ -4,12 +4,13 @@
  * discover, preview, health: call Singer-based Python ETL (apps/new-etl).
  */
 
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { normalizeEtlBaseUrl } from '../../common/utils/etl-url';
 import * as connectorsConfig from '../../config/connectors.json';
+import { findSourceConnector, resolveSourceConnectorType } from './utils/connector-resolver';
 
 @Injectable()
 export class ConnectorMetadataService {
@@ -39,20 +40,18 @@ export class ConnectorMetadataService {
     };
   }
 
-  /** Map connector id or connection type to Singer registry key. Only PostgreSQL is supported. */
-  private toRegistryType(sourceType: string): string {
-    const t = (sourceType || 'postgres').toLowerCase();
-    if (t === 'postgres' || t === 'postgresql' || t === 'source-postgres' || t === 'pgvector' || t === 'redshift')
-      return 'postgres';
-    throw new BadRequestException('Only PostgreSQL is supported');
-  }
-
   async listConnectors(): Promise<{
     sources: Array<{ id: string; type?: string; label: string; category?: string; cdc?: boolean }>;
     destinations: Array<{ id: string; label: string }>;
   }> {
     return connectorsConfig as {
-      sources: Array<{ id: string; type?: string; label: string; category?: string; cdc?: boolean }>;
+      sources: Array<{
+        id: string;
+        type?: string;
+        label: string;
+        category?: string;
+        cdc?: boolean;
+      }>;
       destinations: Array<{ id: string; label: string }>;
     };
   }
@@ -73,6 +72,7 @@ export class ConnectorMetadataService {
         this.httpService.post(
           `${this.baseUrl}/test-connection`,
           {
+            source_type: resolveSourceConnectorType(options.source_type).registryType,
             connection_config: options.source_config ?? {},
             source_config: options.source_config ?? {},
           },
@@ -85,10 +85,7 @@ export class ConnectorMetadataService {
         error: success ? undefined : (res.data?.error ?? 'Connection test failed'),
       };
     } catch (err: any) {
-      const detail =
-        err?.response?.data?.detail ??
-        err?.response?.data?.error ??
-        err?.message;
+      const detail = err?.response?.data?.detail ?? err?.response?.data?.error ?? err?.message;
       this.logger.warn(`ETL test connection failed: ${detail}`);
       return { success: false, error: String(detail ?? 'Connection test failed') };
     }
@@ -105,7 +102,9 @@ export class ConnectorMetadataService {
       );
       return res.data;
     } catch (err) {
-      this.logger.warn(`ETL health check failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(
+        `ETL health check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return { status: 'unreachable' };
     }
   }
@@ -119,9 +118,7 @@ export class ConnectorMetadataService {
       const full = await this.discoverFull(options);
       return { streams: full.streams ?? [] };
     } catch (err) {
-      this.logger.warn(
-        `ETL discover failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.logger.warn(`ETL discover failed: ${err instanceof Error ? err.message : String(err)}`);
       return { streams: [] };
     }
   }
@@ -141,7 +138,10 @@ export class ConnectorMetadataService {
     primary_keys?: string[];
     estimated_row_count?: number;
     streams?: Array<{ name: string }>;
-    schemas?: Array<{ name: string; tables: Array<{ name: string; schema: string; type?: string }> }>;
+    schemas?: Array<{
+      name: string;
+      tables: Array<{ name: string; schema: string; type?: string }>;
+    }>;
   }> {
     if (!this.baseUrl) {
       throw new Error('ETL service not configured. Set ETL_PYTHON_SERVICE_URL.');
@@ -154,20 +154,15 @@ export class ConnectorMetadataService {
           {
             connection_config: options.source_config ?? {},
             schema_name: options.schema_name ?? 'public',
-            source_type: this.toRegistryType(options.source_type),
+            source_type: resolveSourceConnectorType(options.source_type).registryType,
           },
           { headers: this.headers(), timeout: 120_000 },
         ),
       );
     } catch (err: any) {
-      const detail =
-        err?.response?.data?.detail ??
-        err?.response?.data?.message ??
-        err?.message;
+      const detail = err?.response?.data?.detail ?? err?.response?.data?.message ?? err?.message;
       this.logger.error(`ETL discover failed: ${detail}`);
-      throw new Error(
-        `Schema discovery failed: ${detail || 'ETL service returned an error'}`,
-      );
+      throw new Error(`Schema discovery failed: ${detail || 'ETL service returned an error'}`);
     }
     const data = res.data ?? {};
 
@@ -267,16 +262,14 @@ export class ConnectorMetadataService {
             connection_config: options.source_config,
             source_stream: options.source_stream,
             limit: options.limit ?? 50,
-            source_type: this.toRegistryType(options.source_type),
+            source_type: resolveSourceConnectorType(options.source_type).registryType,
           },
           { headers: this.headers(), timeout: 120_000 },
         ),
       );
       return res.data ?? {};
     } catch (err) {
-      this.logger.warn(
-        `ETL preview failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.logger.warn(`ETL preview failed: ${err instanceof Error ? err.message : String(err)}`);
       throw err;
     }
   }
@@ -287,13 +280,7 @@ export class ConnectorMetadataService {
     cdc_verify_steps?: string[];
     instructions?: string[];
   }> {
-    const sources = (connectorsConfig as { sources?: Array<Record<string, unknown>> }).sources ?? [];
-    const connectorId = sourceType.startsWith('source-') ? sourceType : `source-${sourceType}`;
-    const connector = sources.find(
-      (s) =>
-        (s.id as string) === connectorId ||
-        (s.type as string)?.toLowerCase() === sourceType.toLowerCase(),
-    );
+    const connector = findSourceConnector(sourceType);
     if (connector?.cdc_providers) {
       return {
         source_type: sourceType,
@@ -316,7 +303,7 @@ export class ConnectorMetadataService {
         'Ensure wal2json extension is installed on your PostgreSQL server',
         'Set wal_level = logical in postgresql.conf',
         'Restart PostgreSQL after configuration changes',
-        'The ETL server will automatically create replication slots when using LOG_BASED mode',
+        'LOG_BASED sync stays blocked unless source DB mutations are explicitly allowed by platform policy',
       ],
     };
   }

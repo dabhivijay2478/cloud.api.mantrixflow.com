@@ -5,22 +5,17 @@
  * No provider auto-detection — provider is user-selected and stored in cdc_prerequisites_status.
  */
 
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { normalizeEtlBaseUrl } from '../../common/utils/etl-url';
-import { ConnectionService } from './connection.service';
 import { ConnectorMetadataService } from '../connectors/connector-metadata.service';
-import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
-import { DataSourceRepository } from './repositories/data-source.repository';
+import { resolveSourceConnectorType } from '../connectors/utils/connector-resolver';
 import { OrganizationRoleService } from '../organizations/services/organization-role.service';
+import { ConnectionService } from './connection.service';
+import { DataSourceRepository } from './repositories/data-source.repository';
+import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
 
 export interface CdcPrerequisitesStatus {
   overall: 'verified' | 'partial' | 'not_started' | 'failed';
@@ -66,19 +61,6 @@ export class CdcVerifyService {
     };
   }
 
-  private toRegistryType(connectionType: string): string {
-    const t = (connectionType || 'postgres').toLowerCase();
-    if (
-      t === 'postgres' ||
-      t === 'postgresql' ||
-      t === 'source-postgres' ||
-      t === 'pgvector' ||
-      t === 'redshift'
-    )
-      return 'postgres';
-    throw new BadRequestException('Only PostgreSQL is supported');
-  }
-
   /**
    * Get CDC status and available providers for a data source.
    */
@@ -109,12 +91,12 @@ export class CdcVerifyService {
       throw new NotFoundException('Connection not configured for this data source');
     }
 
-    const sourceType = this.toRegistryType(connection.connectionType);
     const setup = await this.connectorMetadataService.getCdcSetup(
       connection.connectionType || dataSource.sourceType,
     );
 
-    const cdcPrerequisitesStatus = (connection.cdcPrerequisitesStatus as CdcPrerequisitesStatus) ?? null;
+    const cdcPrerequisitesStatus =
+      (connection.cdcPrerequisitesStatus as CdcPrerequisitesStatus) ?? null;
 
     return {
       cdc_prerequisites_status: cdcPrerequisitesStatus,
@@ -158,7 +140,7 @@ export class CdcVerifyService {
       dataSourceId,
       userId,
     );
-    const sourceType = this.toRegistryType(connection.connectionType);
+    const sourceType = resolveSourceConnectorType(connection.connectionType).registryType;
 
     let result: { ok: boolean; [k: string]: unknown };
     try {
@@ -175,14 +157,23 @@ export class CdcVerifyService {
       );
       result = res.data ?? {};
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: string; error?: string } }; message?: string };
+      const err = error as {
+        response?: { data?: { detail?: string; error?: string } };
+        message?: string;
+      };
       const msg =
         err?.response?.data?.detail ??
         err?.response?.data?.error ??
         err?.message ??
         'CDC verification failed';
       this.logger.warn(`CDC verify step=${step} failed: ${msg}`);
-      const status = this.buildUpdatedStatus(connection.cdcPrerequisitesStatus, step, false, providerSelected, msg);
+      const status = this.buildUpdatedStatus(
+        connection.cdcPrerequisitesStatus,
+        step,
+        false,
+        providerSelected,
+        msg,
+      );
       await this.connectionRepository.updateByDataSourceId(dataSourceId, {
         cdcPrerequisitesStatus: status as object,
       });
@@ -195,7 +186,7 @@ export class CdcVerifyService {
       step,
       ok,
       providerSelected,
-      ok ? undefined : (result.error as string) ?? (result.detail as string),
+      ok ? undefined : ((result.error as string) ?? (result.detail as string)),
     );
     await this.connectionRepository.updateByDataSourceId(dataSourceId, {
       cdcPrerequisitesStatus: status as object,
@@ -237,7 +228,7 @@ export class CdcVerifyService {
       dataSourceId,
       userId,
     );
-    const sourceType = this.toRegistryType(connection.connectionType);
+    const sourceType = resolveSourceConnectorType(connection.connectionType).registryType;
 
     let result: { ok?: boolean; steps?: Record<string, unknown>; overall?: string };
     try {
@@ -254,8 +245,7 @@ export class CdcVerifyService {
       result = res.data ?? {};
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } }; message?: string };
-      const msg =
-        err?.response?.data?.detail ?? err?.message ?? 'CDC verification failed';
+      const msg = err?.response?.data?.detail ?? err?.message ?? 'CDC verification failed';
       this.logger.warn(`CDC verify-all failed: ${msg}`);
       const status: CdcPrerequisitesStatus = {
         overall: 'failed',
@@ -272,14 +262,21 @@ export class CdcVerifyService {
     const ok = Boolean(result.ok);
     const steps = result.steps ?? {};
     const status: CdcPrerequisitesStatus = {
-      overall: (result.overall as CdcPrerequisitesStatus['overall']) ?? (ok ? 'verified' : 'failed'),
+      overall:
+        (result.overall as CdcPrerequisitesStatus['overall']) ?? (ok ? 'verified' : 'failed'),
       checked_at: new Date().toISOString(),
       wal_level_ok: (steps.wal_level as { ok?: boolean })?.ok,
       wal2json_ok: (steps.wal2json as { ok?: boolean })?.ok,
       replication_role_ok: (steps.replication_role as { ok?: boolean })?.ok,
       replication_test_ok: (steps.replication_test as { ok?: boolean })?.ok,
       provider_selected: providerSelected,
-      last_error: ok ? null : (Object.values(steps).find((s) => (s as { ok?: boolean })?.ok === false) as { error?: string })?.error,
+      last_error: ok
+        ? null
+        : (
+            Object.values(steps).find((s) => (s as { ok?: boolean })?.ok === false) as {
+              error?: string;
+            }
+          )?.error,
     };
     await this.connectionRepository.updateByDataSourceId(dataSourceId, {
       cdcPrerequisitesStatus: status as object,
@@ -327,10 +324,7 @@ export class CdcVerifyService {
     }
 
     const allOk =
-      base.wal_level_ok &&
-      base.wal2json_ok &&
-      base.replication_role_ok &&
-      base.replication_test_ok;
+      base.wal_level_ok && base.wal2json_ok && base.replication_role_ok && base.replication_test_ok;
     base.overall = allOk ? 'verified' : ok ? 'partial' : 'failed';
 
     return base;

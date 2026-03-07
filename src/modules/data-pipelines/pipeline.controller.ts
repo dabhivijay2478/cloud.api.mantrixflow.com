@@ -26,8 +26,6 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { ActivityLoggerService } from '../../common/logger';
-import type { Request as ExpressRequest } from 'express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -37,26 +35,32 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { type ErrorCode, ERROR_CODES } from '../../common/constants';
+import type { Request as ExpressRequest } from 'express';
+import { ERROR_CODES, type ErrorCode } from '../../common/constants';
 import {
   createDeleteResponse,
   createListResponse,
   createSuccessResponse,
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
+import { ActivityLoggerService } from '../../common/logger';
+import {
+  areSourceDbMutationsAllowed,
+  SOURCE_DB_MUTATION_POLICY_MESSAGE,
+} from '../../common/utils/source-db-mutation-policy';
 import { RequiredUUIDPipe } from '../activity-logs/pipes/required-uuid.pipe';
-import { PipelineService } from './services/pipeline.service';
 import {
   CreatePipelineDto,
-  UpdatePipelineDto,
-  RunPipelineDto,
   DryRunPipelineDto,
+  DryRunResponseDto,
   PipelineResponseDto,
   PipelineRunResponseDto,
   PipelineStatsResponseDto,
+  RunPipelineDto,
+  UpdatePipelineDto,
   ValidationResultResponseDto,
-  DryRunResponseDto,
 } from './dto';
+import { PipelineService } from './services/pipeline.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -803,6 +807,13 @@ export class PipelineController {
       if (!hasCheckpoint) {
         cdcReadiness.issues.push('No checkpoint stored');
         cdcReadiness.recommendations.push('Complete a full sync to create the initial checkpoint');
+      }
+      if (!areSourceDbMutationsAllowed()) {
+        cdcReadiness.issues.push(SOURCE_DB_MUTATION_POLICY_MESSAGE);
+        cdcReadiness.recommendations.push(
+          'Keep this pipeline on FULL sync unless source DB mutations are explicitly allowed by platform policy.',
+        );
+        cdcReadiness.cdcEnabled = false;
       }
 
       // Add pg_cron/PGMQ requirements note

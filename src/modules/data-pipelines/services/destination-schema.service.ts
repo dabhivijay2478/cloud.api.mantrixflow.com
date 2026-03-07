@@ -15,20 +15,21 @@ import type {
   DestinationSchemaValidationResult,
   PipelineDestinationSchema,
 } from '../../../database/schemas';
+import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import { DESTINATION_SCHEMA_ACTIONS } from '../../activity-logs/constants/activity-log-types';
+import { ConnectionService } from '../../data-sources/connection.service';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { PythonETLService } from './python-etl.service';
-import { ConnectionService } from '../../data-sources/connection.service';
-import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
 import type { CreateDestinationSchemaDto, UpdateDestinationSchemaDto } from '../dto';
 import { WriteMode } from '../dto/create-destination-schema.dto';
+import { PipelineRepository } from '../repositories/pipeline.repository';
+import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
+import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
 import type { SchemaValidationResult, ValidationResult } from '../types/common.types';
 import { validateColumnTypeCompatibility } from '../types/common.types';
-import { PipelineRepository } from '../repositories/pipeline.repository';
-import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
-import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
+import { parseTransformOutputMappings } from '../utils/transform-parser';
+import { PythonETLService } from './python-etl.service';
 
 /**
  * Internal DTO with organization context
@@ -302,7 +303,9 @@ export class DestinationSchemaService {
         }
       } catch (err: any) {
         this.logger.warn(`Column type check skipped: ${err?.message ?? err}`);
-        warnings.push('Could not verify column type compatibility — validation will be retried at sync time');
+        warnings.push(
+          'Could not verify column type compatibility — validation will be retried at sync time',
+        );
       }
     }
 
@@ -344,6 +347,67 @@ export class DestinationSchemaService {
   }
 
   /**
+   * Preview transformed output for the pipeline linked to this destination schema.
+   * This reads from the source and applies the saved transform without writing.
+   */
+  async previewData(
+    id: string,
+    userId: string,
+    limit: number = 10,
+  ): Promise<{
+    rows: Record<string, unknown>[];
+    columns: Array<{
+      name: string;
+      type: string;
+      nullable: boolean;
+      primaryKey?: boolean;
+    }>;
+  }> {
+    const schema = await this.destinationSchemaRepository.findById(id);
+    if (!schema) {
+      throw new NotFoundException(`Destination schema ${id} not found`);
+    }
+
+    await this.checkViewPermission(userId, schema.organizationId);
+
+    const linkedPipeline = await this.findLinkedPipeline(id, schema.organizationId);
+    if (!linkedPipeline?.sourceSchemaId) {
+      throw new BadRequestException(
+        'Destination schema preview requires a linked pipeline with a source schema',
+      );
+    }
+
+    const sourceSchema = await this.sourceSchemaRepository.findById(linkedPipeline.sourceSchemaId);
+    if (!sourceSchema?.dataSourceId) {
+      throw new BadRequestException('Linked source schema is missing a data source connection');
+    }
+
+    const connectionConfig = await this._connectionService.getDecryptedConnection(
+      schema.organizationId,
+      sourceSchema.dataSourceId,
+      userId,
+    );
+
+    const preview = await this._pythonETLService.preview({
+      sourceSchema,
+      connectionConfig,
+      limit,
+      destinationSchema: schema,
+    });
+
+    return {
+      rows: preview.records as Record<string, unknown>[],
+      columns: this.buildPreviewColumns(
+        preview.records as Record<string, unknown>[],
+        preview.columns,
+        (sourceSchema.discoveredColumns as DiscoveredColumn[] | null | undefined) ?? null,
+        schema.transformScript,
+        (schema.upsertKey as string[] | null | undefined) ?? null,
+      ),
+    };
+  }
+
+  /**
    * Resolve source columns for the pipeline that references this destination schema.
    * Tries the explicitly-provided sourceSchemaId first, then looks up the pipeline.
    */
@@ -357,12 +421,107 @@ export class DestinationSchemaService {
       if (src?.discoveredColumns) return src.discoveredColumns as DiscoveredColumn[];
     }
 
-    const pipelinesForOrg = await this.pipelineRepository.findByOrganization(organizationId);
-    const linked = pipelinesForOrg.find((p) => p.destinationSchemaId === destSchemaId);
+    const linked = await this.findLinkedPipeline(destSchemaId, organizationId);
     if (!linked?.sourceSchemaId) return null;
 
     const src = await this.sourceSchemaRepository.findById(linked.sourceSchemaId);
     return (src?.discoveredColumns as DiscoveredColumn[]) ?? null;
+  }
+
+  private async findLinkedPipeline(destSchemaId: string, organizationId: string) {
+    return this.pipelineRepository.findByDestinationSchemaId(destSchemaId, organizationId);
+  }
+
+  private buildPreviewColumns(
+    rows: Record<string, unknown>[],
+    previewColumns: string[],
+    sourceColumns: DiscoveredColumn[] | null,
+    transformScript: string | null | undefined,
+    upsertKey: string[] | null,
+  ): Array<{
+    name: string;
+    type: string;
+    nullable: boolean;
+    primaryKey?: boolean;
+  }> {
+    const columnNames = previewColumns.length
+      ? previewColumns
+      : Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+    const sourceColumnsByName = new Map(
+      (sourceColumns ?? []).map((column) => [column.name, column]),
+    );
+    const mappedColumns = parseTransformOutputMappings(transformScript ?? '');
+    const upsertKeys = new Set(upsertKey ?? []);
+
+    return columnNames.map((name) => {
+      const sourceType = this.normalizeColumnType(
+        sourceColumnsByName.get(mappedColumns.get(name) ?? '')?.type,
+      );
+      const sampleValue = this.findSampleValue(rows, name);
+
+      return {
+        name,
+        type: sourceType ?? this.inferColumnType(sampleValue),
+        nullable: rows.length === 0 || rows.some((row) => !(name in row) || row[name] == null),
+        ...(upsertKeys.has(name) ? { primaryKey: true } : {}),
+      };
+    });
+  }
+
+  private findSampleValue(rows: Record<string, unknown>[], columnName: string): unknown {
+    for (const row of rows) {
+      const value = row[columnName];
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  private inferColumnType(value: unknown): string {
+    if (typeof value === 'boolean') {
+      return 'boolean';
+    }
+    if (typeof value === 'number') {
+      return Number.isInteger(value) ? 'integer' : 'number';
+    }
+    if (Array.isArray(value)) {
+      return 'array';
+    }
+    if (value && typeof value === 'object') {
+      return 'object';
+    }
+    return 'string';
+  }
+
+  private normalizeColumnType(type: string | null | undefined): string | null {
+    if (!type) {
+      return null;
+    }
+
+    const normalized = type.toLowerCase();
+    if (normalized.includes('bool')) {
+      return 'boolean';
+    }
+    if (normalized.includes('int') || normalized === 'serial' || normalized === 'bigserial') {
+      return 'integer';
+    }
+    if (
+      normalized.includes('numeric') ||
+      normalized.includes('decimal') ||
+      normalized.includes('double') ||
+      normalized.includes('float') ||
+      normalized.includes('real')
+    ) {
+      return 'number';
+    }
+    if (normalized.includes('json') || normalized.includes('object')) {
+      return 'object';
+    }
+    if (normalized.includes('array')) {
+      return 'array';
+    }
+    return 'string';
   }
 
   /**
