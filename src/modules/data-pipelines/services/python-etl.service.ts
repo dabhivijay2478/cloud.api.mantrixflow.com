@@ -220,6 +220,8 @@ export class PythonETLService {
     const previewUrl = `${this.pythonServiceUrl}/preview`;
     this.assertValidRequestUrl(previewUrl, 'preview');
 
+    const sourceType = this.toRegistryType(sourceSchema.sourceType || 'postgres');
+
     const response = await firstValueFrom(
       this.httpService.post(
         previewUrl,
@@ -227,6 +229,7 @@ export class PythonETLService {
           connection_config: connectionConfig,
           source_stream: sourceStream,
           limit,
+          source_type: sourceType,
           transform_script: script || undefined,
           column_map: column_map || undefined,
           drop_columns: drop_columns || undefined,
@@ -321,6 +324,8 @@ export class PythonETLService {
     destinationSchema: PipelineDestinationSchema;
     sourceConnectionConfig: any;
     destConnectionConfig: any;
+    sourceType?: string;
+    destType?: string;
     userId: string;
     syncMode?: 'full' | 'incremental' | 'cdc';
     writeMode?: 'append' | 'upsert' | 'replace';
@@ -338,6 +343,8 @@ export class PythonETLService {
       destinationSchema,
       sourceConnectionConfig,
       destConnectionConfig,
+      sourceType = 'postgres',
+      destType = 'postgres',
       syncMode = 'full',
       writeMode = 'append',
       upsertKey,
@@ -404,6 +411,8 @@ export class PythonETLService {
       organization_id: organizationId,
       source_connection_config: sourceConnectionConfig,
       dest_connection_config: destConnectionConfig,
+      source_type: sourceType,
+      dest_type: destType,
       replication_method: replicationMethod,
       source_stream: sourceStream,
       dest_table: destinationSchema.destinationTable || sourceSchema.sourceTable,
@@ -530,6 +539,13 @@ export class PythonETLService {
       return `${operation} failed — Python ETL service is not running at ${this.pythonServiceUrl}`;
     }
     return error?.message || `${operation} failed with unknown error`;
+  }
+
+  /** Map connection type to Singer registry key. Only PostgreSQL is supported. */
+  private toRegistryType(type: string): string {
+    const t = (type || 'postgres').toLowerCase();
+    if (t === 'postgres' || t === 'postgresql' || t === 'pgvector' || t === 'redshift') return 'postgres';
+    throw new Error('Only PostgreSQL is supported');
   }
 
   /**

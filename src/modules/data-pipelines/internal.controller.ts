@@ -18,6 +18,8 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
+import { DataSourceConnectionRepository } from '../data-sources/repositories/data-source-connection.repository';
+import { PipelineSourceSchemaRepository } from './repositories/pipeline-source-schema.repository';
 import { PipelineRepository } from './repositories/pipeline.repository';
 import { PipelineLifecycleService } from './services/pipeline-lifecycle.service';
 import { PgmqQueueService } from '../queue';
@@ -37,6 +39,7 @@ interface EtlCallbackPayload {
   duration_seconds?: number;
   source_tool?: string;
   dest_tool?: string;
+  replication_method_used?: string;
 }
 
 @ApiExcludeController()
@@ -46,6 +49,8 @@ export class InternalEtlController {
 
   constructor(
     private readonly pipelineRepository: PipelineRepository,
+    private readonly pipelineSourceSchemaRepository: PipelineSourceSchemaRepository,
+    private readonly connectionRepository: DataSourceConnectionRepository,
     private readonly lifecycleService: PipelineLifecycleService,
     private readonly pipelineQueueService: PgmqQueueService,
   ) {}
@@ -70,6 +75,7 @@ export class InternalEtlController {
       duration_seconds: durationSeconds = 0,
       source_tool: sourceTool = 'tap-postgres',
       dest_tool: destTool = 'target-postgres',
+      replication_method_used: replicationMethodUsed,
     } = payload;
 
     this.logger.log(
@@ -125,8 +131,46 @@ export class InternalEtlController {
       targetStatus = PipelineStatus.IDLE;
     }
 
+    // Save replication slot to connection when first LOG_BASED run completes
+    if (
+      status === 'completed' &&
+      (syncMode === 'cdc' || syncMode === 'log_based') &&
+      replicationMethodUsed === 'LOG_BASED'
+    ) {
+      try {
+        const sourceSchema = await this.pipelineSourceSchemaRepository.findById(
+          pipeline.sourceSchemaId,
+        );
+        if (sourceSchema?.dataSourceId) {
+          const connection = await this.connectionRepository.findByDataSourceId(
+            sourceSchema.dataSourceId,
+          );
+          if (connection && !connection.replicationSlotName) {
+            const slotName =
+              'mxf_' +
+              connection.id.replace(/-/g, '').slice(0, 8);
+            await this.connectionRepository.updateByDataSourceId(
+              sourceSchema.dataSourceId,
+              { replicationSlotName: slotName },
+            );
+            this.logger.log(
+              `Saved replication slot ${slotName} to connection for data source ${sourceSchema.dataSourceId}`,
+            );
+          }
+        }
+      } catch (err) {
+        this.logger.error(
+          `Failed to save replication slot for pipeline ${pipelineId}: ${err}`,
+        );
+      }
+    }
+
     // Update cumulative stats on pipeline
     const newTotalProcessed = (pipeline.totalRowsProcessed || 0) + rowsUpserted;
+    const setFullRefreshCompletedAt =
+      status === 'completed' &&
+      (syncMode === 'cdc' || syncMode === 'log_based') &&
+      replicationMethodUsed === 'FULL_TABLE';
     try {
       await this.pipelineRepository.update(pipelineId, {
         lastRunAt: new Date(),
@@ -139,6 +183,7 @@ export class InternalEtlController {
           (pipeline.totalRunsFailed || 0) + (status !== 'completed' ? 1 : 0),
         lastSyncAt: new Date(),
         ...(sanitizedError ? { lastError: sanitizedError } : {}),
+        ...(setFullRefreshCompletedAt ? { fullRefreshCompletedAt: new Date() } : {}),
       });
     } catch (err) {
       this.logger.error(`Failed to update pipeline ${pipelineId}: ${err}`);

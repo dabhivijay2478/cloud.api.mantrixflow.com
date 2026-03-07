@@ -15,9 +15,10 @@
 
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ActivityLoggerService } from '../../../common/logger';
+import { DataSourceConnectionRepository } from '../../data-sources/repositories/data-source-connection.repository';
+import { ConnectionService } from '../../data-sources/connection.service';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PythonETLService } from './python-etl.service';
-import { ConnectionService } from '../../data-sources/connection.service';
 import {
   PgmqQueueService,
   PgmqMessage,
@@ -35,18 +36,25 @@ import {
   PGMQ_MAX_DISPATCH_RETRIES,
 } from '../../queue';
 
+/** Map connection type to Singer registry key. Only PostgreSQL is supported. */
+function toRegistryType(connectionType: string): string {
+  const t = (connectionType || 'postgres').toLowerCase();
+  if (t === 'postgres' || t === 'postgresql' || t === 'pgvector' || t === 'redshift') return 'postgres';
+  throw new Error('Only PostgreSQL is supported');
+}
+
 @Injectable()
 export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PipelineJobProcessor.name);
   private readonly intervals: NodeJS.Timeout[] = [];
   private readonly activeQueue = new Map<string, boolean>();
   private isShuttingDown = false;
-
   constructor(
     private readonly pipelineRepository: PipelineRepository,
     private readonly queueService: PgmqQueueService,
     private readonly pythonETLService: PythonETLService,
     private readonly connectionService: ConnectionService,
+    private readonly connectionRepository: DataSourceConnectionRepository,
     private readonly activity: ActivityLoggerService,
   ) {}
 
@@ -158,16 +166,29 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
       }
 
-      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
-        organizationId,
-        sourceSchema.dataSourceId,
-        userId || 'system',
-      );
-      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
-        organizationId,
-        destinationSchema.dataSourceId,
-        userId || 'system',
-      );
+      const [sourceConnectionConfig, destConnectionConfig, sourceConnectionType, destConnectionType] =
+        await Promise.all([
+          this.connectionService.getDecryptedConnection(
+            organizationId,
+            sourceSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionService.getDecryptedConnection(
+            organizationId,
+            destinationSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionService.getConnectionType(
+            organizationId,
+            sourceSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionService.getConnectionType(
+            organizationId,
+            destinationSchema.dataSourceId,
+            userId || 'system',
+          ),
+        ]);
 
       await this.pipelineRepository.updateRun(runId, {
         status: 'running',
@@ -187,6 +208,8 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         destinationSchema,
         sourceConnectionConfig,
         destConnectionConfig,
+        sourceType: toRegistryType(sourceConnectionType),
+        destType: toRegistryType(destConnectionType),
         userId: userId || 'system',
         syncMode: 'full',
         writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
@@ -285,20 +308,59 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      // Block LOG_BASED dispatch until initial full sync completed
+      const isCdcOrLogBased =
+        pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+      if (isCdcOrLogBased && !pipeline.fullRefreshCompletedAt) {
+        const errorMsg =
+          'This pipeline requires an initial full sync before log-based sync can run. Click \'Run Initial Sync\' to start.';
+        this.logger.warn(`[LOG_BASED] Pipeline ${pipelineId}: ${errorMsg}`);
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'failed',
+          jobState: 'failed',
+          errorMessage: errorMsg,
+          completedAt: new Date(),
+        });
+        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, msg.msg_id);
+        return;
+      }
+
       if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
         throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
       }
 
-      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
-        organizationId,
-        sourceSchema.dataSourceId,
-        userId || 'system',
-      );
-      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
-        organizationId,
-        destinationSchema.dataSourceId,
-        userId || 'system',
-      );
+      const [sourceConnectionConfig, destConnectionConfig, sourceConnectionType, destConnectionType, sourceConnection] =
+        await Promise.all([
+          this.connectionService.getDecryptedConnection(
+            organizationId,
+            sourceSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionService.getDecryptedConnection(
+            organizationId,
+            destinationSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionService.getConnectionType(
+            organizationId,
+            sourceSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionService.getConnectionType(
+            organizationId,
+            destinationSchema.dataSourceId,
+            userId || 'system',
+          ),
+          this.connectionRepository.findByDataSourceId(sourceSchema.dataSourceId),
+        ]);
+
+      // Replication slot lives on connection; compute if not yet set
+      let replicationSlotName =
+        (sourceConnection?.replicationSlotName as string) || undefined;
+      if (!replicationSlotName && sourceConnection?.id) {
+        replicationSlotName =
+          'mxf_' + sourceConnection.id.replace(/-/g, '').slice(0, 8);
+      }
 
       await this.pipelineRepository.updateRun(runId, {
         status: 'running',
@@ -318,12 +380,14 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         destinationSchema,
         sourceConnectionConfig,
         destConnectionConfig,
+        sourceType: toRegistryType(sourceConnectionType),
+        destType: toRegistryType(destConnectionType),
         userId: userId || 'system',
         syncMode: 'cdc',
         writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
         upsertKey: destinationSchema.upsertKey as string[] | undefined,
         hardDelete: false,
-        replicationSlotName: (pipeline.replicationSlotName as string) || undefined,
+        replicationSlotName,
       });
 
       if ('retry' in result && result.retry) {

@@ -27,8 +27,6 @@ import { DataSourceConnectionRepository } from './repositories/data-source-conne
 import type {
   APIConfig,
   BigQueryConfig,
-  MongoDBConfig,
-  MySQLConfig,
   PostgresConfig,
   S3Config,
   SnowflakeConfig,
@@ -82,7 +80,6 @@ export class ConnectionService implements OnModuleInit {
 
     switch (connectionType) {
       case 'postgres':
-      case 'mysql':
         if (encrypted.password) {
           encrypted.password = this.encryptionService.encrypt(encrypted.password);
         }
@@ -99,14 +96,6 @@ export class ConnectionService implements OnModuleInit {
           encrypted.ssh_tunnel.private_key = this.encryptionService.encrypt(
             encrypted.ssh_tunnel.private_key,
           );
-        }
-        break;
-      case 'mongodb':
-        if (encrypted.connection_string) {
-          encrypted.connection_string = this.encryptionService.encrypt(encrypted.connection_string);
-        }
-        if (encrypted.password) {
-          encrypted.password = this.encryptionService.encrypt(encrypted.password);
         }
         break;
       case 's3':
@@ -259,7 +248,6 @@ export class ConnectionService implements OnModuleInit {
 
     switch (connectionType) {
       case 'postgres':
-      case 'mysql':
         if (normalized.password) {
           normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
         }
@@ -278,16 +266,6 @@ export class ConnectionService implements OnModuleInit {
           normalized.ssh_tunnel.private_key = this.maybeDecryptIncomingEncrypted(
             normalized.ssh_tunnel.private_key,
           );
-        }
-        break;
-      case 'mongodb':
-        if (normalized.connection_string) {
-          normalized.connection_string = this.maybeDecryptIncomingEncrypted(
-            normalized.connection_string,
-          );
-        }
-        if (normalized.password) {
-          normalized.password = this.maybeDecryptIncomingEncrypted(normalized.password);
         }
         break;
       case 's3':
@@ -420,7 +398,6 @@ export class ConnectionService implements OnModuleInit {
     const checks: unknown[] = [];
     switch (connectionType) {
       case 'postgres':
-      case 'mysql':
         checks.push(
           config.password,
           config.ssl?.ca_cert,
@@ -428,9 +405,6 @@ export class ConnectionService implements OnModuleInit {
           config.ssl?.client_key,
           config.ssh_tunnel?.private_key,
         );
-        break;
-      case 'mongodb':
-        checks.push(config.connection_string, config.password);
         break;
       case 's3':
         checks.push(config.access_key_id, config.secret_access_key);
@@ -515,7 +489,6 @@ export class ConnectionService implements OnModuleInit {
     try {
       switch (connectionType) {
         case 'postgres':
-        case 'mysql':
           if (decrypted.password) {
             decrypted.password = this.decryptFieldWithLegacySupport(
               decrypted.password,
@@ -549,22 +522,6 @@ export class ConnectionService implements OnModuleInit {
               decrypted.ssh_tunnel.private_key,
               connectionType,
               'ssh_tunnel.private_key',
-            );
-          }
-          break;
-        case 'mongodb':
-          if (decrypted.connection_string) {
-            decrypted.connection_string = this.decryptFieldWithLegacySupport(
-              decrypted.connection_string,
-              connectionType,
-              'connection_string',
-            );
-          }
-          if (decrypted.password) {
-            decrypted.password = this.decryptFieldWithLegacySupport(
-              decrypted.password,
-              connectionType,
-              'password',
             );
           }
           break;
@@ -641,7 +598,6 @@ export class ConnectionService implements OnModuleInit {
 
     switch (connectionType) {
       case 'postgres':
-      case 'mysql':
         if (masked.password) {
           masked.password = '****';
         }
@@ -656,18 +612,6 @@ export class ConnectionService implements OnModuleInit {
         }
         if (masked.ssh_tunnel?.private_key) {
           masked.ssh_tunnel.private_key = '****';
-        }
-        break;
-      case 'mongodb':
-        if (masked.connection_string) {
-          // Mask password in connection string
-          masked.connection_string = masked.connection_string.replace(
-            /:\/\/[^:]+:[^@]+@/,
-            '://****:****@',
-          );
-        }
-        if (masked.password) {
-          masked.password = '****';
         }
         break;
       case 's3':
@@ -724,12 +668,6 @@ export class ConnectionService implements OnModuleInit {
       case 'postgres':
         this.validatePostgresConfig(config as PostgresConfig);
         break;
-      case 'mysql':
-        this.validateMySQLConfig(config as MySQLConfig);
-        break;
-      case 'mongodb':
-        this.validateMongoDBConfig(config as MongoDBConfig);
-        break;
       case 's3':
         this.validateS3Config(config as S3Config);
         break;
@@ -759,25 +697,6 @@ export class ConnectionService implements OnModuleInit {
     }
     if (typeof config.port !== 'number' || config.port < 1 || config.port > 65535) {
       throw new BadRequestException('Port must be a number between 1 and 65535');
-    }
-  }
-
-  private validateMySQLConfig(config: MySQLConfig): void {
-    if (!config.host || !config.port || !config.database || !config.username || !config.password) {
-      throw new BadRequestException(
-        'MySQL config requires: host, port, database, username, password',
-      );
-    }
-    if (typeof config.port !== 'number' || config.port < 1 || config.port > 65535) {
-      throw new BadRequestException('Port must be a number between 1 and 65535');
-    }
-  }
-
-  private validateMongoDBConfig(config: MongoDBConfig): void {
-    if (!config.connection_string && (!config.host || !config.database)) {
-      throw new BadRequestException(
-        'MongoDB config requires: connection_string OR (host and database)',
-      );
     }
   }
 
@@ -1041,6 +960,36 @@ export class ConnectionService implements OnModuleInit {
       throw new NotFoundException('Connection not found for this data source');
     }
 
+    // Call ETL cleanup to drop replication slot before deleting (for postgres CDC)
+    const slotName = connection.replicationSlotName;
+    if (slotName && this.pythonServiceUrl) {
+      try {
+        const decryptedConfig = this.decryptConfig(
+          connection.connectionType,
+          connection.config as Record<string, any>,
+        );
+        const sourceType = this.normalizeSourceTypeForPython(connection.connectionType);
+        await firstValueFrom(
+          this.httpService.post(
+            `${this.pythonServiceUrl}/cleanup/connection`,
+            {
+              source_type: sourceType,
+              connection_config: decryptedConfig,
+              replication_slot_name: slotName,
+            },
+            {
+              headers: { 'Content-Type': 'application/json' },
+              timeout: 15000,
+            },
+          ),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `CDC cleanup failed (proceeding with delete): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     // Delete connection
     await this.connectionRepository.deleteByDataSourceId(dataSourceId);
 
@@ -1079,18 +1028,28 @@ export class ConnectionService implements OnModuleInit {
   }
 
   /**
+   * Get connection type for registry lookup (tap/target executable).
+   * AUTHORIZATION: Same as getConnection.
+   */
+  async getConnectionType(
+    organizationId: string,
+    dataSourceId: string,
+    userId: string,
+  ): Promise<string> {
+    const connection = await this.getConnection(organizationId, dataSourceId, userId, false);
+    if (!connection) {
+      throw new NotFoundException('Connection not found for this data source');
+    }
+    return connection.connectionType || 'postgres';
+  }
+
+  /**
    * Normalize source type for Python service
    */
   private normalizeSourceTypeForPython(connectionType: string): string {
     const normalized = connectionType.toLowerCase();
     if (normalized === 'postgres' || normalized === 'pgvector' || normalized === 'redshift') {
       return 'postgresql';
-    }
-    if (normalized === 'mysql') {
-      return 'mysql';
-    }
-    if (normalized === 'mongodb') {
-      return 'mongodb';
     }
     return normalized;
   }
@@ -1140,53 +1099,14 @@ export class ConnectionService implements OnModuleInit {
         connection.config as any,
       );
 
-      // Call Python service to test connection
-      // Get auth token from request context (we'll need to pass it)
-      // For now, we'll call Python service directly - it will handle auth via JWT
+      // Call Python service to test connection (PostgreSQL only)
       const sourceType = this.normalizeSourceTypeForPython(connection.connectionType);
-
-      // Build request payload for Python service
-      const pythonRequest: any = {
-        type: sourceType,
+      const pythonRequest = {
+        connection_config: decryptedConfig,
+        source_config: decryptedConfig,
+        source_type: sourceType,
       };
 
-      // Map connection config to Python service format
-      if (sourceType === 'mongodb') {
-        if (decryptedConfig.connection_string) {
-          pythonRequest.connection_string_mongo = decryptedConfig.connection_string;
-        } else {
-          pythonRequest.host = decryptedConfig.host || 'localhost';
-          pythonRequest.port = decryptedConfig.port || 27017;
-          pythonRequest.database = decryptedConfig.database || '';
-          pythonRequest.username = decryptedConfig.username;
-          pythonRequest.password = decryptedConfig.password;
-          if (decryptedConfig.auth_source) {
-            pythonRequest.auth_source = decryptedConfig.auth_source;
-          }
-          if (decryptedConfig.replica_set) {
-            pythonRequest.replica_set = decryptedConfig.replica_set;
-          }
-          if (decryptedConfig.tls !== undefined) {
-            pythonRequest.tls = decryptedConfig.tls;
-          }
-        }
-      } else {
-        // SQL databases (PostgreSQL, MySQL)
-        if (decryptedConfig.connection_string) {
-          pythonRequest.connection_string = decryptedConfig.connection_string;
-        } else {
-          pythonRequest.host = decryptedConfig.host || 'localhost';
-          pythonRequest.port = decryptedConfig.port || (sourceType === 'postgresql' ? 5432 : 3306);
-          pythonRequest.database = decryptedConfig.database || '';
-          pythonRequest.username = decryptedConfig.username || '';
-          pythonRequest.password = decryptedConfig.password || '';
-          if (decryptedConfig.ssl) {
-            pythonRequest.ssl = decryptedConfig.ssl;
-          }
-        }
-      }
-
-      // Call Python service
       this.logger.log(`Calling Python service to test ${sourceType} connection`);
 
       const headers: Record<string, string> = {
@@ -1301,16 +1221,10 @@ export class ConnectionService implements OnModuleInit {
     this.logger.log(`[testConnectionConfig] Testing connection type: ${connectionType}`);
 
     switch (connectionType) {
-      // SQL Databases
       case 'postgres':
       case 'pgvector':
+      case 'redshift':
         return this.testPostgresConnection(config as PostgresConfig);
-
-      case 'mysql':
-        return this.testMySQLConnection(config as MySQLConfig);
-
-      case 'mongodb':
-        return this.testMongoDBConnection(config as MongoDBConfig);
 
       case 's3':
       case 's3-datalake':
@@ -1318,11 +1232,6 @@ export class ConnectionService implements OnModuleInit {
 
       case 'api':
         return this.testAPIConnection(config as APIConfig);
-
-      // SQL databases that use similar connection pattern to postgres
-      case 'redshift':
-        // Redshift is PostgreSQL-compatible
-        return this.testPostgresConnection(config as PostgresConfig);
 
       case 'mssql':
       case 'clickhouse':
@@ -1353,7 +1262,7 @@ export class ConnectionService implements OnModuleInit {
       default:
         this.logger.warn(`Unsupported connection type: ${connectionType}`);
         throw new BadRequestException(
-          `Unsupported connection type: ${connectionType}. Supported types: postgres, mysql, mongodb, s3, api, redshift, mssql, clickhouse, snowflake, bigquery, databricks, azure-blob-storage, pinecone, milvus, weaviate`,
+          `Unsupported connection type: ${connectionType}. Supported types: postgres, pgvector, redshift, s3, api`,
         );
     }
   }
@@ -1401,119 +1310,6 @@ export class ConnectionService implements OnModuleInit {
         success: false,
         message: `Connection failed: ${error.message}`,
         details: error,
-      };
-    }
-  }
-
-  /**
-   * Test MySQL connection
-   */
-  private async testMySQLConnection(_config: MySQLConfig): Promise<{
-    success: boolean;
-    message: string;
-    details?: any;
-  }> {
-    // TODO: Implement actual MySQL connection test
-    return {
-      success: true,
-      message: 'MySQL connection test not yet implemented',
-    };
-  }
-
-  /**
-   * Test MongoDB connection
-   * Supports both connection string (Atlas SRV) and individual host/port config
-   */
-  private async testMongoDBConnection(config: MongoDBConfig): Promise<{
-    success: boolean;
-    message: string;
-    details?: any;
-  }> {
-    // Import mongodb driver dynamically to avoid issues if not installed
-    let MongoClient: any;
-    try {
-      const mongodb = await import('mongodb');
-      MongoClient = mongodb.MongoClient;
-    } catch {
-      return {
-        success: false,
-        message: 'MongoDB driver not installed. Run: npm install mongodb',
-        details: { error: 'DRIVER_NOT_INSTALLED' },
-      };
-    }
-
-    try {
-      let connectionString: string;
-
-      // Build connection string from config
-      if (config.connection_string) {
-        // Use provided connection string (Atlas SRV format)
-        connectionString = config.connection_string;
-        this.logger.log(`Testing MongoDB connection with connection string`);
-      } else if (config.host) {
-        // Build connection string from individual parts
-        const auth =
-          config.username && config.password
-            ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
-            : '';
-        const port = config.port || 27017;
-        const authSource = config.auth_source ? `?authSource=${config.auth_source}` : '';
-        connectionString = `mongodb://${auth}${config.host}:${port}/${config.database}${authSource}`;
-        this.logger.log(`Testing MongoDB connection to ${config.host}:${port}`);
-      } else {
-        return {
-          success: false,
-          message: 'Either connection_string or host is required',
-          details: { error: 'INVALID_CONFIG' },
-        };
-      }
-
-      // Connection options
-      const options: any = {
-        serverSelectionTimeoutMS: 10000, // 10 second timeout
-        connectTimeoutMS: 10000,
-      };
-
-      // Add TLS if specified
-      if (config.tls) {
-        options.tls = true;
-      }
-
-      // Create client and connect
-      const client = new MongoClient(connectionString, options);
-
-      await client.connect();
-
-      // Try to ping the database to verify connection
-      const adminDb = client.db('admin');
-      const result = await adminDb.command({ ping: 1 });
-
-      // Get server info
-      const serverInfo = await adminDb.command({ serverStatus: 1 }).catch(() => null);
-
-      await client.close();
-
-      return {
-        success: true,
-        message: 'MongoDB connection successful',
-        details: {
-          ping: result.ok === 1 ? 'ok' : 'failed',
-          version: serverInfo?.version || 'Unknown',
-          host: serverInfo?.host || 'Connected',
-        },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`MongoDB connection test failed: ${errorMessage}`);
-
-      return {
-        success: false,
-        message: `Connection failed: ${errorMessage}`,
-        details: {
-          error: errorMessage,
-          code: (error as any)?.code,
-          name: (error as any)?.name,
-        },
       };
     }
   }
@@ -1587,10 +1383,6 @@ export class ConnectionService implements OnModuleInit {
       case 'redshift':
         schema = await this.discoverPostgresSchema(decryptedConfig as PostgresConfig);
         break;
-      case 'mongodb':
-        schema = await this.discoverMongoDBSchema(decryptedConfig as MongoDBConfig);
-        break;
-      // Add other types here
       default:
         this.logger.warn(`Unsupported connection type for schema discovery: ${type}`);
         schema = {
@@ -1723,176 +1515,4 @@ export class ConnectionService implements OnModuleInit {
     }
   }
 
-  /**
-   * Discover MongoDB schema (collections and their field structure)
-   * For NoSQL databases, we sample documents to infer the schema
-   */
-  private async discoverMongoDBSchema(config: MongoDBConfig): Promise<any> {
-    // Import mongodb driver dynamically
-    let MongoClient: any;
-    try {
-      const mongodb = await import('mongodb');
-      MongoClient = mongodb.MongoClient;
-    } catch {
-      throw new BadRequestException('MongoDB driver not installed. Run: npm install mongodb');
-    }
-
-    let client: any = null;
-
-    try {
-      let connectionString: string;
-      let databaseName: string | undefined;
-
-      // Build connection string from config
-      if (config.connection_string) {
-        connectionString = config.connection_string;
-        // Try to extract database name from connection string
-        const dbMatch = connectionString.match(/\/([^/?]+)(\?|$)/);
-        databaseName = dbMatch?.[1] || config.database;
-        this.logger.log(`Discovering MongoDB schema using connection string`);
-      } else if (config.host) {
-        const auth =
-          config.username && config.password
-            ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@`
-            : '';
-        const port = config.port || 27017;
-        const authSource = config.auth_source ? `?authSource=${config.auth_source}` : '';
-        databaseName = config.database;
-        connectionString = `mongodb://${auth}${config.host}:${port}/${databaseName}${authSource}`;
-        this.logger.log(`Discovering MongoDB schema for ${config.host}:${port}/${databaseName}`);
-      } else {
-        throw new BadRequestException('Either connection_string or host is required');
-      }
-
-      // Connection options
-      const options: any = {
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 10000,
-      };
-
-      if (config.tls) {
-        options.tls = true;
-      }
-
-      // Connect
-      client = new MongoClient(connectionString, options);
-      await client.connect();
-
-      // Get database - use specified database or list all
-      const adminDb = client.db('admin');
-
-      // Get list of databases
-      const dbList = await adminDb.admin().listDatabases();
-      this.logger.log(`Found ${dbList.databases.length} databases`);
-
-      const result = {
-        type: 'mongodb',
-        databases: [] as any[],
-      };
-
-      // If a specific database is specified, only discover that one
-      const databasesToDiscover =
-        databaseName && databaseName !== 'admin'
-          ? [{ name: databaseName }]
-          : dbList.databases.filter((db: any) => !['admin', 'local', 'config'].includes(db.name));
-
-      for (const dbInfo of databasesToDiscover) {
-        const db = client.db(dbInfo.name);
-
-        // Get collections
-        const collections = await db.listCollections().toArray();
-        this.logger.log(`Database '${dbInfo.name}': Found ${collections.length} collections`);
-
-        const collectionsData: any[] = [];
-
-        for (const coll of collections) {
-          const collection = db.collection(coll.name);
-
-          // Get sample documents to infer schema
-          const sampleDocs = await collection.find({}).limit(10).toArray();
-          const documentCount = await collection.countDocuments();
-
-          // Infer fields from sample documents
-          const fieldsMap = new Map<string, { types: Set<string>; nullable: boolean }>();
-
-          for (const doc of sampleDocs) {
-            this.inferFieldsFromDocument(doc, '', fieldsMap);
-          }
-
-          // Convert to array
-          const fields = Array.from(fieldsMap.entries()).map(([name, info]) => ({
-            name,
-            type: Array.from(info.types).join(' | '),
-            nullable: info.nullable,
-          }));
-
-          collectionsData.push({
-            name: coll.name,
-            type: 'collection',
-            documentCount,
-            sampleSize: sampleDocs.length,
-            fields,
-          });
-        }
-
-        result.databases.push({
-          name: dbInfo.name,
-          collections: collectionsData,
-        });
-      }
-
-      return result;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to discover MongoDB schema: ${errorMessage}`);
-      throw new BadRequestException(`Failed to discover schema: ${errorMessage}`);
-    } finally {
-      if (client) {
-        await client.close();
-      }
-    }
-  }
-
-  /**
-   * Helper to infer field structure from a MongoDB document
-   */
-  private inferFieldsFromDocument(
-    doc: any,
-    prefix: string,
-    fieldsMap: Map<string, { types: Set<string>; nullable: boolean }>,
-  ): void {
-    for (const [key, value] of Object.entries(doc)) {
-      const fieldName = prefix ? `${prefix}.${key}` : key;
-
-      if (!fieldsMap.has(fieldName)) {
-        fieldsMap.set(fieldName, { types: new Set(), nullable: false });
-      }
-
-      const fieldInfo = fieldsMap.get(fieldName)!;
-
-      if (value === null || value === undefined) {
-        fieldInfo.nullable = true;
-        fieldInfo.types.add('null');
-      } else if (Array.isArray(value)) {
-        fieldInfo.types.add('array');
-        // Sample first element for array type inference
-        if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
-          // Don't recurse into arrays of objects to avoid explosion
-          fieldInfo.types.add(`array<object>`);
-        } else if (value.length > 0) {
-          fieldInfo.types.add(`array<${typeof value[0]}>`);
-        }
-      } else if (value instanceof Date) {
-        fieldInfo.types.add('date');
-      } else if (typeof value === 'object') {
-        fieldInfo.types.add('object');
-        // Recurse into nested objects (limit depth)
-        if (prefix.split('.').length < 3) {
-          this.inferFieldsFromDocument(value, fieldName, fieldsMap);
-        }
-      } else {
-        fieldInfo.types.add(typeof value);
-      }
-    }
-  }
 }

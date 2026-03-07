@@ -12,6 +12,7 @@ import { ConnectorsModule } from '../connectors/connectors.module';
 import { OrganizationModule } from '../organizations/organization.module';
 import { UserModule } from '../users/user.module';
 import { DataSourceController } from './data-source.controller';
+import { CdcVerifyService } from './cdc-verify.service';
 import { ConnectionService } from './connection.service';
 import { DataSourceService } from './data-source.service';
 import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
@@ -42,6 +43,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
     // Services
     DataSourceService,
     ConnectionService,
+    CdcVerifyService,
     // Repositories
     DataSourceRepository,
     DataSourceConnectionRepository,

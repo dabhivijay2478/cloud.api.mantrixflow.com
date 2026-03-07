@@ -24,6 +24,7 @@ import {
   PIPELINE_ACTIONS,
   PIPELINE_RUN_ACTIONS,
 } from '../../activity-logs/constants/activity-log-types';
+import { DataSourceConnectionRepository } from '../../data-sources/repositories/data-source-connection.repository';
 import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
@@ -71,6 +72,7 @@ export class PipelineService {
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
+    private readonly connectionRepository: DataSourceConnectionRepository,
     private readonly pythonETLService: PythonETLService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
@@ -416,6 +418,29 @@ export class PipelineService {
       throw new BadRequestException('Pipeline is paused. Resume it before running.');
     }
 
+    // CDC verification guard: block LOG_BASED/INCREMENTAL_SYNC when CDC not verified
+    const isCdcOrLogBased =
+      pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+    const needsInitialSync =
+      isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
+    if (isCdcOrLogBased && !needsInitialSync) {
+      const sourceSchema = pipelineWithSchemas.sourceSchema;
+      if (sourceSchema?.dataSourceId) {
+        const connection = await this.connectionRepository.findByDataSourceId(
+          sourceSchema.dataSourceId,
+        );
+        const cdcStatus = connection?.cdcPrerequisitesStatus as
+          | { overall?: string }
+          | null
+          | undefined;
+        if (cdcStatus?.overall !== 'verified') {
+          throw new BadRequestException(
+            'Complete the Log-Based Sync setup for this source connection before running.',
+          );
+        }
+      }
+    }
+
     // Create run record (pending — ETL callback will update it)
     const run = await this.pipelineRepository.createRun({
       pipelineId,
@@ -444,11 +469,25 @@ export class PipelineService {
     );
 
     // Enqueue to PGMQ — PipelineJobProcessor will dequeue and dispatch to ETL pod
-    // Route by syncMode: full → FullSync, incremental/cdc → IncrementalSync (LOG_BASED)
+    // Route by syncMode: full → FullSync; cdc/log_based → FullSync if no initial sync yet, else IncrementalSync
     if (this.pipelineQueueService.isReady()) {
-      const isIncremental =
-        pipeline.syncMode === 'incremental' || pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
-      if (isIncremental) {
+      const isCdcOrLogBased =
+        pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+      const needsInitialSync =
+        isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
+      const isIncrementalCursor = pipeline.syncMode === 'incremental';
+
+      if (isCdcOrLogBased && needsInitialSync) {
+        // "Run Initial Sync" — enqueue FULL_SYNC (FULL_TABLE)
+        await this.pipelineQueueService.enqueueFullSync({
+          pipelineId,
+          runId: run.id,
+          organizationId: pipeline.organizationId,
+          userId,
+          triggerType,
+        });
+        this.logger.log(`Pipeline ${pipelineId} run ${run.id} enqueued to FULL_SYNC (Run Initial Sync)`);
+      } else if (isCdcOrLogBased || isIncrementalCursor) {
         await this.pipelineQueueService.enqueueIncrementalSync({
           pipelineId,
           runId: run.id,

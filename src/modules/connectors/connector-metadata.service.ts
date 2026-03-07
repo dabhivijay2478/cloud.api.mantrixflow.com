@@ -4,7 +4,7 @@
  * discover, preview, health: call Singer-based Python ETL (apps/new-etl).
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
@@ -37,6 +37,14 @@ export class ConnectorMetadataService {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${this.token}`,
     };
+  }
+
+  /** Map connector id or connection type to Singer registry key. Only PostgreSQL is supported. */
+  private toRegistryType(sourceType: string): string {
+    const t = (sourceType || 'postgres').toLowerCase();
+    if (t === 'postgres' || t === 'postgresql' || t === 'source-postgres' || t === 'pgvector' || t === 'redshift')
+      return 'postgres';
+    throw new BadRequestException('Only PostgreSQL is supported');
   }
 
   async listConnectors(): Promise<{
@@ -146,6 +154,7 @@ export class ConnectorMetadataService {
           {
             connection_config: options.source_config ?? {},
             schema_name: options.schema_name ?? 'public',
+            source_type: this.toRegistryType(options.source_type),
           },
           { headers: this.headers(), timeout: 120_000 },
         ),
@@ -258,6 +267,7 @@ export class ConnectorMetadataService {
             connection_config: options.source_config,
             source_stream: options.source_stream,
             limit: options.limit ?? 50,
+            source_type: this.toRegistryType(options.source_type),
           },
           { headers: this.headers(), timeout: 120_000 },
         ),
@@ -271,7 +281,35 @@ export class ConnectorMetadataService {
     }
   }
 
-  async getCdcSetup(sourceType: string): Promise<object> {
+  async getCdcSetup(sourceType: string): Promise<{
+    source_type: string;
+    cdc_providers?: Array<{ id: string; label: string; instructions?: Record<string, unknown> }>;
+    cdc_verify_steps?: string[];
+    instructions?: string[];
+  }> {
+    const sources = (connectorsConfig as { sources?: Array<Record<string, unknown>> }).sources ?? [];
+    const connectorId = sourceType.startsWith('source-') ? sourceType : `source-${sourceType}`;
+    const connector = sources.find(
+      (s) =>
+        (s.id as string) === connectorId ||
+        (s.type as string)?.toLowerCase() === sourceType.toLowerCase(),
+    );
+    if (connector?.cdc_providers) {
+      return {
+        source_type: sourceType,
+        cdc_providers: connector.cdc_providers as Array<{
+          id: string;
+          label: string;
+          instructions?: Record<string, unknown>;
+        }>,
+        cdc_verify_steps: (connector.cdc_verify_steps as string[]) ?? [
+          'wal_level',
+          'wal2json',
+          'replication_role',
+          'replication_test',
+        ],
+      };
+    }
     return {
       source_type: sourceType,
       instructions: [

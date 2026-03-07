@@ -52,6 +52,7 @@ import {
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
 import { ConnectorMetadataService } from '../connectors/connector-metadata.service';
+import { CdcVerifyService } from './cdc-verify.service';
 import { DataSourceService, type CreateDataSourceDto } from './data-source.service';
 import { ConnectionService, type CreateConnectionDto } from './connection.service';
 
@@ -59,11 +60,9 @@ type ExpressRequestType = ExpressRequest;
 
 function toEtlSourceType(type: string): string {
   const t = (type ?? 'postgres').toLowerCase();
-  if (t === 'postgres' || t === 'postgresql') return 'source-postgres';
-  if (t === 'mongodb') return 'source-mongodb-v2';
-  if (t === 'mysql') return 'source-mysql';
-  if (t === 'mssql' || t === 'sqlserver') return 'source-mssql';
-  return t.startsWith('source-') ? t : `source-${t}`;
+  if (t === 'postgres' || t === 'postgresql' || t === 'source-postgres' || t === 'pgvector' || t === 'redshift')
+    return 'source-postgres';
+  throw new BadRequestException('Only PostgreSQL is supported');
 }
 
 @ApiTags('data-sources')
@@ -75,6 +74,7 @@ export class DataSourceController {
     private readonly dataSourceService: DataSourceService,
     private readonly connectionService: ConnectionService,
     private readonly connectorMetadataService: ConnectorMetadataService,
+    private readonly cdcVerifyService: CdcVerifyService,
   ) {}
 
   /**
@@ -221,7 +221,7 @@ export class DataSourceController {
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiResponse({ status: 200, description: 'Connection test result' })
-  async testConnection(
+  async testConnectionConfig(
     @Param('organizationId', ParseUUIDPipe) _organizationId: string,
     @Body() body: { connectionType?: string; connection_type?: string; config?: Record<string, unknown> },
   ) {
@@ -541,6 +541,111 @@ export class DataSourceController {
     return createSuccessResponse({
       streams: discoverResult.streams ?? [],
     });
+  }
+
+  /**
+   * Get CDC status and available providers for a data source
+   */
+  @Get(':sourceId/cdc-status')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Get CDC status',
+    description: 'Get CDC prerequisites status and available providers for log-based sync setup',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'CDC status retrieved successfully' })
+  async getCdcStatus(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const result = await this.cdcVerifyService.getCdcStatus(
+      organizationId,
+      sourceId,
+      userId,
+    );
+
+    return createSuccessResponse(result);
+  }
+
+  /**
+   * Verify a single CDC prerequisite step
+   */
+  @Post(':sourceId/cdc-verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify CDC step',
+    description: 'Verify a single CDC prerequisite step (wal_level, wal2json, replication_role, replication_test)',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'CDC step verification result' })
+  async cdcVerify(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: { step?: string; provider_selected?: string },
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const step = body.step ?? 'wal_level';
+    if (!['wal_level', 'wal2json', 'replication_role', 'replication_test'].includes(step)) {
+      throw new BadRequestException(
+        'step must be one of: wal_level, wal2json, replication_role, replication_test',
+      );
+    }
+
+    const result = await this.cdcVerifyService.verifyStep(
+      organizationId,
+      sourceId,
+      userId,
+      step,
+      body.provider_selected,
+    );
+
+    return createSuccessResponse(result);
+  }
+
+  /**
+   * Verify all CDC prerequisite steps
+   */
+  @Post(':sourceId/cdc-verify-all')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify all CDC steps',
+    description: 'Run all CDC prerequisite verification steps for the data source',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'CDC verification result' })
+  async cdcVerifyAll(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: { provider_selected?: string },
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const result = await this.cdcVerifyService.verifyAll(
+      organizationId,
+      sourceId,
+      userId,
+      body.provider_selected,
+    );
+
+    return createSuccessResponse(result);
   }
 
   /**

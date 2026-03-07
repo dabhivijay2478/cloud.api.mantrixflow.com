@@ -2,10 +2,7 @@
  * Data Pipeline Module
  * NestJS module that wires together all data pipeline components
  *
- * Supports only three data source types:
- * - PostgreSQL (relational database)
- * - MySQL (relational database)
- * - MongoDB (document database)
+ * Supports PostgreSQL only for ETL (tap-postgres, target-postgres).
  *
  * Architecture:
  * - NestJS: Orchestration, CRUD, user/org management, activity logging
@@ -22,7 +19,7 @@
  * Guide: To add a new data source type:
  * 1. Add connector in Python service: apps/new-etl
  * 2. Register in Python main.py CONNECTORS dict
- * 3. Add type to DataSourceType enum (postgresql, mysql, mongodb only)
+ * 3. Add type to DataSourceType enum (postgres only for ETL)
  */
 
 import { Module, forwardRef } from '@nestjs/common';
