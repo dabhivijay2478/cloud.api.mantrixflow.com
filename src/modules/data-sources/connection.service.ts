@@ -785,60 +785,76 @@ export class ConnectionService implements OnModuleInit {
     // Encrypt sensitive fields
     const encryptedConfig = this.encryptConfig(dto.connectionType, normalizedConfig);
 
-    // Check if connection already exists
-    const existing = await this.connectionRepository.findByDataSourceId(dataSourceId);
+    let existing: DataSourceConnection | null;
+    try {
+      existing = await this.connectionRepository.findByDataSourceId(dataSourceId);
+    } catch (err: any) {
+      const cause = err?.cause?.message ?? err?.message ?? String(err);
+      this.logger.error(`Connection query failed: ${cause}`, err?.stack);
+      throw new BadRequestException(
+        `Failed to load connection: ${cause}. Ensure database migrations are applied (run: bun run db:migrate).`,
+      );
+    }
 
-    if (existing) {
-      // Update existing connection
-      const updated = await this.connectionRepository.updateByDataSourceId(dataSourceId, {
-        connectionType: dto.connectionType,
-        config: encryptedConfig,
-        status: 'inactive', // Reset status when config changes
-      });
+    try {
+      if (existing) {
+        // Update existing connection
+        const updated = await this.connectionRepository.updateByDataSourceId(dataSourceId, {
+          connectionType: dto.connectionType,
+          config: encryptedConfig,
+          status: 'inactive', // Reset status when config changes
+        });
 
-      // Log activity
-      try {
-        await this.activityLogService.logConnectionAction(
-          organizationId,
-          userId,
-          CONNECTION_ACTIONS.UPDATED,
-          updated.id,
-          dataSource.name,
-        );
-      } catch (error) {
-        this.logger.error(
-          'Failed to log connection update activity',
-          error instanceof Error ? error.stack : String(error),
-        );
+        // Log activity
+        try {
+          await this.activityLogService.logConnectionAction(
+            organizationId,
+            userId,
+            CONNECTION_ACTIONS.UPDATED,
+            updated.id,
+            dataSource.name,
+          );
+        } catch (error) {
+          this.logger.error(
+            'Failed to log connection update activity',
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+
+        return updated;
+      } else {
+        // Create new connection
+        const connection = await this.connectionRepository.create({
+          dataSourceId,
+          connectionType: dto.connectionType,
+          config: encryptedConfig,
+          status: 'inactive',
+        });
+
+        // Log activity
+        try {
+          await this.activityLogService.logConnectionAction(
+            organizationId,
+            userId,
+            CONNECTION_ACTIONS.CREATED,
+            connection.id,
+            dataSource.name,
+          );
+        } catch (error) {
+          this.logger.error(
+            'Failed to log connection creation activity',
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+
+        return connection;
       }
-
-      return updated;
-    } else {
-      // Create new connection
-      const connection = await this.connectionRepository.create({
-        dataSourceId,
-        connectionType: dto.connectionType,
-        config: encryptedConfig,
-        status: 'inactive',
-      });
-
-      // Log activity
-      try {
-        await this.activityLogService.logConnectionAction(
-          organizationId,
-          userId,
-          CONNECTION_ACTIONS.CREATED,
-          connection.id,
-          dataSource.name,
-        );
-      } catch (error) {
-        this.logger.error(
-          'Failed to log connection creation activity',
-          error instanceof Error ? error.stack : String(error),
-        );
-      }
-
-      return connection;
+    } catch (err: any) {
+      const cause = err?.cause?.message ?? err?.message ?? String(err);
+      this.logger.error(`Connection create/update failed: ${cause}`, err?.stack);
+      throw new BadRequestException(
+        `Failed to save connection: ${cause}. Ensure database migrations are applied (run: bun run db:migrate).`,
+      );
     }
   }
 
@@ -1224,7 +1240,7 @@ export class ConnectionService implements OnModuleInit {
       case 'postgres':
       case 'pgvector':
       case 'redshift':
-        return this.testPostgresConnection(config as PostgresConfig);
+        return this.testPostgresViaEtl(config as PostgresConfig);
 
       case 's3':
       case 's3-datalake':
@@ -1264,6 +1280,46 @@ export class ConnectionService implements OnModuleInit {
         throw new BadRequestException(
           `Unsupported connection type: ${connectionType}. Supported types: postgres, pgvector, redshift, s3, api`,
         );
+    }
+  }
+
+  /**
+   * Test PostgreSQL connection via ETL (tap-postgres --test)
+   * Routes to ETL server so logs appear; falls back to Node.js pg if ETL unreachable
+   */
+  private async testPostgresViaEtl(config: PostgresConfig): Promise<{
+    success: boolean;
+    message: string;
+    details?: any;
+  }> {
+    if (!this.pythonServiceUrl) {
+      return this.testPostgresConnection(config);
+    }
+    try {
+      const sourceType = 'source-postgres';
+      const pythonRequest = {
+        connection_config: config,
+        source_config: config,
+        source_type: sourceType,
+      };
+      this.logger.log(`Calling ETL test-connection for %s`, config.host || '?');
+      const res = await firstValueFrom(
+        this.httpService.post(`${this.pythonServiceUrl}/test-connection`, pythonRequest, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 30000,
+        }),
+      );
+      const data = res.data as { success?: boolean; error?: string; message?: string };
+      const success = data?.success === true;
+      return {
+        success,
+        message: success ? 'Successfully connected to PostgreSQL database' : (data?.error || data?.message || 'Connection test failed'),
+        details: data,
+      };
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail ?? error?.response?.data?.error ?? error?.message;
+      this.logger.warn(`ETL test-connection failed, falling back to Node.js pg: ${detail}`);
+      return this.testPostgresConnection(config);
     }
   }
 
