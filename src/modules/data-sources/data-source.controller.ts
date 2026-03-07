@@ -217,7 +217,7 @@ export class DataSourceController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Test connection config',
-    description: 'Test connection configuration before saving (PostgreSQL, MongoDB, etc.)',
+    description: 'Test connection configuration before saving (PostgreSQL only)',
   })
   @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
   @ApiResponse({ status: 200, description: 'Connection test result' })
