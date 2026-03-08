@@ -10,7 +10,7 @@
  *   always set — regardless of UnoSend dashboard configuration.
  *
  * UNOSEND TEMPLATE PATH (EMAIL_USE_LOCAL_TEMPLATES=false):
- *   Sends template_id + variables + subject to UnoSend. Requires
+ *   Sends template_id + template_data + subject to UnoSend. Requires
  *   UNOSEND_TEMPLATE_<TYPE> env vars AND matching variable names in the
  *   UnoSend dashboard template.
  *
@@ -21,14 +21,19 @@
  *   3. getTemplatePath() checks multiple candidate paths so it works in dev,
  *      Docker (dist/), Vercel (src/ via @vercel/node), and ts-node.
  *   4. subject is ALWAYS set in the payload — emails never show "(no subject)".
- *   5. Variables are sent as `variables` (not `template_data`) per UnoSend API.
+ *   5. Variables are sent as `template_data` per UnoSend API docs (NOT `variables`
+ *      — that field is not recognised by UnoSend and causes substitution to silently fail).
+ *   6. onModuleInit() pre-scans every registered local template at boot and logs
+ *      found/missing so path or build issues surface immediately in server logs.
+ *   7. A debug log of payload keys is emitted before every UnoSend HTTP request
+ *      for easy observability without exposing sensitive content.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import {
@@ -63,7 +68,7 @@ export interface SendEmailOptions {
 }
 
 @Injectable()
-export class EmailService {
+export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
   private readonly apiKey: string | undefined;
   private readonly enabled: boolean;
@@ -84,6 +89,44 @@ export class EmailService {
 
     this.logger.log(
       `EmailService init — enabled=${this.enabled}, useLocalTemplates=${this.useLocalTemplates}, from=${this.fromDefault}`,
+    );
+  }
+
+  // ─── Lifecycle ───────────────────────────────────────────────────────────────
+
+  /**
+   * Pre-scan all registered local template files at startup.
+   * Logs found / missing at boot so path or build issues are immediately visible
+   * in server logs instead of silently skipping emails at runtime.
+   */
+  onModuleInit(): void {
+    if (!this.useLocalTemplates) {
+      this.logger.log('EmailService: useLocalTemplates=false — skipping local template pre-scan');
+      return;
+    }
+
+    const emailTypes = Object.keys(EMAIL_TYPE_TO_TEMPLATE) as EmailType[];
+    let found = 0;
+    let missing = 0;
+
+    for (const emailType of emailTypes) {
+      const resolved = this.getTemplatePath(emailType);
+      if (resolved) {
+        found++;
+        this.logger.debug(`Template OK: ${emailType} → ${resolved}`);
+      } else {
+        missing++;
+        this.logger.warn(
+          `Template MISSING: "${emailType}" — this email type will be skipped until the ` +
+            `template file is present at one of the expected paths. ` +
+            `Run \`nest build\` to ensure assets are copied to dist/.`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `EmailService template scan: ${found}/${emailTypes.length} found` +
+        (missing > 0 ? `, ${missing} MISSING — check logs above` : ' ✓ all OK'),
     );
   }
 
@@ -287,7 +330,9 @@ export class EmailService {
           );
           payload.template_id = options.templateId;
           payload.subject = subject;
-          payload.variables = this.stringifyVariables(variablesWithLogo);
+          // UnoSend API field for template variable substitution is `template_data`
+          // (NOT `variables` — that field is undocumented and silently ignored).
+          payload.template_data = this.stringifyVariables(variablesWithLogo);
         } else {
           // No local template AND no templateId — nothing to send
           this.logger.warn(
@@ -307,7 +352,9 @@ export class EmailService {
         }
         payload.template_id = options.templateId;
         payload.subject = subject;
-        payload.variables = this.stringifyVariables(variablesWithLogo);
+        // UnoSend API field for template variable substitution is `template_data`
+        // (NOT `variables` — that field is undocumented and silently ignored).
+        payload.template_data = this.stringifyVariables(variablesWithLogo);
       }
     } else if (options.html) {
       // Strategy 4 — caller-provided raw HTML
@@ -319,6 +366,13 @@ export class EmailService {
       );
       return { skipped: true };
     }
+
+    // ── Debug: emit payload summary before sending (keys only — no sensitive values) ──
+    this.logger.debug(
+      `[${options.emailType}] → UnoSend payload keys: [${Object.keys(payload).join(', ')}] | ` +
+        `subject="${(payload.subject as string) ?? '(none)'}" | ` +
+        `strategy=${payload.html ? 'local-html' : payload.template_id ? 'unosend-template' : 'unknown'}`,
+    );
 
     // ── Fire the request ──────────────────────────────────────────────────────
     try {
