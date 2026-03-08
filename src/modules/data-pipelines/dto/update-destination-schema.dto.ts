@@ -39,6 +39,22 @@ export class UpdateDestinationSchemaDto {
   destinationTable?: string;
 
   @ApiPropertyOptional({
+    description: 'Transform type: dlt (data load tool) or dbt',
+    example: 'dlt',
+  })
+  @IsOptional()
+  @IsString()
+  transformType?: string;
+
+  @ApiPropertyOptional({
+    description: 'Custom SQL - only when transformType is dbt',
+    example: 'SELECT id, UPPER(name) as name FROM {{source_table}}',
+  })
+  @IsOptional()
+  @IsString()
+  customSql?: string;
+
+  @ApiPropertyOptional({
     description: 'Custom Python transform script (defines transform(record) function)',
     example:
       'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',

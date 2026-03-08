@@ -35,16 +35,16 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   // ============================================================================
   // SCHEMA DEFINITION
   // ============================================================================
-  /** Column definitions for destination table */
-  columnDefinitions: jsonb('column_definitions').$type<ColumnDefinition[]>(),
+  /** Transform type: 'dlt' (data load tool, default) | 'dbt' | 'rules' | 'none' */
+  transformType: varchar('transform_type', { length: 50 }).default('dlt'),
 
-  /** Primary key columns */
-  primaryKeys: jsonb('primary_keys').$type<string[]>(),
+  /** dbt model name - only when transformType is 'dbt' */
+  dbtModel: varchar('dbt_model', { length: 255 }),
 
-  /** Index definitions */
-  indexes: jsonb('indexes').$type<IndexDefinition[]>(),
+  /** Custom SQL - only when transformType is 'dbt' */
+  customSql: text('custom_sql'),
 
-  /** Custom Python transform script (defines transform(record) function) */
+  /** Python transform script - only when transformType is 'script' */
   transformScript: text('transform_script'),
 
   // ============================================================================
@@ -82,29 +82,6 @@ export const pipelineDestinationSchemas = pgTable('pipeline_destination_schemas'
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   deletedAt: timestamp('deleted_at'),
 });
-
-/**
- * Column definition for destination table
- */
-export interface ColumnDefinition {
-  name: string;
-  dataType: string;
-  nullable: boolean;
-  defaultValue?: string;
-  isPrimaryKey?: boolean;
-  maxLength?: number;
-  isUnique?: boolean;
-}
-
-/**
- * Index definition
- */
-export interface IndexDefinition {
-  name: string;
-  columns: string[];
-  unique?: boolean;
-  where?: string; // Partial index condition
-}
 
 /**
  * Destination schema validation result

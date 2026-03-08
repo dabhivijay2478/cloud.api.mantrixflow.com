@@ -21,12 +21,11 @@ export const connectionStatusEnum = pgEnum('connection_status', [
  * Key Features:
  * - Universal: Supports any data source type via connection_type and config JSONB
  * - Encrypted: Sensitive fields (passwords, tokens, keys) should be encrypted before storage
- * - Schema caching: Stores discovered schema/metadata for performance
  * - Connection testing: Tracks test results and connection status
  *
  * Config JSONB Structure Examples:
  *
- * PostgreSQL:
+ * PostgreSQL (only supported source/destination for ETL):
  * {
  *   "host": "localhost",
  *   "port": 5432,
@@ -36,26 +35,6 @@ export const connectionStatusEnum = pgEnum('connection_status', [
  *   "ssl": {"enabled": true, "ca_cert": "...", "client_cert": "...", "client_key": "..."},
  *   "ssh_tunnel": {"enabled": false, "host": "", "port": 22, "username": "", "private_key": ""},
  *   "pool": {"size": 5, "timeout_seconds": 60}
- * }
- *
- * MySQL:
- * {
- *   "host": "mysql.example.com",
- *   "port": 3306,
- *   "database": "analytics",
- *   "username": "analyst",
- *   "password": "encrypted_pass",
- *   "ssl": {"enabled": true},
- *   "charset": "utf8mb4"
- * }
- *
- * MongoDB:
- * {
- *   "connection_string": "mongodb://user:pass@host:27017/db",
- *   "database": "mydb",
- *   "auth_source": "admin",
- *   "replica_set": "rs0",
- *   "tls": true
  * }
  *
  * Amazon S3:
@@ -111,7 +90,7 @@ export const dataSourceConnections = pgTable(
       .notNull()
       .references(() => dataSources.id, { onDelete: 'cascade' }),
 
-    // Connection type: postgres, mysql, mongodb, s3, api, bigquery, snowflake, csv, etc.
+    // Connection type: postgres (ETL tap/target), s3, api, bigquery, snowflake, etc.
     connectionType: varchar('connection_type', { length: 100 }).notNull(),
 
     // Dynamic configuration - stores ALL connection details as JSONB
@@ -128,9 +107,13 @@ export const dataSourceConnections = pgTable(
     // Connection test results
     testResult: jsonb('test_result'),
 
-    // Schema cache - stores discovered schema/metadata for performance
-    schemaCache: jsonb('schema_cache'),
-    schemaCachedAt: timestamp('schema_cached_at'),
+    // Singer CDC fields
+    collectionMethod: varchar('collection_method', { length: 50 }).default('full_refresh'),
+    replicationSlotName: varchar('replication_slot_name', { length: 63 }),
+    cdcSlotHealth: jsonb('cdc_slot_health'),
+    cdcPrerequisitesStatus: jsonb('cdc_prerequisites_status'),
+    publicationName: varchar('publication_name', { length: 255 }),
+    schemaEvolutionLog: jsonb('schema_evolution_log'),
 
     // Timestamps
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -177,30 +160,6 @@ export interface PostgresConfig {
     size: number;
     timeout_seconds: number;
   };
-}
-
-export interface MySQLConfig {
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password: string; // Should be encrypted
-  ssl?: {
-    enabled: boolean;
-  };
-  charset?: string;
-}
-
-export interface MongoDBConfig {
-  connection_string?: string; // Should be encrypted
-  host?: string;
-  port?: number;
-  database: string;
-  username?: string;
-  password?: string; // Should be encrypted
-  auth_source?: string;
-  replica_set?: string;
-  tls?: boolean;
 }
 
 export interface S3Config {

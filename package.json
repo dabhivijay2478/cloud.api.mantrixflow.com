@@ -30,7 +30,11 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:drop": "drizzle-kit drop",
+    "db:truncate": "bun run scripts/truncate-all.ts",
+    "db:delete-orphaned-sources": "bun run scripts/delete-orphaned-data-sources.ts",
+    "db:truncate:full": "bun run scripts/truncate-all.ts --full",
     "db:check": "drizzle-kit check",
+    "db:verify-journal": "bun run scripts/verify-drizzle-journal.ts",
     "swagger:generate": "bun --bun scripts/generate-postman-collection.ts"
   },
   "dependencies": {

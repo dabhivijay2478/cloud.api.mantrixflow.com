@@ -13,7 +13,6 @@ import { users } from '../users/users.schema';
 import { pipelineDestinationSchemas } from './destination-schemas/pipeline-destination-schemas.schema';
 import { pipelineSourceSchemas } from './source-schemas/pipeline-source-schemas.schema';
 import type {
-  PollingConfig,
   PipelineCheckpoint,
 } from '../../../modules/data-pipelines/types/pipeline-lifecycle.types';
 
@@ -142,9 +141,6 @@ export const pipelines = pgTable('pipelines', {
   /** Polling interval in seconds (for LISTING mode) */
   pollingIntervalSeconds: integer('polling_interval_seconds').default(300),
 
-  /** Polling configuration (batch size, backoff, etc.) */
-  pollingConfig: jsonb('polling_config').$type<PollingConfig>(),
-
   // ============================================================================
   // EXECUTION STATUS & LIFECYCLE
   // ============================================================================
@@ -173,6 +169,30 @@ export const pipelines = pgTable('pipelines', {
   pauseTimestamp: timestamp('pause_timestamp'),
 
   // ============================================================================
+  // SINGER ETL FIELDS
+  // ============================================================================
+  /** Raw Singer state blob (opaque JSON, saved/loaded verbatim via NestJS endpoints) */
+  singerState: jsonb('singer_state'),
+
+  /** Timestamp when a FULL_TABLE sync completed successfully (guard for LOG_BASED) */
+  fullRefreshCompletedAt: timestamp('full_refresh_completed_at'),
+
+  /** Replication slot name for LOG_BASED CDC (e.g. mxf_a1b2c3d4) */
+  replicationSlotName: varchar('replication_slot_name', { length: 63 }),
+
+  /** Override for collection method at pipeline level */
+  collectionMethodOverride: text('collection_method_override'),
+
+  /** Emit method override */
+  emitMethod: text('emit_method'),
+
+  /** Destination schema override */
+  destSchemaOverride: text('dest_schema_override'),
+
+  /** Transform type (e.g. 'singer', 'script', 'dbt') */
+  transformType: text('transform_type'),
+
+  // ============================================================================
   // STATISTICS
   // ============================================================================
   totalRowsProcessed: integer('total_rows_processed').default(0),
@@ -193,7 +213,7 @@ export const pipelines = pgTable('pipelines', {
 export interface Transformation {
   sourceColumn: string;
   transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom' | 'filter' | 'mask' | 'hash';
-  transformConfig: any; // transformation-specific config
+  transformConfig?: Record<string, unknown>; // transformation-specific config (optional)
   destinationColumn: string;
 }
 

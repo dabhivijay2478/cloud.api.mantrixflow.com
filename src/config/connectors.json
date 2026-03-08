@@ -1,0 +1,227 @@
+{
+  "sources": [
+    {
+      "id": "source-postgres",
+      "label": "PostgreSQL",
+      "type": "postgres",
+      "aliases": ["postgresql", "pg", "pgvector", "redshift"],
+      "registry_type": "postgres",
+      "category": "Database",
+      "cdc": true,
+      "cdc_providers": [
+        {
+          "id": "supabase",
+          "label": "Supabase",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "Supabase enables logical replication by default. This step is already complete.",
+              "verified_by_default": true
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Run the SQL below in the Supabase SQL Editor in your project dashboard.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json is installed by default on Supabase.",
+              "verified_by_default": true
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "neon",
+          "label": "Neon",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "1. Open your Neon project in the Neon console.\n2. Navigate to Settings → Logical Replication.\n3. Click 'Enable' to turn on logical replication.\n4. Return here and click 'Verify'.",
+              "link": "https://neon.tech/docs/connect/logical-replication"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Run the SQL below in the Neon SQL Editor or via psql.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json is available when logical replication is enabled on Neon.",
+              "verified_by_default": true
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "rds",
+          "label": "AWS RDS",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "1. Open the AWS RDS console.\n2. Navigate to your DB Parameter Group.\n3. Set rds.logical_replication to 1.\n4. Apply the parameter group to your instance and reboot.\n5. Return here and click 'Verify'.",
+              "link": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Connect to your instance using the master user and run the SQL below.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json is a supported plugin on AWS RDS, available without additional installation.",
+              "verified_by_default": true
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "aurora",
+          "label": "AWS Aurora",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "1. Open the AWS RDS console.\n2. Navigate to your DB Parameter Group.\n3. Set rds.logical_replication to 1.\n4. Apply the parameter group to your instance and reboot.\n5. Return here and click 'Verify'.",
+              "link": "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Connect to your instance using the master user and run the SQL below.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json is supported on Aurora PostgreSQL.",
+              "verified_by_default": true
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "cloud_sql",
+          "label": "Google Cloud SQL",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Decoding",
+              "content": "1. Open the Google Cloud Console.\n2. Navigate to your Cloud SQL instance.\n3. Under Edit → Database flags, set cloudsql.logical_decoding to on.\n4. Save and restart the instance.\n5. Return here and click 'Verify'.",
+              "link": "https://cloud.google.com/sql/docs/postgres/replication"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Connect to your Cloud SQL instance and run the SQL below.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json is supported natively on Google Cloud SQL.",
+              "verified_by_default": true
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "azure",
+          "label": "Azure Database for PostgreSQL",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "1. Open the Azure portal.\n2. Navigate to your Azure Database for PostgreSQL server.\n3. Under Server parameters, set azure.replication_support to logical.\n4. Save and restart the server.\n5. Return here and click 'Verify'.",
+              "link": "https://learn.microsoft.com/en-us/azure/postgresql/single-server/concepts-logical"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Connect to your Azure PostgreSQL server and run the SQL below.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json is supported as a logical decoding plugin on Azure.",
+              "verified_by_default": true
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "self_hosted",
+          "label": "Self-Hosted PostgreSQL",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "1. Open your postgresql.conf file (usually at /etc/postgresql/VERSION/main/postgresql.conf).\n2. Set wal_level = logical.\n3. Also set max_replication_slots = 5 and max_wal_senders = 5 (or higher if needed).\n4. Restart the PostgreSQL service with sudo systemctl restart postgresql.\n5. Return here and click 'Verify'.",
+              "link": "https://www.postgresql.org/docs/current/logical-replication.html"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Connect as the postgres superuser and run the SQL below.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "wal2json must be installed on your PostgreSQL server. See https://github.com/eulerto/wal2json for installation. Add wal2json to shared_preload_libraries in postgresql.conf and restart.",
+              "link": "https://github.com/eulerto/wal2json",
+              "verified_by_default": false
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        },
+        {
+          "id": "other",
+          "label": "Other",
+          "instructions": {
+            "wal_level": {
+              "title": "Enable Logical Replication",
+              "content": "1. Edit postgresql.conf or use ALTER SYSTEM SET wal_level = 'logical'.\n2. Set max_replication_slots and max_wal_senders as needed.\n3. Restart PostgreSQL.\n4. Return here and click 'Verify'.",
+              "link": "https://www.postgresql.org/docs/current/logical-replication.html"
+            },
+            "replication_role": {
+              "title": "Grant Replication Permission",
+              "content": "Connect as a superuser and run the SQL below.",
+              "sql_template": "ALTER ROLE {username} REPLICATION LOGIN;"
+            },
+            "wal2json": {
+              "title": "Verify wal2json",
+              "content": "Ensure wal2json is installed. See https://github.com/eulerto/wal2json. Add to shared_preload_libraries if self-hosted.",
+              "link": "https://github.com/eulerto/wal2json",
+              "verified_by_default": false
+            },
+            "replication_test": {
+              "title": "Test Replication Connection",
+              "content": "This step runs automatically when steps 1–3 are verified."
+            }
+          }
+        }
+      ],
+      "cdc_verify_steps": ["wal_level", "wal2json", "replication_role", "replication_test"]
+    }
+  ],
+  "destinations": [
+    {
+      "id": "postgres",
+      "label": "PostgreSQL",
+      "type": "postgres",
+      "aliases": ["postgresql", "pg", "pgvector", "redshift", "target-postgres", "destination-postgres"],
+      "registry_type": "postgres"
+    }
+  ]
+}

@@ -2,14 +2,11 @@
  * Data Pipeline Module
  * NestJS module that wires together all data pipeline components
  *
- * Supports only three data source types:
- * - PostgreSQL (relational database)
- * - MySQL (relational database)
- * - MongoDB (document database)
+ * Supports PostgreSQL only for ETL (tap-postgres, target-postgres).
  *
  * Architecture:
  * - NestJS: Orchestration, CRUD, user/org management, activity logging
- * - Python FastAPI: ETL operations (collect, transform, emit)
+ * - Python FastAPI (apps/new-etl): ETL operations (discover, preview, runSync)
  * - pgmq + pg_cron: Job queuing, scheduling, CDC polling (Supabase-native)
  * - Socket.io: Real-time updates (via Supabase Realtime + Postgres NOTIFY)
  *
@@ -20,15 +17,13 @@
  * - Postgres NOTIFY + Supabase Realtime for status/progress → Socket.io gateway
  *
  * Guide: To add a new data source type:
- * 1. Add connector in Python service: etl-service/connectors/{source-name}.py
+ * 1. Add connector in Python service: apps/new-etl
  * 2. Register in Python main.py CONNECTORS dict
- * 3. Add type to DataSourceType enum (postgresql, mysql, mongodb only)
+ * 3. Add type to DataSourceType enum (postgres only for ETL)
  */
 
 import { Module, forwardRef } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
-import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { DataSourceModule } from '../data-sources/data-source.module';
 import { OrganizationModule } from '../organizations/organization.module';
@@ -37,6 +32,7 @@ import { OrganizationModule } from '../organizations/organization.module';
 import { PipelineController } from './pipeline.controller';
 import { SourceSchemaController } from './source-schema.controller';
 import { DestinationSchemaController } from './destination-schema.controller';
+import { InternalEtlController } from './internal.controller';
 
 // Services
 import { PipelineService } from './services/pipeline.service';
@@ -77,24 +73,15 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // HTTP module for API collector/emitter with custom configuration
     HttpModule.register({
-      timeout: 30000, // 30 second timeout
+      timeout: 120_000, // ETL discover/preview/sync; per-request timeout overrides when set
       maxRedirects: 5,
       headers: {
         'User-Agent': 'DataPipeline/1.0',
       },
     }),
   ],
-  controllers: [PipelineController, SourceSchemaController, DestinationSchemaController],
+  controllers: [PipelineController, SourceSchemaController, DestinationSchemaController, InternalEtlController],
   providers: [
-    // Database provider using Drizzle ORM
-    {
-      provide: 'DRIZZLE_DB',
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        return createDrizzleDatabase(configService);
-      },
-    },
-
     // Repositories - Data access layer using Drizzle ORM
     PipelineRepository,
     PipelineSourceSchemaRepository,
@@ -108,8 +95,8 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
     PipelineSchedulerService, // Handles pipeline scheduling configuration
     ScheduledPipelineWorkerService, // Worker for processing scheduled pipeline jobs
 
-    // Python ETL Service - HTTP client for Python FastAPI microservice
-    PythonETLService, // Handles collect, transform, emit via Python service
+    // Python ETL Service - HTTP client for apps/new-etl (discover, preview, runSync)
+    PythonETLService,
 
     // pgmq job processor (polls pipeline_jobs, incremental_sync, polling_checks queues)
     PipelineJobProcessor,

@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 export async function createNestApp() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -18,6 +19,7 @@ export async function createNestApp() {
   const configService = app.get(ConfigService);
 
   app.setGlobalPrefix('api');
+  app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

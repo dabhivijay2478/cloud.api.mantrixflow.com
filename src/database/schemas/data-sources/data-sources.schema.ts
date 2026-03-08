@@ -41,6 +41,9 @@ export const dataSources = pgTable(
     // Source type: postgres, mysql, mongodb, s3, api, bigquery, snowflake, csv, etc.
     sourceType: varchar('source_type', { length: 100 }).notNull(),
 
+    // Connector role: source (data origin) or destination (data target)
+    connectorRole: varchar('connector_role', { length: 20 }).notNull().default('source'),
+
     // Status
     isActive: boolean('is_active').notNull().default(true),
 
@@ -60,6 +63,7 @@ export const dataSources = pgTable(
   (table) => ({
     organizationIdIdx: index('data_sources_organization_id_idx').on(table.organizationId),
     sourceTypeIdx: index('data_sources_source_type_idx').on(table.sourceType),
+    connectorRoleIdx: index('data_sources_connector_role_idx').on(table.connectorRole),
     // Note: Partial index for is_active with WHERE deleted_at IS NULL is created manually in migration
   }),
 );

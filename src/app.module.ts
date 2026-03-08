@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AppLoggerModule } from './common/logger';
+import { DatabaseModule } from './database/database.module';
 import { ActivityLogModule } from './modules/activity-logs/activity-log.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { DataPipelineModule } from './modules/data-pipelines/data-pipeline.module';
 import { DataSourceModule } from './modules/data-sources/data-source.module';
+import { ConnectorsModule } from './modules/connectors/connectors.module';
+import { InternalModule } from './modules/internal/internal.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OrganizationModule } from './modules/organizations/organization.module';
 import { SearchModule } from './modules/search/search.module';
@@ -25,6 +28,9 @@ import { UserModule } from './modules/users/user.module';
     // Global Pino-based structured logging (replaces NestJS built-in Logger)
     AppLoggerModule,
 
+    // Shared database (Drizzle, transaction mode 6543)
+    DatabaseModule,
+
     // NestJS native scheduler for simple, non-distributed cron jobs
     // Use for quick, in-memory tasks that run on every instance
     ScheduleModule.forRoot(),
@@ -32,8 +38,10 @@ import { UserModule } from './modules/users/user.module';
     // Job queuing and scheduling: pgmq + pg_cron (DataPipelineModule)
 
     // Application Modules
+    ConnectorsModule,
     DataSourceModule,
     DataPipelineModule,
+    InternalModule,
     OrganizationModule,
     UserModule,
     OnboardingModule,

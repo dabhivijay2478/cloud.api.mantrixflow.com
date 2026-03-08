@@ -59,9 +59,32 @@ export class CreateDestinationSchemaDto {
   destinationTableExists?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Custom Python transform script (defines transform(record) function)',
-    example:
-      'def transform(record):\n    return {"id": record.get("id"), "name": record.get("name")}',
+    description: 'Transform type: dlt (data load tool, default) or dbt. Use dlt for direct sync; dbt requires customSql or dbtModel.',
+    example: 'dlt',
+    default: 'dlt',
+  })
+  @IsOptional()
+  @IsString()
+  transformType?: string;
+
+  @ApiPropertyOptional({
+    description: 'dbt model name - only when transformType is dbt',
+    example: 'stg_company_role_combined',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  dbtModel?: string;
+
+  @ApiPropertyOptional({
+    description: 'Custom SQL - only when transformType is dbt.',
+  })
+  @IsOptional()
+  @IsString()
+  customSql?: string;
+
+  @ApiPropertyOptional({
+    description: 'Python transform script - only when transformType is script. Must define def transform(row) -> dict.',
   })
   @IsOptional()
   @IsString()

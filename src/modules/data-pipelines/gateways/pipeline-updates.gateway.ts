@@ -233,13 +233,16 @@ export class PipelineUpdatesGateway
 
   /**
    * Set up Postgres LISTEN for NOTIFY events.
-   * Uses DATABASE_DIRECT_URL (session-mode pooler) if available, otherwise DATABASE_URL.
+   * LISTEN requires session mode. Prefer DATABASE_DIRECT_URL; else swap 6543→5432 from DATABASE_URL.
    */
   private async setupPostgresListeners() {
     try {
+      const directUrl = this.configService.get<string>('DATABASE_DIRECT_URL');
+      const poolerUrl = this.configService.get<string>('DATABASE_URL');
       const databaseUrl =
-        this.configService.get<string>('DATABASE_DIRECT_URL') ||
-        this.configService.get<string>('DATABASE_URL');
+        directUrl ||
+        (poolerUrl?.includes(':6543') ? poolerUrl.replace(':6543', ':5432') : poolerUrl) ||
+        null;
       if (!databaseUrl) {
         this.logger.warn('DATABASE_URL not found — NOTIFY listeners disabled');
         return;

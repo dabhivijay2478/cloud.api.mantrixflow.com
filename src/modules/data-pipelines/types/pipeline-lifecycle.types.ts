@@ -35,16 +35,20 @@ export enum PipelineStatus {
 
 /**
  * Sync mode for the pipeline
+ * FULL and CDC are backward-compatible aliases for FULL_TABLE and LOG_BASED
  */
 export enum SyncMode {
-  /** Full sync - replaces all data */
+  /** Full sync - replaces all data (alias for FULL_TABLE) */
   FULL = 'full',
 
-  /** Incremental sync - only new/changed data since last checkpoint */
-  INCREMENTAL = 'incremental',
+  /** Full table sync - replaces all data (Singer) */
+  FULL_TABLE = 'full_table',
 
-  /** CDC mode - real-time change data capture */
+  /** CDC mode - real-time change data capture (alias for LOG_BASED) */
   CDC = 'cdc',
+
+  /** Log-based sync - CDC from WAL/binlog (Singer) */
+  LOG_BASED = 'log_based',
 }
 
 /**
@@ -75,6 +79,15 @@ export interface PipelineCheckpoint {
 
   /** LSN (Log Sequence Number) - alias for walPosition */
   lsn?: string;
+
+  /** Raw Singer state blob */
+  singerState?: Record<string, unknown>;
+
+  /** LSN range start (log-based sync) */
+  lsnStart?: number;
+
+  /** LSN range end (log-based sync) */
+  lsnEnd?: number;
 
   /** Replication slot name for WAL CDC */
   slotName?: string;
@@ -111,6 +124,24 @@ export interface PipelineCheckpoint {
 
   /** Custom source-specific data */
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Sync type for logSyncSummary stats
+ */
+export type SyncTypeForSummary = 'full' | 'incremental' | 'full_table' | 'log_based';
+
+/**
+ * Stats for sync completion summary
+ */
+export interface SyncSummaryStats {
+  syncType: SyncTypeForSummary;
+  rowsRead: number;
+  rowsWritten: number;
+  rowsSkipped: number;
+  rowsFailed: number;
+  durationSeconds: number;
+  batchCount: number;
 }
 
 /**

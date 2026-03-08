@@ -4,8 +4,6 @@
  */
 
 import { Module, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
 import { UserSearchHandler } from './handlers/user-search.handler';
@@ -16,14 +14,6 @@ import { ConnectorSearchHandler } from './handlers/connector-search.handler';
 @Module({
   controllers: [SearchController],
   providers: [
-    // Database provider
-    {
-      provide: 'DRIZZLE_DB',
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        return createDrizzleDatabase(configService);
-      },
-    },
     SearchService,
     UserSearchHandler,
     PipelineSearchHandler,

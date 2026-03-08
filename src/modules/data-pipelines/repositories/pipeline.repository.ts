@@ -6,12 +6,13 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   and,
-  count as drizzleCount,
   desc,
+  count as drizzleCount,
   eq,
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   ne,
   or,
@@ -30,8 +31,8 @@ import type {
 import {
   pipelineDestinationSchemas,
   pipelineRuns,
-  pipelines,
   pipelineSourceSchemas,
+  pipelines,
 } from '../../../database/schemas';
 
 @Injectable()
@@ -92,6 +93,32 @@ export class PipelineRepository {
           isNull(pipelines.deletedAt),
         ),
       )
+      .limit(1);
+
+    return pipeline || null;
+  }
+
+  /**
+   * Find pipeline by destination schema without scanning the full organization.
+   */
+  async findByDestinationSchemaId(
+    destinationSchemaId: string,
+    organizationId?: string,
+  ): Promise<Pipeline | null> {
+    const conditions = [
+      eq(pipelines.destinationSchemaId, destinationSchemaId),
+      isNull(pipelines.deletedAt),
+    ];
+
+    if (organizationId) {
+      conditions.push(eq(pipelines.organizationId, organizationId));
+    }
+
+    const [pipeline] = await this.db
+      .select()
+      .from(pipelines)
+      .where(and(...conditions))
+      .orderBy(desc(pipelines.createdAt))
       .limit(1);
 
     return pipeline || null;
@@ -220,6 +247,62 @@ export class PipelineRepository {
         destinationSchema: row.destinationSchema,
       })),
       total: Number(countResult[0]?.count || 0),
+    };
+  }
+
+  /**
+   * Find pipelines by organization with cursor-based pagination.
+   * Efficient for large datasets (1M+ pipelines) — avoids offset degradation.
+   * Cursor is created_at (ISO string) of the last item from previous page.
+   */
+  async findByOrganizationPaginatedCursor(
+    organizationId: string,
+    limit: number = 20,
+    cursor?: string,
+  ): Promise<
+    PaginatedResult<
+      Pipeline & {
+        sourceSchema?: PipelineSourceSchema | null;
+        destinationSchema?: PipelineDestinationSchema | null;
+      }
+    > & { nextCursor: string | null }
+  > {
+    const conditions = [eq(pipelines.organizationId, organizationId), isNull(pipelines.deletedAt)];
+    if (cursor) {
+      conditions.push(lt(pipelines.createdAt, new Date(cursor)));
+    }
+
+    const rows = await this.db
+      .select({
+        pipeline: pipelines,
+        sourceSchema: pipelineSourceSchemas,
+        destinationSchema: pipelineDestinationSchemas,
+      })
+      .from(pipelines)
+      .leftJoin(pipelineSourceSchemas, eq(pipelines.sourceSchemaId, pipelineSourceSchemas.id))
+      .leftJoin(
+        pipelineDestinationSchemas,
+        eq(pipelines.destinationSchemaId, pipelineDestinationSchemas.id),
+      )
+      .where(and(...conditions))
+      .orderBy(desc(pipelines.createdAt))
+      .limit(limit + 1);
+
+    const hasMore = rows.length > limit;
+    const dataRows = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor =
+      hasMore && dataRows.length > 0
+        ? ((dataRows[dataRows.length - 1]?.pipeline.createdAt as Date)?.toISOString() ?? null)
+        : null;
+
+    return {
+      data: dataRows.map((row) => ({
+        ...row.pipeline,
+        sourceSchema: row.sourceSchema,
+        destinationSchema: row.destinationSchema,
+      })),
+      total: -1, // Not computed for cursor pagination (expensive at scale)
+      nextCursor,
     };
   }
 

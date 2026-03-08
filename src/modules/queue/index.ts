@@ -6,3 +6,8 @@
 export * from './pgmq.module';
 export * from './pgmq-queue.service';
 export * from './pgmq.constants';
+export type {
+  FullSyncJobData,
+  IncrementalSyncJobData,
+  DeltaCheckJobData,
+} from './pgmq.constants';

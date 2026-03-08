@@ -5,6 +5,7 @@
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  Allow,
   IsString,
   IsUUID,
   IsOptional,
@@ -50,8 +51,9 @@ export class TransformationDto {
   @IsString()
   transformType: 'rename' | 'cast' | 'concat' | 'split' | 'custom' | 'filter' | 'mask' | 'hash';
 
-  @ApiProperty({ description: 'Transformation configuration', default: {} })
-  transformConfig: any = {};
+  @ApiPropertyOptional({ description: 'Transformation configuration', default: {} })
+  @Allow()
+  transformConfig?: Record<string, unknown> = {};
 
   @ApiProperty({ description: 'Destination column name' })
   @IsString()

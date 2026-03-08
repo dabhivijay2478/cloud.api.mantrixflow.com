@@ -4,18 +4,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsUUID, IsOptional, IsEnum, MaxLength, IsObject } from 'class-validator';
-
-export enum SourceType {
-  POSTGRES = 'postgres',
-  MYSQL = 'mysql',
-  MONGODB = 'mongodb',
-  S3 = 's3',
-  API = 'api',
-  BIGQUERY = 'bigquery',
-  SNOWFLAKE = 'snowflake',
-  CSV = 'csv',
-}
+import { IsObject, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class SourceConfigDto {
   @ApiPropertyOptional({ description: 'API key for external sources' })
@@ -46,11 +35,11 @@ export class SourceConfigDto {
 export class CreateSourceSchemaDto {
   @ApiProperty({
     description: 'Source type',
-    enum: SourceType,
-    example: SourceType.POSTGRES,
+    example: 'postgres',
   })
-  @IsEnum(SourceType)
-  sourceType: SourceType;
+  @IsString()
+  @MaxLength(100)
+  sourceType: string;
 
   @ApiPropertyOptional({
     description: 'Data source ID for database connections',

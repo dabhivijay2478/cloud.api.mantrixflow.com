@@ -1,9 +1,8 @@
 /**
  * Pipeline Service
- * Main orchestration service for managing data pipelines
- * Works with all data source types using generic collector, transformer, and emitter
- *
- * Architecture: Collector → Emitter (with transformation) → Transformer (post-processing)
+ * Main orchestration service for managing data pipelines.
+ * All sync execution is dispatched via PGMQ to Singer-based ETL pods.
+ * Results come back asynchronously via POST /internal/etl-callback.
  */
 
 import {
@@ -14,38 +13,50 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ActivityLoggerService } from '../../../common/logger';
+import {
+  areSourceDbMutationsAllowed,
+  SOURCE_DB_MUTATION_POLICY_MESSAGE,
+} from '../../../common/utils/source-db-mutation-policy';
 import type {
-  PipelineDestinationSchema,
-  PipelineSourceSchema,
   Pipeline,
+  PipelineDestinationSchema,
   PipelineRun,
+  PipelineSourceSchema,
 } from '../../../database/schemas';
+import type { DiscoveredColumn } from '../../../database/schemas/data-pipelines/source-schemas/pipeline-source-schemas.schema';
 import { ActivityLogService } from '../../activity-logs/activity-log.service';
 import {
   PIPELINE_ACTIONS,
   PIPELINE_RUN_ACTIONS,
 } from '../../activity-logs/constants/activity-log-types';
-import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
 import { ConnectionService } from '../../data-sources/connection.service';
+import { DataSourceRepository } from '../../data-sources/repositories/data-source.repository';
+import { DataSourceConnectionRepository } from '../../data-sources/repositories/data-source-connection.repository';
 import { OrganizationRoleService } from '../../organizations/services/organization-role.service';
-import { PythonETLService } from './python-etl.service';
-import { PipelineLifecycleService } from './pipeline-lifecycle.service';
-import type {
-  DryRunResult,
-  ValidationResult,
-  BatchOptions,
-  PipelineError,
-  WriteResult,
-} from '../types/common.types';
-import type { SchemaInfo } from '../types/common.types';
-import { PipelineStatus, PipelineCheckpoint } from '../types/pipeline-lifecycle.types';
-import { PipelineRepository } from '../repositories/pipeline.repository';
-import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
-import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
+import { PgmqQueueService } from '../../queue';
 import type { CreatePipelineDto, UpdatePipelineDto } from '../dto';
 import { ScheduleType } from '../dto/create-pipeline.dto';
+import { PipelineRepository } from '../repositories/pipeline.repository';
+import { PipelineDestinationSchemaRepository } from '../repositories/pipeline-destination-schema.repository';
+import { PipelineSourceSchemaRepository } from '../repositories/pipeline-source-schema.repository';
+import type {
+  BatchOptions,
+  DryRunResult,
+  SchemaValidationResult,
+  Transformation,
+  ValidationResult,
+} from '../types/common.types';
+import {
+  checkTypeCompatibility,
+  singerTypeToPgType,
+  validateSingerVsDestination,
+} from '../types/common.types';
+import { PipelineStatus } from '../types/pipeline-lifecycle.types';
+import { parseTransformOutputMappings } from '../utils/transform-parser';
+import { DestinationSchemaService } from './destination-schema.service';
+import { PipelineLifecycleService } from './pipeline-lifecycle.service';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
-import { PgmqQueueService } from '../../queue';
+import { PythonETLService } from './python-etl.service';
 
 /**
  * Internal DTO for creating pipelines (with organizationId and userId)
@@ -54,15 +65,6 @@ export interface CreatePipelineInput extends CreatePipelineDto {
   organizationId: string;
   userId: string;
 }
-
-/**
- * Default batch size for processing
- * Configurable per-pipeline via options.batchSize
- */
-const DEFAULT_BATCH_SIZE = 500;
-const MAX_BATCH_SIZE = 10000;
-const RETRY_ATTEMPTS = 3;
-const RETRY_DELAY_MS = 2000;
 
 @Injectable()
 export class PipelineService {
@@ -73,6 +75,7 @@ export class PipelineService {
     private readonly sourceSchemaRepository: PipelineSourceSchemaRepository,
     private readonly destinationSchemaRepository: PipelineDestinationSchemaRepository,
     private readonly dataSourceRepository: DataSourceRepository,
+    private readonly connectionRepository: DataSourceConnectionRepository,
     private readonly pythonETLService: PythonETLService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
@@ -81,6 +84,7 @@ export class PipelineService {
     private readonly pipelineQueueService: PgmqQueueService,
     private readonly connectionService: ConnectionService,
     private readonly activity: ActivityLoggerService,
+    private readonly destinationSchemaService: DestinationSchemaService,
   ) {}
 
   /**
@@ -131,6 +135,14 @@ export class PipelineService {
     );
     if (existing && !existing.deletedAt) {
       throw new BadRequestException(`Pipeline with name "${dto.name}" already exists`);
+    }
+
+    // --- BLOCKING: Singer vs destination type validation ---
+    // When the destination table already exists, target-postgres (with
+    // allow_column_alter=False) will crash on any type mismatch.  We
+    // detect this upfront so the user gets a clear 400 error.
+    if (destinationSchema.destinationTableExists && sourceSchema.discoveredColumns) {
+      await this.validateSingerVsDestinationTypes(sourceSchema, destinationSchema, organizationId);
     }
 
     // Determine schedule type
@@ -213,18 +225,27 @@ export class PipelineService {
   }
 
   /**
-   * Get pipelines by organization with pagination
+   * Get pipelines by organization with pagination.
+   * Uses cursor-based pagination when cursor is provided (efficient for 1M+ pipelines).
    */
   async findByOrganizationPaginated(
     organizationId: string,
     userId: string | undefined,
     limit: number = 20,
     offset: number = 0,
+    cursor?: string,
   ) {
     if (userId) {
       await this.checkPipelineViewPermission(userId, organizationId);
     }
 
+    if (cursor) {
+      return this.pipelineRepository.findByOrganizationPaginatedCursor(
+        organizationId,
+        limit,
+        cursor,
+      );
+    }
     return this.pipelineRepository.findByOrganizationPaginated(organizationId, limit, offset);
   }
 
@@ -372,33 +393,55 @@ export class PipelineService {
   }
 
   /**
-   * Run pipeline with batching and retry support
+   * Run pipeline — creates a run record and enqueues to PGMQ.
+   * All execution happens via the ETL pod pool (no in-process execution).
    */
   async runPipeline(
     pipelineId: string,
     userId: string,
     triggerType: 'manual' | 'scheduled' | 'api' | 'polling' = 'manual',
-    options?: BatchOptions,
+    _options?: BatchOptions,
   ): Promise<PipelineRun> {
     const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
     if (!pipelineWithSchemas) {
       throw new NotFoundException(`Pipeline ${pipelineId} not found`);
     }
 
-    const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
+    const { pipeline } = pipelineWithSchemas;
 
-    // AUTHORIZATION - Skip for scheduled/polling triggers (system-initiated)
-    // These are internal operations and the pipeline creator has already been authorized
     if (triggerType === 'manual' || triggerType === 'api') {
       await this.checkPipelineManagePermission(userId, pipeline.organizationId);
     }
 
-    // Check pipeline status
     if (pipeline.status === 'paused') {
       throw new BadRequestException('Pipeline is paused. Resume it before running.');
     }
 
-    // Create run record
+    // CDC verification guard: block LOG_BASED/INCREMENTAL_SYNC when CDC not verified
+    const isCdcOrLogBased = pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+    if (isCdcOrLogBased && !areSourceDbMutationsAllowed()) {
+      throw new BadRequestException(SOURCE_DB_MUTATION_POLICY_MESSAGE);
+    }
+    const needsInitialSync = isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
+    if (isCdcOrLogBased && !needsInitialSync) {
+      const sourceSchema = pipelineWithSchemas.sourceSchema;
+      if (sourceSchema?.dataSourceId) {
+        const connection = await this.connectionRepository.findByDataSourceId(
+          sourceSchema.dataSourceId,
+        );
+        const cdcStatus = connection?.cdcPrerequisitesStatus as
+          | { overall?: string }
+          | null
+          | undefined;
+        if (cdcStatus?.overall !== 'verified') {
+          throw new BadRequestException(
+            'Complete the Log-Based Sync setup for this source connection before running.',
+          );
+        }
+      }
+    }
+
+    // Create run record (pending — ETL callback will update it)
     const run = await this.pipelineRepository.createRun({
       pipelineId,
       organizationId: pipeline.organizationId,
@@ -409,13 +452,10 @@ export class PipelineService {
       startedAt: new Date(),
     });
 
-    // Update parent pipeline status to running immediately for UI feedback
     await this.pipelineRepository.update(pipelineId, {
       lastRunStatus: 'running',
       lastRunAt: new Date(),
     });
-
-    this.logger.log(`Updated pipeline ${pipelineId} status to running`);
 
     // Log activity
     await this.activityLogService.logPipelineRunAction(
@@ -428,670 +468,120 @@ export class PipelineService {
       { triggerType },
     );
 
-    // Execute pipeline asynchronously
-    this.executePipelineAsync(
-      run.id,
-      pipeline,
-      sourceSchema,
-      destinationSchema,
-      userId,
-      options,
-    ).catch((error) => {
-      this.logger.error(
-        `Pipeline execution failed: ${error instanceof Error ? error.message : String(error)}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-    });
+    // Enqueue to PGMQ — PipelineJobProcessor will dequeue and dispatch to ETL pod
+    // Route by syncMode: full → FullSync; cdc/log_based → FullSync if no initial sync yet, else IncrementalSync
+    if (this.pipelineQueueService.isReady()) {
+      const isCdcOrLogBased = pipeline.syncMode === 'cdc' || pipeline.syncMode === 'log_based';
+      const needsInitialSync = isCdcOrLogBased && !pipeline.fullRefreshCompletedAt;
+      const isIncrementalCursor = pipeline.syncMode === 'incremental';
 
-    return run;
-  }
+      if (isCdcOrLogBased && needsInitialSync) {
+        // "Run Initial Sync" — enqueue FULL_SYNC (FULL_TABLE)
+        await this.pipelineQueueService.enqueueFullSync({
+          pipelineId,
+          runId: run.id,
+          organizationId: pipeline.organizationId,
+          userId,
+          triggerType,
+        });
+        this.logger.log(
+          `Pipeline ${pipelineId} run ${run.id} enqueued to FULL_SYNC (Run Initial Sync)`,
+        );
+      } else if (isCdcOrLogBased || isIncrementalCursor) {
+        await this.pipelineQueueService.enqueueIncrementalSync({
+          pipelineId,
+          runId: run.id,
+          organizationId: pipeline.organizationId,
+          userId,
+          triggerType,
+        });
+        this.logger.log(`Pipeline ${pipelineId} run ${run.id} enqueued to INCREMENTAL_SYNC`);
+      } else {
+        await this.pipelineQueueService.enqueueFullSync({
+          pipelineId,
+          runId: run.id,
+          organizationId: pipeline.organizationId,
+          userId,
+          triggerType,
+        });
+        this.logger.log(`Pipeline ${pipelineId} run ${run.id} enqueued to PGMQ`);
+      }
+    } else {
+      this.logger.warn('PGMQ not ready — run will wait for processor to pick it up');
+    }
 
-  /**
-   * Execute pipeline asynchronously with batching and retries
-   */
-  private async executePipelineAsync(
-    runId: string,
-    pipeline: Pipeline,
-    sourceSchema: PipelineSourceSchema,
-    destinationSchema: PipelineDestinationSchema,
-    userId: string,
-    options?: BatchOptions,
-  ): Promise<void> {
-    const startTime = Date.now();
-
-    // Determine sync mode - Python handles all CDC/incremental logic
-    // NestJS only orchestrates: calls Python with sync mode and checkpoint
-    let checkpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
-
-    // Determine sync mode from pipeline configuration
-    // Python will handle CDC detection, incremental logic, checkpoint management
-    const syncMode = pipeline.syncMode || 'full';
-    const isFullSync = syncMode === 'full' || !checkpoint;
-    const syncType = isFullSync ? 'full' : 'incremental';
-    const syncReason = isFullSync
-      ? 'Full sync (Python handles all data collection)'
-      : 'Incremental sync (Python handles CDC and checkpoint management)';
-
-    // Log startup with detailed sync info
-    this.activity.info(
-      syncType === 'full' ? 'sync.full_started' : 'sync.incremental_started',
-      `Pipeline started: ${pipeline.name}`,
-      {
-        pipelineId: pipeline.id,
-        runId,
-        organizationId: pipeline.organizationId,
-        userId,
-        metadata: {
-          syncMode: pipeline.syncMode,
-          syncType,
-          syncReason,
-          batchSize: options?.batchSize || DEFAULT_BATCH_SIZE,
-          source: `${sourceSchema.sourceType} - ${sourceSchema.sourceTable || 'query'}`,
-        },
-      },
-    );
-
-    // ROOT FIX: Publish starting status via Socket.io for real-time UI update
+    // Publish pending status via Socket.io
     if (this.pipelineQueueService.isReady()) {
       await this.pipelineQueueService.publishStatusUpdate({
         pipelineId: pipeline.id,
         organizationId: pipeline.organizationId,
-        status: 'running',
+        status: 'pending',
         rowsProcessed: 0,
         timestamp: new Date().toISOString(),
       });
     }
 
-    const batchSize = Math.min(options?.batchSize || DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE);
-    const retryAttempts = options?.retryAttempts || RETRY_ATTEMPTS;
-
-    let totalRowsRead = 0;
-    let totalRowsWritten = 0;
-    let totalRowsSkipped = 0;
-    let totalRowsFailed = 0;
-    let batchCount = 0;
-    let estimatedTotalRows: number | undefined;
-    const allErrors: PipelineError[] = [];
-
-    try {
-      // For full sync, clear checkpoint to start fresh
-      // Python will handle all checkpoint management
-      if (isFullSync && checkpoint) {
-        this.logger.log('Full sync detected - clearing checkpoint to start from beginning');
-        await this.lifecycleService.clearCheckpoint(pipeline.id, userId);
-      }
-
-      // Set pipeline to RUNNING status
-      await this.lifecycleService.startRunning(pipeline.id, userId, isFullSync);
-
-      // Update run status
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'running',
-        jobState: 'running',
-      });
-
-      // Validate data sources
-      if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
-        throw new BadRequestException('Source and destination must have data source IDs');
-      }
-
-      // Get transform script
-      const transformScript = destinationSchema.transformScript;
-
-      if (!transformScript || !transformScript.trim()) {
-        throw new BadRequestException('Transform script is required for destination schema');
-      }
-
-      // Collect data with batching
-      // Python handles all pagination, checkpoint management, and CDC logic
-      let hasMore = true;
-      let offset = isFullSync ? 0 : checkpoint?.offset || 0;
-      let cursor: string | undefined = isFullSync ? undefined : checkpoint?.cursor;
-
-      // Log checkpoint restoration if applicable
-      if (!isFullSync && checkpoint?.rowsProcessed) {
-        this.activity.info(
-          'sync.collect',
-          `Resuming from checkpoint: ${checkpoint.rowsProcessed} rows already processed`,
-          {
-            pipelineId: pipeline.id,
-            runId,
-            metadata: { checkpoint },
-          },
-        );
-      }
-
-      while (hasMore) {
-        batchCount++;
-        const batchStartTime = Date.now();
-
-        // STEP 1: Collect data from source (with retry)
-        let sourceData: { rows: any[]; totalRows?: number; nextCursor?: string; hasMore?: boolean };
-
-        this.activity.debug('sync.collect', `Batch ${batchCount}: Collecting data`, {
-          pipelineId: pipeline.id,
-          runId,
-          metadata: { batchCount, offset },
-        });
-
-        // Get connection config for source
-        const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
-          pipeline.organizationId,
-          sourceSchema.dataSourceId!,
-          userId,
-        );
-
-        for (let attempt = 0; attempt < retryAttempts; attempt++) {
-          try {
-            // Call Python ETL service - Python handles all CDC/incremental logic
-            // Python will determine WAL CDC, checkpoint management, incremental detection, etc.
-            sourceData = await this.pythonETLService.collect({
-              sourceSchema,
-              connectionConfig: sourceConnectionConfig,
-              organizationId: pipeline.organizationId,
-              userId,
-              syncMode: syncType,
-              checkpoint: checkpoint || undefined, // Pass current checkpoint to Python
-              limit: batchSize,
-              offset,
-              cursor,
-            });
-
-            // Python returns updated checkpoint in metadata - use it for next batch and save it
-            const resultMetadata = (sourceData as any).metadata;
-            if (resultMetadata?.checkpoint) {
-              // Merge Python checkpoint with current progress tracking
-              checkpoint = {
-                ...(resultMetadata.checkpoint as PipelineCheckpoint),
-                rowsProcessed: totalRowsWritten, // Keep track of actual rows written so far
-                totalRows: sourceData.totalRows || estimatedTotalRows, // Use Python's total_rows if available
-              };
-              // Save checkpoint immediately so it persists for next run (CDC support)
-              await this.lifecycleService.saveCheckpoint(pipeline.id, checkpoint, userId);
-              this.logger.debug(`Checkpoint saved: ${JSON.stringify(checkpoint).slice(0, 200)}...`);
-            }
-            break;
-          } catch (error) {
-            if (attempt === retryAttempts - 1) {
-              throw error;
-            }
-            this.activity.warn(
-              'sync.retry',
-              `Collect attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms`,
-              {
-                pipelineId: pipeline.id,
-                runId,
-                metadata: { attempt: attempt + 1, phase: 'collect' },
-              },
-            );
-            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
-          }
-        }
-
-        if (!sourceData! || sourceData!.rows.length === 0) {
-          this.activity.info('sync.collect', 'No more data to process', {
-            pipelineId: pipeline.id,
-            runId,
-          });
-          break;
-        }
-
-        // Update estimated total if available
-        // Python returns total_rows which is the actual total in source
-        if (
-          sourceData.totalRows &&
-          (!estimatedTotalRows || estimatedTotalRows !== sourceData.totalRows)
-        ) {
-          estimatedTotalRows = sourceData.totalRows;
-        }
-
-        // Also check checkpoint for total_records from Python bookmarks (more authoritative)
-        const resultMetadataForTotal = (sourceData as any).metadata;
-        if (resultMetadataForTotal?.checkpoint) {
-          const pythonCheckpoint = resultMetadataForTotal.checkpoint as any;
-          if (pythonCheckpoint?.bookmarks) {
-            const bookmarks = pythonCheckpoint.bookmarks;
-            const streamId = Object.keys(bookmarks)[0];
-            if (streamId && bookmarks[streamId]?.total_records) {
-              const pythonTotalRecords = bookmarks[streamId].total_records;
-              if (
-                pythonTotalRecords &&
-                (!estimatedTotalRows || estimatedTotalRows !== pythonTotalRecords)
-              ) {
-                estimatedTotalRows = pythonTotalRecords;
-              }
-            }
-          }
-        }
-
-        totalRowsRead += sourceData.rows.length;
-
-        // Calculate progress
-        const percentage = estimatedTotalRows
-          ? Math.min(100, Math.round((totalRowsRead / estimatedTotalRows) * 100))
-          : undefined;
-
-        this.activity.info('sync.collect', `Collected ${sourceData.rows.length} rows`, {
-          pipelineId: pipeline.id,
-          runId,
-          metadata: {
-            batchCount,
-            rowsThisBatch: sourceData.rows.length,
-            totalRowsRead,
-            estimatedTotalRows,
-            percentage,
-          },
-        });
-
-        // Primary keys are determined from destination schema upsertKey if available
-        const primaryKeys = (destinationSchema.upsertKey as string[]) || [];
-
-        // ROOT FIX: Determine write mode for CDC-friendly data preservation
-        // Priority:
-        // 1. If explicit upsertKey configured in destination, use UPSERT
-        // 2. If primary keys mapped, use UPSERT (prevents duplicates on re-runs)
-        // 3. Use destination schema writeMode (append/upsert/replace)
-        // 4. Default to APPEND (never truncate by default)
-        const configuredWriteMode = destinationSchema.writeMode as
-          | 'append'
-          | 'upsert'
-          | 'replace'
-          | undefined;
-        const configuredUpsertKey = (destinationSchema.upsertKey as string[]) || undefined;
-
-        let effectiveWriteMode: 'append' | 'upsert' | 'replace' = 'append';
-        let effectiveUpsertKey: string[] | undefined = configuredUpsertKey;
-
-        // CDC FIX: Always prefer UPSERT when we have keys to prevent duplicates
-        if (configuredUpsertKey && configuredUpsertKey.length > 0) {
-          // Explicit upsert key configured - use UPSERT
-          effectiveWriteMode = 'upsert';
-          this.logger.log(
-            `Using UPSERT mode with configured key: ${configuredUpsertKey.join(', ')}`,
-          );
-        } else if (primaryKeys.length > 0) {
-          // Primary keys from column mappings - use UPSERT for data integrity
-          effectiveWriteMode = 'upsert';
-          effectiveUpsertKey = primaryKeys;
-          this.logger.log(`Using UPSERT mode with primary keys: ${primaryKeys.join(', ')}`);
-        } else if (configuredWriteMode) {
-          // Use configured write mode (only REPLACE if explicitly set by user)
-          effectiveWriteMode = configuredWriteMode;
-          // WARN: replace mode truncates table - should only be explicit choice
-          if (configuredWriteMode === 'replace' && batchCount > 1) {
-            // Don't truncate on subsequent batches
-            effectiveWriteMode = 'append';
-          }
-        }
-        // else: default remains 'append' - safest default for data preservation
-
-        this.activity.debug(
-          'sync.emit',
-          `Writing ${sourceData.rows.length} rows (mode: ${effectiveWriteMode})`,
-          {
-            pipelineId: pipeline.id,
-            runId,
-            metadata: { writeMode: effectiveWriteMode, rowCount: sourceData.rows.length },
-          },
-        );
-
-        // STEP 2: Emit data to destination (with internal transformation)
-        // Get connection config for destination
-        const destConnectionConfig = await this.connectionService.getDecryptedConnection(
-          pipeline.organizationId,
-          destinationSchema.dataSourceId!,
-          userId,
-        );
-
-        for (let attempt = 0; attempt < retryAttempts; attempt++) {
-          try {
-            // Transform data first using transform script
-            const transformResult = await this.pythonETLService.transform({
-              rows: sourceData.rows,
-              transformScript: transformScript,
-            });
-
-            const writeResult = await this.pythonETLService.emit({
-              destinationSchema,
-              connectionConfig: destConnectionConfig,
-              organizationId: pipeline.organizationId,
-              userId,
-              rows: transformResult.transformedRows,
-              writeMode: effectiveWriteMode,
-              upsertKey: effectiveUpsertKey,
-            });
-
-            totalRowsWritten += writeResult.rowsWritten;
-            totalRowsSkipped += writeResult.rowsSkipped;
-            totalRowsFailed += writeResult.rowsFailed;
-
-            const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
-            const rate = (
-              writeResult.rowsWritten / Math.max(parseFloat(batchDuration), 0.1)
-            ).toFixed(0);
-
-            this.activity.info(
-              'sync.progress',
-              `Batch ${batchCount} written: ${writeResult.rowsWritten} rows (${rate} rows/sec)`,
-              {
-                pipelineId: pipeline.id,
-                runId,
-                metadata: {
-                  batchCount,
-                  batchDurationSec: parseFloat(batchDuration),
-                  rowsPerSec: parseInt(rate, 10),
-                  written: writeResult.rowsWritten,
-                  skipped: writeResult.rowsSkipped,
-                  failed: writeResult.rowsFailed,
-                  totalWritten: totalRowsWritten,
-                },
-              },
-            );
-
-            // ROOT FIX: Publish real-time progress update via Socket.io
-            if (this.pipelineQueueService.isReady()) {
-              await this.pipelineQueueService.publishStatusUpdate({
-                pipelineId: pipeline.id,
-                organizationId: pipeline.organizationId,
-                status: 'running',
-                rowsProcessed: totalRowsWritten,
-                newRowsCount: writeResult.rowsWritten,
-                timestamp: new Date().toISOString(),
-              });
-            }
-
-            if (writeResult.errors && writeResult.errors.length > 0) {
-              this.activity.warn(
-                'sync.emit',
-                `${writeResult.errors.length} errors in batch ${batchCount}`,
-                {
-                  pipelineId: pipeline.id,
-                  runId,
-                  metadata: { errorCount: writeResult.errors.length },
-                },
-              );
-              allErrors.push(...writeResult.errors);
-            }
-            break;
-          } catch (error) {
-            if (attempt === retryAttempts - 1) {
-              throw error;
-            }
-            this.activity.warn(
-              'sync.retry',
-              `Emit attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS * (attempt + 1)}ms`,
-              {
-                pipelineId: pipeline.id,
-                runId,
-                metadata: { attempt: attempt + 1, phase: 'emit' },
-              },
-            );
-            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)));
-          }
-        }
-
-        // Update pagination
-        // ROOT FIX: Correct pagination logic - ensure all records are processed
-        // hasMore = true if collector says there's more OR we got a full batch (might be more)
-        // hasMore = false if we got partial batch (< batchSize) AND collector says no more
-        hasMore = sourceData.hasMore === true || sourceData.rows.length === batchSize;
-        offset += sourceData.rows.length; // Use actual rows collected, not batchSize
-        cursor = sourceData.nextCursor;
-
-        // Safety check: If we got fewer rows than batchSize, we've likely reached the end
-        // But trust the collector's hasMore flag if it's explicitly set
-        if (sourceData.rows.length < batchSize && sourceData.hasMore !== true) {
-          hasMore = false;
-          this.activity.debug(
-            'sync.collect',
-            `End of data detected (got ${sourceData.rows.length}/${batchSize} rows)`,
-            {
-              pipelineId: pipeline.id,
-              runId,
-            },
-          );
-        }
-
-        // Python returns updated checkpoint in metadata - save it
-        const resultMetadata = (sourceData as any).metadata;
-        if (resultMetadata?.checkpoint) {
-          // Extract total_records from Python checkpoint bookmarks if available
-          const pythonCheckpoint = resultMetadata.checkpoint as any;
-          let pythonTotalRecords = sourceData.totalRows || estimatedTotalRows;
-          if (pythonCheckpoint?.bookmarks) {
-            const bookmarks = pythonCheckpoint.bookmarks;
-            const streamId = Object.keys(bookmarks)[0]; // Get first stream
-            if (streamId && bookmarks[streamId]?.total_records) {
-              pythonTotalRecords = bookmarks[streamId].total_records;
-            }
-          }
-
-          // Use checkpoint returned from Python (Python handles all CDC/checkpoint logic)
-          // Merge with current progress to ensure rowsProcessed is accurate
-          const updatedCheckpoint: PipelineCheckpoint = {
-            ...(resultMetadata.checkpoint as PipelineCheckpoint),
-            rowsProcessed: totalRowsWritten, // Always use actual rows written, not Python's value
-            totalRows: pythonTotalRecords, // Use Python's total_records from bookmarks as authoritative source
-            lastSyncAt: new Date().toISOString(),
-            offset,
-            cursor,
-            currentBatch: batchCount,
-          };
-          await this.lifecycleService.saveCheckpoint(pipeline.id, updatedCheckpoint, userId);
-          checkpoint = updatedCheckpoint;
-        } else {
-          // Fallback: update basic checkpoint info if Python didn't return one
-          const currentCheckpoint: PipelineCheckpoint = {
-            ...(checkpoint || {}),
-            lastSyncAt: new Date().toISOString(),
-            offset,
-            cursor,
-            rowsProcessed: totalRowsWritten,
-            totalRows: estimatedTotalRows,
-            currentBatch: batchCount,
-          };
-          await this.lifecycleService.saveCheckpoint(pipeline.id, currentCheckpoint, userId);
-          checkpoint = currentCheckpoint;
-        }
-
-        // Update progress in database
-        await this.pipelineRepository.updateRun(runId, {
-          rowsRead: totalRowsRead,
-          rowsWritten: totalRowsWritten,
-          rowsSkipped: totalRowsSkipped,
-          rowsFailed: totalRowsFailed,
-        });
-
-        // Log to activity every 5 batches or 5000 rows
-        if (batchCount % 5 === 0 || totalRowsWritten % 5000 < batchSize) {
-          await this.activityLogService.logPipelineRunAction(
-            pipeline.organizationId,
-            userId,
-            PIPELINE_ACTIONS.BATCH_COMPLETED,
-            runId,
-            pipeline.id,
-            pipeline.name,
-            {
-              batchNumber: batchCount,
-              rowsProcessed: totalRowsWritten,
-              totalRows: estimatedTotalRows,
-              percentage,
-            },
-          );
-        }
-      }
-
-      // Update run with final results
-      const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
-      await this.pipelineRepository.updateRun(runId, {
-        status: totalRowsFailed > 0 && totalRowsWritten === 0 ? 'failed' : 'success',
-        jobState: 'completed',
-        rowsRead: totalRowsRead,
-        rowsWritten: totalRowsWritten,
-        rowsSkipped: totalRowsSkipped,
-        rowsFailed: totalRowsFailed,
-        completedAt: new Date(),
-        durationSeconds,
-      });
-
-      // Get the final checkpoint (Python may have updated it)
-      const finalCheckpoint = await this.lifecycleService.getCheckpoint(pipeline.id);
-
-      // ROOT FIX: For incremental/CDC pipelines, set status to 'listing' so CDC polling picks them up
-      // every 5 min (regardless of schedule). For full-only pipelines, use 'idle'.
-      const targetStatus =
-        pipeline.syncMode === 'incremental' ? PipelineStatus.LISTING : PipelineStatus.IDLE;
-
-      // Update totalRowsProcessed - cumulative across all runs
-      const newTotalRowsProcessed = (pipeline.totalRowsProcessed || 0) + totalRowsWritten;
-
-      // Calculate next scheduled run time based on pipeline schedule configuration
-      // Default to 2 minutes for CDC/incremental polling if no schedule configured
-      let nextScheduledRunAt: Date | null = null;
-      const scheduleType = pipeline.scheduleType || 'none';
-      const scheduleValue = pipeline.scheduleValue || '';
-
-      if (scheduleType !== 'none') {
-        nextScheduledRunAt = this.calculateNextScheduledRun(scheduleType, scheduleValue);
-      } else if (pipeline.syncMode === 'incremental') {
-        // Default 2-minute polling for incremental/CDC mode
-        nextScheduledRunAt = new Date(Date.now() + 2 * 60 * 1000);
-      }
-
-      // Update pipeline with final checkpoint from Python
-      await this.pipelineRepository.update(pipeline.id, {
-        lastRunAt: new Date(),
-        lastRunStatus: totalRowsFailed > 0 && totalRowsWritten === 0 ? 'failed' : 'success',
-        status: targetStatus,
-        totalRowsProcessed: newTotalRowsProcessed,
-        totalRunsSuccessful: (pipeline.totalRunsSuccessful || 0) + (totalRowsFailed === 0 ? 1 : 0),
-        totalRunsFailed:
-          (pipeline.totalRunsFailed || 0) + (totalRowsFailed > 0 && totalRowsWritten === 0 ? 1 : 0),
-        lastSyncAt: new Date(),
-        // Store checkpoint returned from Python (Python handles all CDC/checkpoint logic)
-        checkpoint: finalCheckpoint || undefined,
-        // Schedule next run
-        nextScheduledRunAt: nextScheduledRunAt,
-        nextSyncAt: nextScheduledRunAt,
-      });
-
-      // Log completion summary
-      this.activity.info('pipeline.completed', `Pipeline completed: ${pipeline.name}`, {
-        pipelineId: pipeline.id,
-        runId,
-        organizationId: pipeline.organizationId,
-        userId,
-        metadata: {
-          syncType,
-          rowsRead: totalRowsRead,
-          rowsWritten: totalRowsWritten,
-          rowsSkipped: totalRowsSkipped,
-          rowsFailed: totalRowsFailed,
-          durationSeconds,
-          finalStatus: targetStatus,
-        },
-      });
-
-      // Log activity
-      await this.activityLogService.logPipelineRunAction(
-        pipeline.organizationId,
-        userId,
-        PIPELINE_RUN_ACTIONS.COMPLETED,
-        runId,
-        pipeline.id,
-        pipeline.name,
-        {
-          syncType,
-          rowsRead: totalRowsRead,
-          rowsWritten: totalRowsWritten,
-          rowsSkipped: totalRowsSkipped,
-          rowsFailed: totalRowsFailed,
-          durationSeconds,
-          finalStatus: targetStatus,
-        },
-      );
-
-      this.logger.log(
-        `Pipeline ${pipeline.id} run ${runId} completed: ${totalRowsWritten} rows written in ${durationSeconds}s`,
-      );
-
-      // ROOT FIX: Publish completion status via Socket.io for real-time UI update
-      // Use newTotalRowsProcessed to show cumulative total in UI
-      if (this.pipelineQueueService.isReady()) {
-        await this.pipelineQueueService.publishStatusUpdate({
-          pipelineId: pipeline.id,
-          organizationId: pipeline.organizationId,
-          status: targetStatus,
-          rowsProcessed: newTotalRowsProcessed, // Cumulative total, not just this run
-          newRowsCount: totalRowsWritten, // New rows in this run
-          timestamp: new Date().toISOString(),
-        });
-      }
-    } catch (error) {
-      const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
-      const rawErrorMessage = error instanceof Error ? error.message : String(error);
-      // Truncate to prevent DB column overflow / excessively long query params
-      const errorMessage = rawErrorMessage.length > 2000 ? rawErrorMessage.substring(0, 2000) : rawErrorMessage;
-      const rawStack = error instanceof Error ? error.stack : undefined;
-      const errorStack = rawStack && rawStack.length > 4000 ? rawStack.substring(0, 4000) : rawStack;
-
-      try {
-        await this.pipelineRepository.updateRun(runId, {
-          status: 'failed',
-          jobState: 'failed',
-          completedAt: new Date(),
-          durationSeconds,
-          errorMessage,
-          errorStack,
-        });
-      } catch (dbError) {
-        this.logger.error(`Failed to persist run error for ${runId}: ${dbError}`);
-      }
-
-      try {
-        await this.pipelineRepository.update(pipeline.id, {
-          lastRunAt: new Date(),
-          lastRunStatus: 'failed',
-          lastError: errorMessage.length > 1000 ? errorMessage.substring(0, 1000) : errorMessage,
-          totalRunsFailed: (pipeline.totalRunsFailed || 0) + 1,
-        });
-      } catch (dbError) {
-        this.logger.error(`Failed to persist pipeline error for ${pipeline.id}: ${dbError}`);
-      }
-
-      // Log activity
-      await this.activityLogService.logPipelineRunAction(
-        pipeline.organizationId,
-        userId,
-        PIPELINE_RUN_ACTIONS.FAILED,
-        runId,
-        pipeline.id,
-        pipeline.name,
-        {
-          error: errorMessage,
-          durationSeconds,
-          rowsRead: totalRowsRead,
-          rowsWritten: totalRowsWritten,
-        },
-      );
-
-      this.logger.error(`Pipeline ${pipeline.id} run ${runId} failed: ${errorMessage}`);
-
-      // ROOT FIX: Publish failure status via Socket.io for real-time UI update
-      if (this.pipelineQueueService.isReady()) {
-        await this.pipelineQueueService.publishStatusUpdate({
-          pipelineId: pipeline.id,
-          organizationId: pipeline.organizationId,
-          status: 'failed',
-          rowsProcessed: totalRowsWritten,
-          error: errorMessage,
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      throw error;
-    }
+    return run;
   }
+
+  /**
+   * Get sync state (cursor/LSN/binlog) for incremental/CDC pipelines.
+   * NestJS owns state — stored in pipeline.checkpoint.
+   */
+  async getSyncState(
+    pipelineId: string,
+    organizationId: string,
+    userId: string,
+  ): Promise<{
+    pipeline_id: string;
+    state: Record<string, unknown> | null;
+    message: string;
+  }> {
+    await this.checkPipelineManagePermission(userId, organizationId);
+    const pipeline = await this.pipelineRepository.findById(pipelineId, organizationId);
+    if (!pipeline) {
+      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+    }
+    return {
+      pipeline_id: pipelineId,
+      state: (pipeline.checkpoint as Record<string, unknown>) ?? null,
+      message: pipeline.checkpoint
+        ? 'Sync state found — next run will resume from cursor'
+        : 'No sync state — will do full sync on first run',
+    };
+  }
+
+  /**
+   * Reset sync state — next run will do a full sync.
+   */
+  async resetSyncState(
+    pipelineId: string,
+    organizationId: string,
+    userId: string,
+  ): Promise<{
+    pipeline_id: string;
+    deleted: boolean;
+    message: string;
+  }> {
+    await this.checkPipelineManagePermission(userId, organizationId);
+    const pipeline = await this.pipelineRepository.findById(pipelineId, organizationId);
+    if (!pipeline) {
+      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+    }
+    await this.pipelineRepository.update(pipelineId, {
+      checkpoint: null,
+      lastSyncValue: null,
+      updatedAt: new Date(),
+    });
+    return {
+      pipeline_id: pipelineId,
+      deleted: true,
+      message: 'Sync state reset — next run will do a full sync',
+    };
+  }
+
+  // executePipelineAsync removed — all execution dispatched via PGMQ to ETL pods.
+  // Results come back via POST /internal/etl-callback.
 
   /**
    * Pause pipeline
@@ -1239,10 +729,7 @@ export class PipelineService {
       errors.push('Destination schema must have a destination table');
     }
 
-    // Validate transform script
-    if (!destinationSchema.transformScript || !destinationSchema.transformScript.trim()) {
-      errors.push('Transform script is required');
-    }
+    // dlt handles transform via schema hints — no customSql/dbt required
 
     // Python handles incremental sync validation - no need to validate here
 
@@ -1262,7 +749,7 @@ export class PipelineService {
   }
 
   /**
-   * Dry run pipeline (test without writing)
+   * Dry run pipeline (preview source data without writing — dlt-based)
    */
   async dryRunPipeline(
     pipelineId: string,
@@ -1278,47 +765,28 @@ export class PipelineService {
 
     await this.checkPipelineViewPermission(userId, pipeline.organizationId);
 
-    // Get connection configs
     const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
       pipeline.organizationId,
       sourceSchema.dataSourceId!,
       userId,
     );
 
-    // Collect sample data
-    const sourceData = await this.pythonETLService.collect({
+    const preview = await this.pythonETLService.preview({
       sourceSchema,
       connectionConfig: sourceConnectionConfig,
-      organizationId: pipeline.organizationId,
-      userId,
       limit: sampleSize,
+      destinationSchema: destinationSchema ?? undefined,
     });
 
-    // Transform sample data
-    const transformScript = destinationSchema.transformScript;
-
-    if (!transformScript || !transformScript.trim()) {
-      throw new BadRequestException('Transform script is required for destination schema');
-    }
-
-    const transformResult = await this.pythonETLService.transform({
-      rows: sourceData.rows,
-      transformScript: transformScript,
-    });
-    const transformedSample = transformResult.transformedRows;
-
-    // Log sample transformed data
-    if (transformedSample.length > 0) {
-      this.logger.log(
-        `Dry run sample transformed data: ${JSON.stringify(transformedSample[0], null, 2)}`,
-      );
+    if (preview.records.length > 0) {
+      this.logger.log(`Dry run preview sample: ${JSON.stringify(preview.records[0], null, 2)}`);
     }
 
     return {
-      wouldWrite: transformedSample.length,
-      sourceRowCount: sourceData.totalRows,
-      sampleRows: sourceData.rows,
-      transformedSample,
+      wouldWrite: preview.total,
+      sourceRowCount: preview.total,
+      sampleRows: preview.records,
+      transformedSample: preview.records,
       errors: [],
       appliedMappings: [],
     };
@@ -1394,293 +862,133 @@ export class PipelineService {
   }
 
   // ============================================================================
-  // BIDIRECTIONAL PIPELINE EXECUTION (NoSQL ↔ SQL)
+  // TRANSFORMATION VALIDATION
   // ============================================================================
 
   /**
-   * Execute a pipeline with bidirectional transformation support
-   * Handles complex transformations between NoSQL and SQL sources
-   *
-   * Use this for:
-   * - MongoDB → PostgreSQL (flattening nested documents)
-   * - PostgreSQL → MongoDB (embedding related data)
+   * Validate cast transformations against source column types.
+   * Returns a list of warning/error messages for unsafe casts.
    */
-  async executeBidirectionalPipeline(
-    pipelineId: string,
-    userId: string,
-    options?: {
-      batchSize?: number;
-      upsertKeys?: Record<string, string[]>;
-    },
-  ): Promise<PipelineRun> {
-    const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
-    if (!pipelineWithSchemas) {
-      throw new NotFoundException(`Pipeline ${pipelineId} not found`);
+  private validateCastTransformations(
+    transformations: Transformation[],
+    sourceColumns: DiscoveredColumn[],
+  ): string[] {
+    const messages: string[] = [];
+    const colMap = new Map(sourceColumns.map((c) => [c.name.toLowerCase(), c]));
+
+    for (const t of transformations) {
+      if (t.transformType !== 'cast') continue;
+      const targetType = t.transformConfig?.targetType;
+      if (!targetType) continue;
+
+      const src = colMap.get(t.sourceColumn.toLowerCase());
+      if (!src) {
+        messages.push(`Cast on "${t.sourceColumn}": source column not found in discovered schema`);
+        continue;
+      }
+
+      const compat = checkTypeCompatibility(src.dataType, targetType);
+      if (compat === 'cross_family_unsafe') {
+        messages.push(
+          `Cast on "${t.sourceColumn}": ${src.dataType} -> ${targetType} is unsafe and may cause data loss`,
+        );
+      } else if (compat === 'unsafe_narrowing') {
+        messages.push(
+          `Cast on "${t.sourceColumn}": ${src.dataType} -> ${targetType} is a narrowing conversion — potential overflow`,
+        );
+      } else if (compat === 'unknown') {
+        messages.push(
+          `Cast on "${t.sourceColumn}": ${src.dataType} -> ${targetType} — verify compatibility`,
+        );
+      }
     }
 
-    const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
-
-    // Validate source and destination
-    if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
-      throw new BadRequestException('Source and destination must have data source IDs');
-    }
-
-    // Get source and destination data source info
-    const sourceDataSource = await this.dataSourceRepository.findById(sourceSchema.dataSourceId);
-    const destDataSource = await this.dataSourceRepository.findById(destinationSchema.dataSourceId);
-
-    if (!sourceDataSource || !destDataSource) {
-      throw new BadRequestException('Source or destination data source not found');
-    }
-
-    // Determine schema types
-    const relationalTypes = [
-      'postgres',
-      'postgresql',
-      'mysql',
-      'mariadb',
-      'sqlite',
-      'mssql',
-      'oracle',
-    ];
-    const isRelational = (type: string) => relationalTypes.includes(type?.toLowerCase());
-
-    const sourceSchemaInfo: SchemaInfo = {
-      columns: [],
-      primaryKeys: [],
-      isRelational: isRelational(sourceDataSource.sourceType),
-      sourceType: sourceDataSource.sourceType,
-      entityName: sourceSchema.sourceTable || undefined,
-    };
-
-    const destSchemaInfo: SchemaInfo = {
-      columns: [],
-      primaryKeys: [],
-      isRelational: isRelational(destDataSource.sourceType),
-      sourceType: destDataSource.sourceType,
-      entityName: destinationSchema.destinationTable || undefined,
-    };
-
-    this.logger.log(
-      `Bidirectional pipeline: ${sourceDataSource.sourceType} (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'}) → ` +
-        `${destDataSource.sourceType} (${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`,
-    );
-
-    // Create run record
-    const run = await this.pipelineRepository.createRun({
-      pipelineId,
-      organizationId: pipeline.organizationId,
-      status: 'pending',
-      jobState: 'pending',
-      triggerType: 'manual',
-      triggeredBy: userId,
-      startedAt: new Date(),
-    });
-
-    // Execute asynchronously
-    this.executeBidirectionalAsync(
-      run.id,
-      pipeline,
-      sourceSchema,
-      destinationSchema,
-      sourceSchemaInfo,
-      destSchemaInfo,
-      userId,
-      options,
-    ).catch((error) => {
-      this.logger.error(
-        `Bidirectional pipeline execution failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-
-    return run;
+    return messages;
   }
 
+  // ============================================================================
+  // SINGER VS DESTINATION VALIDATION
+  // ============================================================================
+
   /**
-   * Execute bidirectional pipeline asynchronously
+   * Compare Singer source types against the real PG types of an existing
+   * destination table.  With target-postgres allow_column_alter=False, any
+   * type mismatch causes a fatal crash at sync time.  This method detects
+   * mismatches upfront and throws BadRequestException with actionable guidance.
    */
-  private async executeBidirectionalAsync(
-    runId: string,
-    pipeline: Pipeline,
+  private async validateSingerVsDestinationTypes(
     sourceSchema: PipelineSourceSchema,
     destinationSchema: PipelineDestinationSchema,
-    sourceSchemaInfo: SchemaInfo,
-    destSchemaInfo: SchemaInfo,
-    userId: string,
-    options?: {
-      batchSize?: number;
-      upsertKeys?: Record<string, string[]>;
-    },
+    organizationId: string,
   ): Promise<void> {
-    const startTime = Date.now();
-    const batchSize = options?.batchSize || 1000;
-    let totalRowsRead = 0;
-    let totalRowsWritten = 0;
+    const discoveredColumns = sourceSchema.discoveredColumns as DiscoveredColumn[] | null;
+    if (!discoveredColumns || discoveredColumns.length === 0) return;
 
+    const destTable = destinationSchema.destinationTable;
+    const destSchemaName = destinationSchema.destinationSchema || 'public';
+    if (!destTable) return;
+
+    let destConnectionConfig: any;
     try {
-      // Update run to running
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'running',
-        jobState: 'running',
-      });
-
-      // Get transform script
-      const transformScript = destinationSchema.transformScript;
-
-      // Basic validation
-      if (!transformScript || !transformScript.trim()) {
-        throw new BadRequestException('Transform script is required');
-      }
-
-      // Get connection configs
-      const sourceConnectionConfig = await this.connectionService.getDecryptedConnection(
-        pipeline.organizationId,
-        sourceSchema.dataSourceId!,
-        userId,
+      destConnectionConfig = await this.connectionService.getDecryptedConnection(
+        organizationId,
+        destinationSchema.dataSourceId,
+        'system',
       );
+    } catch {
+      this.logger.warn('Could not decrypt dest connection — skipping type validation');
+      return;
+    }
 
-      // Collect all data (for simplicity, batching can be added later)
-      this.activity.info('sync.collect', `Collecting data from ${sourceSchemaInfo.sourceType}`, {
-        pipelineId: pipeline.id,
-        runId,
+    let introspected: Awaited<ReturnType<PythonETLService['introspectTable']>>;
+    try {
+      introspected = await this.pythonETLService.introspectTable({
+        connectionConfig: destConnectionConfig,
+        schemaName: destSchemaName,
+        tableName: destTable,
       });
+    } catch (err: any) {
+      this.logger.warn(`Destination introspection failed (non-blocking): ${err?.message}`);
+      return;
+    }
 
-      const sourceData = await this.pythonETLService.collect({
-        sourceSchema,
-        connectionConfig: sourceConnectionConfig,
-        organizationId: pipeline.organizationId,
-        userId,
-        limit: batchSize * 10, // Collect more for batch processing
-        offset: 0,
-      });
+    if (!introspected.columns || introspected.columns.length === 0) return;
 
-      if (!sourceData || sourceData.rows.length === 0) {
-        this.activity.info('sync.collect', 'No data to transform', {
-          pipelineId: pipeline.id,
-          runId,
-        });
-        await this.pipelineRepository.updateRun(runId, {
-          status: 'success',
-          jobState: 'completed',
-          rowsRead: 0,
-          rowsWritten: 0,
-          completedAt: new Date(),
-          durationSeconds: Math.floor((Date.now() - startTime) / 1000),
-        });
-        return;
+    let singerCols: Array<{ name: string; type: string }>;
+
+    const transformScript = destinationSchema.transformScript;
+    if (transformScript) {
+      const mappings = parseTransformOutputMappings(transformScript);
+      const srcMap = new Map(discoveredColumns.map((c) => [c.name.toLowerCase(), c]));
+      singerCols = [];
+      for (const [outCol, srcCol] of mappings) {
+        const src = srcMap.get(srcCol.toLowerCase());
+        const singerType = src?.dataType ?? 'string';
+        singerCols.push({ name: outCol, type: singerType });
       }
-
-      totalRowsRead = sourceData.rows.length;
-      this.activity.info('sync.collect', `Collected ${totalRowsRead} rows`, {
-        pipelineId: pipeline.id,
-        runId,
-      });
-
-      // Transform using Python service
-      this.activity.info(
-        'sync.transform',
-        `Transforming data (${sourceSchemaInfo.isRelational ? 'SQL' : 'NoSQL'} → ${destSchemaInfo.isRelational ? 'SQL' : 'NoSQL'})`,
-        {
-          pipelineId: pipeline.id,
-          runId,
-        },
-      );
-
-      const transformResult = await this.pythonETLService.transform({
-        rows: sourceData.rows,
-        transformScript: transformScript || '',
-      });
-
-      // Group by entity if needed (simplified - assumes single entity for now)
-      const transformedData: Record<string, any[]> = {
-        default: transformResult.transformedRows,
-      };
-
-      // Emit to destination
-      this.activity.info('sync.emit', `Writing to ${destSchemaInfo.sourceType}`, {
-        pipelineId: pipeline.id,
-        runId,
-      });
-
-      const destConnectionConfig = await this.connectionService.getDecryptedConnection(
-        pipeline.organizationId,
-        destinationSchema.dataSourceId!,
-        userId,
-      );
-
-      const writeResults: Record<string, WriteResult> = {};
-      for (const [entity, rows] of Object.entries(transformedData)) {
-        const result = await this.pythonETLService.emit({
-          destinationSchema,
-          connectionConfig: destConnectionConfig,
-          organizationId: pipeline.organizationId,
-          userId,
-          rows,
-          writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
-          upsertKey: options?.upsertKeys?.[entity],
-        });
-        writeResults[entity] = result;
+      if (singerCols.length === 0) {
+        singerCols = discoveredColumns.map((c) => ({
+          name: c.name,
+          type: c.dataType,
+        }));
       }
+    } else {
+      singerCols = discoveredColumns.map((c) => ({
+        name: c.name,
+        type: c.dataType,
+      }));
+    }
 
-      // Calculate totals
-      for (const [_entity, result] of Object.entries(writeResults)) {
-        totalRowsWritten += result.rowsWritten;
-      }
+    const { errors, mismatches } = validateSingerVsDestination(singerCols, introspected.columns);
 
-      const duration = Date.now() - startTime;
-      this.activity.info(
-        'pipeline.completed',
-        `Bidirectional pipeline completed: ${totalRowsWritten} rows written in ${(duration / 1000).toFixed(1)}s`,
-        {
-          pipelineId: pipeline.id,
-          runId,
-          organizationId: pipeline.organizationId,
-          metadata: { totalRowsRead, totalRowsWritten, durationMs: duration },
-        },
+    if (errors.length > 0) {
+      this.logger.error(
+        `Pipeline blocked: ${mismatches.length} type mismatch(es) in ${destSchemaName}.${destTable}`,
       );
-
-      // Update run as success
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'success',
-        jobState: 'completed',
-        rowsRead: totalRowsRead,
-        rowsWritten: totalRowsWritten,
-        completedAt: new Date(),
-        durationSeconds: Math.floor(duration / 1000),
-      });
-
-      // Update pipeline
-      await this.pipelineRepository.update(pipeline.id, {
-        lastRunStatus: 'success',
-        lastRunAt: new Date(),
-      });
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-
-      this.activity.error('pipeline.failed', `Bidirectional pipeline failed: ${errorMessage}`, {
-        pipelineId: pipeline.id,
-        runId,
-        organizationId: pipeline.organizationId,
-        metadata: { errorMessage, totalRowsRead, totalRowsWritten, durationMs: duration },
-      });
-
-      // Update run as failed
-      await this.pipelineRepository.updateRun(runId, {
-        status: 'failed',
-        jobState: 'failed',
-        rowsRead: totalRowsRead,
-        rowsWritten: totalRowsWritten,
-        completedAt: new Date(),
-        durationSeconds: Math.floor(duration / 1000),
-        errorMessage: errorMessage,
-      });
-
-      // Update pipeline
-      await this.pipelineRepository.update(pipeline.id, {
-        lastRunStatus: 'failed',
-        lastRunAt: new Date(),
-      });
+      throw new BadRequestException(
+        `Destination table "${destSchemaName}.${destTable}" has incompatible column types:\n` +
+          errors.join('\n'),
+      );
     }
   }
 

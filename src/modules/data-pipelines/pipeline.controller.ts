@@ -26,8 +26,6 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { ActivityLoggerService } from '../../common/logger';
-import type { Request as ExpressRequest } from 'express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -37,25 +35,32 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Request as ExpressRequest } from 'express';
+import { ERROR_CODES, type ErrorCode } from '../../common/constants';
 import {
   createDeleteResponse,
   createListResponse,
   createSuccessResponse,
 } from '../../common/dto/api-response.dto';
 import { SupabaseAuthGuard } from '../../common/guards/supabase-auth.guard';
+import { ActivityLoggerService } from '../../common/logger';
+import {
+  areSourceDbMutationsAllowed,
+  SOURCE_DB_MUTATION_POLICY_MESSAGE,
+} from '../../common/utils/source-db-mutation-policy';
 import { RequiredUUIDPipe } from '../activity-logs/pipes/required-uuid.pipe';
-import { PipelineService } from './services/pipeline.service';
 import {
   CreatePipelineDto,
-  UpdatePipelineDto,
-  RunPipelineDto,
   DryRunPipelineDto,
+  DryRunResponseDto,
   PipelineResponseDto,
   PipelineRunResponseDto,
   PipelineStatsResponseDto,
+  RunPipelineDto,
+  UpdatePipelineDto,
   ValidationResultResponseDto,
-  DryRunResponseDto,
 } from './dto';
+import { PipelineService } from './services/pipeline.service';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -139,7 +144,14 @@ export class PipelineController {
     name: 'offset',
     required: false,
     type: Number,
-    description: 'Items to skip (default: 0)',
+    description: 'Items to skip (default: 0). Ignored when cursor is provided.',
+  })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    type: String,
+    description:
+      'Cursor for cursor-based pagination (created_at ISO string). Use for large orgs (1M+ pipelines).',
   })
   @ApiResponse({ status: 200, description: 'List of pipelines' })
   async listPipelines(
@@ -147,6 +159,7 @@ export class PipelineController {
     @Request() req: ExpressRequestType,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('cursor') cursor?: string,
   ) {
     try {
       const userId = this.extractUserId(req);
@@ -158,14 +171,26 @@ export class PipelineController {
         userId,
         limitNum,
         offsetNum,
+        cursor,
       );
 
-      return createListResponse(result.data, `Found ${result.total} pipeline(s)`, {
-        total: result.total,
-        limit: limitNum,
-        offset: offsetNum,
-        hasMore: offsetNum + limitNum < result.total,
-      });
+      const meta =
+        'nextCursor' in result
+          ? {
+              total: result.total >= 0 ? result.total : undefined,
+              limit: limitNum,
+              offset: 0,
+              nextCursor: result.nextCursor as string | null,
+              hasMore: !!result.nextCursor,
+            }
+          : {
+              total: result.total,
+              limit: limitNum,
+              offset: offsetNum,
+              hasMore: offsetNum + limitNum < result.total,
+            };
+
+      return createListResponse(result.data, `Found ${result.data.length} pipeline(s)`, meta);
     } catch (error) {
       this.handleError('list pipelines', error);
     }
@@ -341,6 +366,56 @@ export class PipelineController {
       return createSuccessResponse(run, 'Pipeline run started successfully');
     } catch (error) {
       this.handleError('run pipeline', error);
+    }
+  }
+
+  /**
+   * Get sync state (cursor/LSN) for incremental/CDC pipelines
+   */
+  @Get(':id/sync-state')
+  @ApiOperation({
+    summary: 'Get sync state',
+    description: 'Get pipeline sync state (cursor, LSN). NestJS owns state.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Sync state' })
+  async getSyncState(
+    @Param('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    try {
+      const userId = this.extractUserId(req);
+      const result = await this.pipelineService.getSyncState(id, organizationId, userId);
+      return createSuccessResponse(result, result.message);
+    } catch (error) {
+      this.handleError('get sync state', error);
+    }
+  }
+
+  /**
+   * Reset sync state — next run will do full sync
+   */
+  @Delete(':id/sync-state')
+  @ApiOperation({
+    summary: 'Reset sync state',
+    description: 'Clear sync state. Next run will do a full sync.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string' })
+  @ApiParam({ name: 'id', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Sync state reset' })
+  async resetSyncState(
+    @Param('organizationId', RequiredUUIDPipe) organizationId: string,
+    @Param('id', RequiredUUIDPipe) id: string,
+    @Request() req: ExpressRequestType,
+  ) {
+    try {
+      const userId = this.extractUserId(req);
+      const result = await this.pipelineService.resetSyncState(id, organizationId, userId);
+      return createSuccessResponse(result, result.message);
+    } catch (error) {
+      this.handleError('reset sync state', error);
     }
   }
 
@@ -733,6 +808,13 @@ export class PipelineController {
         cdcReadiness.issues.push('No checkpoint stored');
         cdcReadiness.recommendations.push('Complete a full sync to create the initial checkpoint');
       }
+      if (!areSourceDbMutationsAllowed()) {
+        cdcReadiness.issues.push(SOURCE_DB_MUTATION_POLICY_MESSAGE);
+        cdcReadiness.recommendations.push(
+          'Keep this pipeline on FULL sync unless source DB mutations are explicitly allowed by platform policy.',
+        );
+        cdcReadiness.cdcEnabled = false;
+      }
 
       // Add pg_cron/PGMQ requirements note
       if (cdcReadiness.cdcEnabled) {
@@ -816,24 +898,28 @@ export class PipelineController {
   }
 
   /**
-   * Handle errors consistently
+   * Handle errors consistently. Rethrows HttpException for filter to format.
+   * For other errors, throws HttpException with code/message for filter.
    */
   private handleError(operation: string, error: unknown): never {
+    if (error instanceof HttpException) {
+      throw error;
+    }
+
     let message = error instanceof Error ? error.message : String(error);
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+    let code: ErrorCode = ERROR_CODES.INTERNAL_ERROR;
 
-    // Extract more detailed error information if available
     if (error instanceof Error) {
-      // Log full error details including stack trace
       this.logger.error(`Failed to ${operation}: ${message}`, error.stack);
 
-      // Check for common database errors and provide actionable fixes
       if (message.includes('relation') && message.includes('does not exist')) {
         message =
           `Database table does not exist. Please run migrations:\n` +
           `  cd apps/api && bun run db:migrate\n` +
           `Error: ${message}`;
         statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+        code = ERROR_CODES.SERVICE_UNAVAILABLE;
       } else if (message.includes('column') && message.includes('does not exist')) {
         const columnMatch = message.match(/column "([^"]+)" does not exist/);
         const columnName = columnMatch ? columnMatch[1] : 'unknown';
@@ -842,11 +928,9 @@ export class PipelineController {
           `\nTo fix this, run:\n` +
           `  cd apps/api\n` +
           `  bun run db:migrate\n` +
-          `\nThis will apply all pending migrations including:\n` +
-          `  - 0016_pipeline_incremental_sync_fixes.sql (adds pause_timestamp and other columns)\n` +
-          `  - 0017_add_polling_trigger_type.sql (adds polling to trigger_type enum)\n` +
           `\nOriginal error: ${message}`;
         statusCode = HttpStatus.SERVICE_UNAVAILABLE;
+        code = ERROR_CODES.SERVICE_UNAVAILABLE;
       } else if (message.includes('syntax error')) {
         message = `Database query error: ${message}`;
       }
@@ -854,16 +938,6 @@ export class PipelineController {
       this.logger.error(`Failed to ${operation}: ${message}`);
     }
 
-    if (error instanceof HttpException) {
-      throw error;
-    }
-
-    throw new HttpException(
-      {
-        success: false,
-        error: message,
-      },
-      statusCode,
-    );
+    throw new HttpException({ code, message }, statusCode);
   }
 }
