@@ -76,7 +76,7 @@ export class PgmqQueueService implements OnModuleInit, OnModuleDestroy {
       );
     }
     try {
-      this.pool = new Pool({ connectionString: databaseUrl, max: 5 });
+      this.pool = new Pool({ connectionString: databaseUrl, max: 3 });
       this.pool.on('error', (err) => this.logger.error(`PG pool error: ${err.message}`));
       this.logger.log('Ensuring pgmq extension...');
       await this.ensureExtension();

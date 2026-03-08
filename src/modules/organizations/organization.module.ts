@@ -1,6 +1,4 @@
 import { forwardRef, Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { UserModule } from '../users/user.module';
@@ -16,14 +14,6 @@ import { OrganizationRoleService } from './services/organization-role.service';
   imports: [forwardRef(() => UserModule), ActivityLogModule],
   controllers: [OrganizationController, OrganizationMemberController],
   providers: [
-    // Database provider
-    {
-      provide: 'DRIZZLE_DB',
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        return createDrizzleDatabase(configService);
-      },
-    },
     OrganizationService,
     OrganizationRepository,
     OrganizationMemberService,

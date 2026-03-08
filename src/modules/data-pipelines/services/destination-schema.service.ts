@@ -455,7 +455,7 @@ export class DestinationSchemaService {
 
     return columnNames.map((name) => {
       const sourceType = this.normalizeColumnType(
-        sourceColumnsByName.get(mappedColumns.get(name) ?? '')?.type,
+        sourceColumnsByName.get(mappedColumns.get(name) ?? '')?.dataType,
       );
       const sampleValue = this.findSampleValue(rows, name);
 

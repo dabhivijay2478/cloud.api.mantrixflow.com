@@ -23,9 +23,7 @@
  */
 
 import { Module, forwardRef } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
-import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { DataSourceModule } from '../data-sources/data-source.module';
 import { OrganizationModule } from '../organizations/organization.module';
@@ -84,15 +82,6 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
   ],
   controllers: [PipelineController, SourceSchemaController, DestinationSchemaController, InternalEtlController],
   providers: [
-    // Database provider using Drizzle ORM
-    {
-      provide: 'DRIZZLE_DB',
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        return createDrizzleDatabase(configService);
-      },
-    },
-
     // Repositories - Data access layer using Drizzle ORM
     PipelineRepository,
     PipelineSourceSchemaRepository,

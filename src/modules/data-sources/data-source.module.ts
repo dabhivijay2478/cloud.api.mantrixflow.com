@@ -4,9 +4,7 @@
  */
 
 import { forwardRef, Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
-import { createDrizzleDatabase } from '../../database/drizzle/database';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { ConnectorsModule } from '../connectors/connectors.module';
 import { OrganizationModule } from '../organizations/organization.module';
@@ -32,14 +30,6 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
   ],
   controllers: [DataSourceController],
   providers: [
-    // Database provider
-    {
-      provide: 'DRIZZLE_DB',
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        return createDrizzleDatabase(configService);
-      },
-    },
     // Services
     DataSourceService,
     ConnectionService,

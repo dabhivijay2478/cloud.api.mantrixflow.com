@@ -151,7 +151,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
     try {
       const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
       if (!pipelineWithSchemas) throw new Error(`Pipeline ${pipelineId} not found`);
-      const { sourceSchema, destinationSchema } = pipelineWithSchemas;
+      const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
       if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
         throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
@@ -295,7 +295,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
     try {
       const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipelineId);
       if (!pipelineWithSchemas) throw new Error(`Pipeline ${pipelineId} not found`);
-      const { sourceSchema, destinationSchema } = pipelineWithSchemas;
+      const { pipeline, sourceSchema, destinationSchema } = pipelineWithSchemas;
 
       if (!['listing', 'idle', 'completed', 'failed'].includes(pipeline.status || '')) {
         this.logger.warn(`[LOG_BASED] Pipeline ${pipelineId} is ${pipeline.status} — skipping`);
