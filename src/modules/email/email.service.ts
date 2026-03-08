@@ -45,6 +45,32 @@ import { EmailRepository } from './repositories/email-repository';
 
 const UNOSEND_API_URL = 'https://www.unosend.co/api/v1/emails';
 
+/** Email types that are always sent (critical transactional) — no preference check */
+const CRITICAL_EMAIL_TYPES: readonly EmailType[] = [
+  EMAIL_TYPES.FIRST_SUCCESS,
+  EMAIL_TYPES.LOG_BASED_INITIAL_COMPLETE,
+  EMAIL_TYPES.LOG_BASED_SETUP_COMPLETE,
+  EMAIL_TYPES.MEMBER_REMOVED,
+  EMAIL_TYPES.PAYMENT_FAILED,
+  EMAIL_TYPES.CONNECTION_TEST_FAILED,
+  EMAIL_TYPES.CONNECTION_RESTORED,
+] as const;
+
+/** Email type → preference key for preference-gated emails */
+const EMAIL_TYPE_TO_PREFERENCE: Partial<Record<EmailType, 'weeklyDigestEnabled' | 'pipelineFailureEmails' | 'marketingEmails'>> = {
+  [EMAIL_TYPES.WEEKLY_DIGEST]: 'weeklyDigestEnabled',
+  [EMAIL_TYPES.PIPELINE_RUN_FAILED]: 'pipelineFailureEmails',
+  [EMAIL_TYPES.PIPELINE_DISABLED]: 'pipelineFailureEmails',
+  [EMAIL_TYPES.PIPELINE_RECOVERED]: 'pipelineFailureEmails',
+  [EMAIL_TYPES.PIPELINE_PARTIAL_SUCCESS]: 'pipelineFailureEmails',
+  [EMAIL_TYPES.TRIAL_STARTED]: 'marketingEmails',
+  [EMAIL_TYPES.TRIAL_ENDS_7_DAYS]: 'marketingEmails',
+  [EMAIL_TYPES.TRIAL_ENDS_1_DAY]: 'marketingEmails',
+  [EMAIL_TYPES.TRIAL_EXPIRED]: 'marketingEmails',
+  [EMAIL_TYPES.ONBOARDING_DAY3_NUDGE]: 'marketingEmails',
+  [EMAIL_TYPES.ONBOARDING_DAY7_NUDGE]: 'marketingEmails',
+};
+
 export interface SendEmailOptions {
   to: string[];
   /**
@@ -294,6 +320,17 @@ export class EmailService implements OnModuleInit {
     if (suppressed) {
       this.logger.debug(`Recipient ${recipient} is suppressed — skipping ${options.emailType}`);
       return { skipped: true };
+    }
+
+    const prefKey = EMAIL_TYPE_TO_PREFERENCE[options.emailType];
+    if (prefKey && !CRITICAL_EMAIL_TYPES.includes(options.emailType)) {
+      const prefs = await this.emailRepository.getPreferencesByEmail(recipient);
+      if (!prefs[prefKey]) {
+        this.logger.debug(
+          `Recipient ${recipient} has opted out of ${prefKey} — skipping ${options.emailType}`,
+        );
+        return { skipped: true };
+      }
     }
 
     // ── Build base payload ────────────────────────────────────────────────────

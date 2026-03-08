@@ -7,6 +7,7 @@ import { HttpModule } from '@nestjs/axios';
 import { forwardRef, Module } from '@nestjs/common';
 import { EmailService } from './email.service';
 import { BillingWebhookController } from './billing-webhook.controller';
+import { EmailPreferencesController } from './email-preferences.controller';
 import { EmailWebhookController } from './email-webhook.controller';
 import { EmailTestController } from './email-test.controller';
 import { EmailRepository } from './repositories/email-repository';
@@ -24,7 +25,12 @@ import { UserModule } from '../users/user.module';
     forwardRef(() => OrganizationModule),
     forwardRef(() => UserModule),
   ],
-  controllers: [EmailWebhookController, BillingWebhookController, EmailTestController],
+  controllers: [
+    EmailWebhookController,
+    BillingWebhookController,
+    EmailTestController,
+    EmailPreferencesController,
+  ],
   providers: [EmailService, EmailRepository, TrialEmailCronService, WeeklyDigestCronService],
   exports: [EmailService, EmailRepository],
 })

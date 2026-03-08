@@ -153,4 +153,5 @@ export class UserController {
     const user = await this.userService.updateOnboarding(userId, data.completed, data.step);
     return createSuccessResponse(user, 'Onboarding status updated successfully');
   }
+
 }
