@@ -8,6 +8,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { EmailService } from './email.service';
 import { BillingWebhookController } from './billing-webhook.controller';
 import { EmailWebhookController } from './email-webhook.controller';
+import { EmailTestController } from './email-test.controller';
 import { EmailRepository } from './repositories/email-repository';
 import { TrialEmailCronService } from './services/trial-email-cron.service';
 import { WeeklyDigestCronService } from './services/weekly-digest-cron.service';
@@ -23,7 +24,7 @@ import { UserModule } from '../users/user.module';
     forwardRef(() => OrganizationModule),
     forwardRef(() => UserModule),
   ],
-  controllers: [EmailWebhookController, BillingWebhookController],
+  controllers: [EmailWebhookController, BillingWebhookController, EmailTestController],
   providers: [EmailService, EmailRepository, TrialEmailCronService, WeeklyDigestCronService],
   exports: [EmailService, EmailRepository],
 })

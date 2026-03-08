@@ -42,3 +42,23 @@ export const EMAIL_TYPES = {
 } as const;
 
 export type EmailType = (typeof EMAIL_TYPES)[keyof typeof EMAIL_TYPES];
+
+/** Map email type to local template filename (for local HTML rendering) */
+export const EMAIL_TYPE_TO_TEMPLATE: Partial<Record<EmailType, string>> = {
+  [EMAIL_TYPES.PIPELINE_RUN_FAILED]: 'pipeline_run_failed.html',
+  [EMAIL_TYPES.PIPELINE_RECOVERED]: 'pipeline_recovered.html',
+  [EMAIL_TYPES.PIPELINE_DISABLED]: 'pipeline_disabled.html',
+  [EMAIL_TYPES.FIRST_SUCCESS]: 'first_success.html',
+  [EMAIL_TYPES.LOG_BASED_INITIAL_COMPLETE]: 'log_based_initial_complete.html',
+  [EMAIL_TYPES.PIPELINE_PARTIAL_SUCCESS]: 'pipeline_partial_success.html',
+  [EMAIL_TYPES.LOG_BASED_SETUP_COMPLETE]: 'log_based_setup_complete.html',
+  [EMAIL_TYPES.MEMBER_REMOVED]: 'member_removed.html',
+  [EMAIL_TYPES.TRIAL_STARTED]: 'trial_started.html',
+  [EMAIL_TYPES.TRIAL_ENDS_7_DAYS]: 'trial_ends_7_days.html',
+  [EMAIL_TYPES.TRIAL_ENDS_1_DAY]: 'trial_ends_1_day.html',
+  [EMAIL_TYPES.TRIAL_EXPIRED]: 'trial_expired.html',
+  [EMAIL_TYPES.PAYMENT_FAILED]: 'payment_failed.html',
+  [EMAIL_TYPES.WEEKLY_DIGEST]: 'weekly_digest.html',
+  [EMAIL_TYPES.ONBOARDING_DAY3_NUDGE]: 'onboarding_day3_nudge.html',
+  [EMAIL_TYPES.ONBOARDING_DAY7_NUDGE]: 'onboarding_day7_nudge.html',
+};

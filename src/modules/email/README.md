@@ -12,8 +12,15 @@ All HTML templates live in `templates/`. Styled to match `apps/app/app/globals.c
 |----------|-------------|
 | `UNOSEND_API_KEY` | UnoSend API key (required for sending) |
 | `EMAIL_ENABLED` | Set to `false` to disable all emails (default: `true`) |
+| `EMAIL_USE_LOCAL_TEMPLATES` | Set to `true` to render HTML locally (default: `true`). Ensures variables and subject work reliably. Set to `false` to use UnoSend template_id + variables. |
 | `UNOSEND_FROM_DEFAULT` | Default sender address (e.g. `alerts@mantrixflow.com`) |
 | `FRONTEND_URL` | Base URL for links in emails (e.g. `https://mantrixflow.com`) |
+
+## UnoSend Template Variables
+
+UnoSend expects `template_data` (not `variables`) for template substitution. Each template in UnoSend must:
+1. Have a **subject line** (e.g. `Pipeline Recovered: {{pipeline_name}}`) — we send explicit subjects to avoid "(no subject)"
+2. Use `{{variable_name}}` placeholders matching our `template_data` keys exactly (snake_case: `pipeline_name`, `first_name`, `org_name`, `logo_url`, etc.)
 
 ## Template IDs
 
@@ -56,6 +63,19 @@ payment_failed.html	UNOSEND_TEMPLATE_PAYMENT_FAILED
 onboarding_day3_nudge.html	UNOSEND_TEMPLATE_ONBOARDING_DAY3_NUDGE
 onboarding_day7_nudge.html	UNOSEND_TEMPLATE_ONBOARDING_DAY7_NUDGE
 
+
+## Test All Emails
+
+Trigger all transactional emails with fake data for testing (logo, links, images):
+
+```bash
+curl -X POST "http://localhost:5000/api/internal/email/test-all" \
+  -H "Content-Type: application/json" \
+  -H "x-internal-token: YOUR_INTERNAL_TOKEN" \
+  -d '{"to":"your-email@example.com"}'
+```
+
+Sends to `vijaydabhi0428@gmail.com` by default if `to` is omitted. Requires `UNOSEND_API_KEY` and template IDs set in `.env`.
 
 ## Webhooks
 
