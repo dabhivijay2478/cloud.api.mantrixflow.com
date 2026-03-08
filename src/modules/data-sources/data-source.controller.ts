@@ -285,7 +285,8 @@ export class DataSourceController {
   @ApiResponse({ status: 200, description: 'Connection test result' })
   async testConnectionConfig(
     @Param('organizationId', ParseUUIDPipe) _organizationId: string,
-    @Body() body: {
+    @Body()
+    body: {
       connectionType?: string;
       connection_type?: string;
       config?: Record<string, unknown>;
@@ -488,6 +489,7 @@ export class DataSourceController {
     const sourceType = resolveSourceConnectorType(dataSource.sourceType).registryType;
     const sourceStream = body.source_stream as string | undefined;
     const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
+    const transformScript = body.transform_script as string | undefined;
 
     let streamToPreview = sourceStream;
     if (!streamToPreview) {
@@ -507,6 +509,7 @@ export class DataSourceController {
       source_config: sourceConfig,
       source_stream: streamToPreview,
       limit,
+      ...(transformScript ? { transform_script: transformScript } : {}),
     });
 
     return createSuccessResponse({

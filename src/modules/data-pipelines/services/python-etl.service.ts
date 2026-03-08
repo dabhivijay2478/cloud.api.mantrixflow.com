@@ -249,8 +249,8 @@ export class PythonETLService {
 
   /**
    * Derive output_column_sql_types from transform mappings and source/destination columns.
-   * Prefers introspected source columns (real PG types); falls back to discovered; then
-   * destination introspection (ensures UUID etc. match destination table).
+   * When destination table exists, prefer destination introspection types (primary source)
+   * to prevent UUID->TEXT mismatch. Otherwise fall back to source/discovered.
    */
   private deriveOutputColumnSqlTypes(
     transformScript: string | null | undefined,
@@ -263,39 +263,52 @@ export class PythonETLService {
     if (mappings.size === 0) return undefined;
 
     const result: Record<string, string> = {};
-    // 1. Prefer introspected source (real PG types e.g. uuid)
-    if (introspectedSourceColumns?.length) {
-      const srcMap = new Map(
-        introspectedSourceColumns.map((c) => [c.name.toLowerCase(), c.data_type]),
-      );
-      for (const [outCol, srcCol] of mappings) {
-        const pgType = srcMap.get(srcCol.toLowerCase());
-        if (pgType) result[outCol] = pgType;
-      }
-    }
-    // 2. Fall back to discovered columns (tap may use "string" for UUID)
-    if (Object.keys(result).length === 0 && discoveredColumns?.length) {
-      const srcMap = new Map(discoveredColumns.map((c) => [c.name.toLowerCase(), c.dataType]));
-      for (const [outCol, srcCol] of mappings) {
-        const dataType = srcMap.get(srcCol.toLowerCase());
-        if (!dataType) continue;
-        const pgType = this.discoveryTypeToPgType(dataType);
-        if (pgType) result[outCol] = pgType;
-      }
-    }
-    // 3. Fill gaps from destination introspection (ensures UUID->UUID when dest has uuid)
+
+    // When dest table exists, use destination types as primary source (prevents UUID->TEXT)
     if (introspectedDestColumns?.length) {
       const destMap = new Map(
         introspectedDestColumns.map((c) => [c.name.toLowerCase(), c.data_type]),
       );
       for (const [outCol] of mappings) {
+        const pgType = destMap.get(outCol.toLowerCase());
+        if (pgType) result[outCol] = this.normalizePgType(pgType);
+      }
+    }
+
+    // Fill remaining from introspected source (real PG types)
+    if (introspectedSourceColumns?.length) {
+      const srcMap = new Map(
+        introspectedSourceColumns.map((c) => [c.name.toLowerCase(), c.data_type]),
+      );
+      for (const [outCol, srcCol] of mappings) {
         if (!result[outCol]) {
-          const pgType = destMap.get(outCol.toLowerCase());
-          if (pgType) result[outCol] = pgType;
+          const pgType = srcMap.get(srcCol.toLowerCase());
+          if (pgType) result[outCol] = this.normalizePgType(pgType);
         }
       }
     }
+
+    // Fall back to discovered columns (tap may use "string" for UUID)
+    if (discoveredColumns?.length) {
+      const srcMap = new Map(discoveredColumns.map((c) => [c.name.toLowerCase(), c.dataType]));
+      for (const [outCol, srcCol] of mappings) {
+        if (!result[outCol]) {
+          const dataType = srcMap.get(srcCol.toLowerCase());
+          if (dataType) {
+            const pgType = this.discoveryTypeToPgType(dataType);
+            if (pgType) result[outCol] = pgType;
+          }
+        }
+      }
+    }
+
     return Object.keys(result).length > 0 ? result : undefined;
+  }
+
+  /** Normalize PostgreSQL information_schema data_type for target-postgres compatibility. */
+  private normalizePgType(dataType: string): string {
+    const t = (dataType || '').toLowerCase().trim();
+    return t || 'text';
   }
 
   private discoveryTypeToPgType(dataType: string): string {
@@ -345,7 +358,7 @@ export class PythonETLService {
       sourceType = 'postgres',
       destType = 'postgres',
       syncMode = 'full',
-      writeMode = 'append',
+      writeMode = 'upsert',
       upsertKey,
       columnMap,
       dropColumns,

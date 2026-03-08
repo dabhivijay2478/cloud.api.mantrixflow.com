@@ -207,7 +207,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         destType: resolveDestinationConnectorType(destConnectionType).registryType,
         userId: userId || 'system',
         syncMode: 'full',
-        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'upsert',
         upsertKey: destinationSchema.upsertKey as string[] | undefined,
         hardDelete: false,
       });
@@ -393,7 +393,7 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         destType: resolveDestinationConnectorType(destConnectionType).registryType,
         userId: userId || 'system',
         syncMode: 'cdc',
-        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'append',
+        writeMode: (destinationSchema.writeMode as 'append' | 'upsert' | 'replace') || 'upsert',
         upsertKey: destinationSchema.upsertKey as string[] | undefined,
         hardDelete: false,
         replicationSlotName,

@@ -109,7 +109,7 @@ export class DestinationSchemaService {
       dbtModel: dto.dbtModel || null,
       customSql: dto.customSql || null,
       transformScript: (dto as { transformScript?: string }).transformScript || null,
-      writeMode: (dto.writeMode as string) || 'append',
+      writeMode: (dto.writeMode as string) || 'upsert',
       upsertKey: (dto.upsertKey as string[]) || null,
       name: dto.name || `${destinationTable}_destination`,
       isActive: true,
@@ -126,7 +126,7 @@ export class DestinationSchemaService {
       metadata: {
         dataSourceId,
         destinationTable,
-        writeMode: dto.writeMode || 'append',
+        writeMode: dto.writeMode || 'upsert',
       },
     });
 

@@ -244,6 +244,7 @@ export class ConnectorMetadataService {
     source_config: Record<string, unknown>;
     source_stream: string;
     limit?: number;
+    transform_script?: string;
   }): Promise<{
     records?: unknown[];
     columns?: unknown[];
@@ -263,6 +264,7 @@ export class ConnectorMetadataService {
             source_stream: options.source_stream,
             limit: options.limit ?? 50,
             source_type: resolveSourceConnectorType(options.source_type).registryType,
+            ...(options.transform_script ? { transform_script: options.transform_script } : {}),
           },
           { headers: this.headers(), timeout: 120_000 },
         ),

@@ -136,33 +136,42 @@ export class InternalController {
       })
       .where(eq(pipelineRuns.id, run.id));
 
-    // Persist newState to pipeline checkpoint for next incremental/CDC run
-    if (newState && status === 'completed' && run.pipelineId) {
+    // Update pipeline on successful completion
+    if (status === 'completed' && run.pipelineId) {
       const [pipeline] = await this.db
         .select()
         .from(pipelines)
         .where(eq(pipelines.id, run.pipelineId))
         .limit(1);
       if (pipeline) {
-        const checkpoint = {
-          ...(pipeline.checkpoint as Record<string, unknown>),
-          ...newState,
-          cursor_value: new_cursor ?? (newState as any).cursor_value,
-          lsn: (newState as any).lsn,
-          binlog_file: (newState as any).binlog_file,
-          binlog_position: (newState as any).binlog_position,
-          state_blob: (newState as any).state_blob,
+        const isFullSync =
+          sync_mode?.toLowerCase() === 'full' || sync_mode === 'FULL_TABLE';
+        const updates: Record<string, unknown> = {
+          lastRunAt: new Date(),
+          lastRunStatus: runStatus,
+          lastError: errorMessage ?? undefined,
+          updatedAt: new Date(),
         };
+        if (isFullSync) {
+          updates.fullRefreshCompletedAt = new Date();
+          updates.syncMode = 'log_based';
+        }
+        if (newState) {
+          const checkpoint = {
+            ...(pipeline.checkpoint as Record<string, unknown>),
+            ...newState,
+            cursor_value: new_cursor ?? (newState as any).cursor_value,
+            lsn: (newState as any).lsn,
+            binlog_file: (newState as any).binlog_file,
+            binlog_position: (newState as any).binlog_position,
+            state_blob: (newState as any).state_blob,
+          };
+          updates.checkpoint = checkpoint;
+          updates.lastSyncValue = new_cursor ?? undefined;
+        }
         await this.db
           .update(pipelines)
-          .set({
-            checkpoint,
-            lastSyncValue: new_cursor ?? undefined,
-            lastRunAt: new Date(),
-            lastRunStatus: runStatus,
-            lastError: errorMessage ?? undefined,
-            updatedAt: new Date(),
-          })
+          .set(updates as any)
           .where(eq(pipelines.id, run.pipelineId));
       }
     }
