@@ -7,6 +7,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { ConnectorsModule } from '../connectors/connectors.module';
+import { EmailModule } from '../email/email.module';
 import { OrganizationModule } from '../organizations/organization.module';
 import { UserModule } from '../users/user.module';
 import { DataSourceController } from './data-source.controller';
@@ -21,6 +22,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
   imports: [
     ActivityLogModule,
     forwardRef(() => ConnectorsModule),
+    EmailModule,
     OrganizationModule,
     UserModule,
     HttpModule.register({

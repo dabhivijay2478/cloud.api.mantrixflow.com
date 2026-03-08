@@ -1,4 +1,5 @@
 import { forwardRef, Module } from '@nestjs/common';
+import { EmailModule } from '../email/email.module';
 import { OrganizationRoleGuard } from '../../common/guards/organization-role.guard';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { UserModule } from '../users/user.module';
@@ -11,7 +12,7 @@ import { OrganizationMemberRepository } from './repositories/organization-member
 import { OrganizationRoleService } from './services/organization-role.service';
 
 @Module({
-  imports: [forwardRef(() => UserModule), ActivityLogModule],
+  imports: [forwardRef(() => UserModule), ActivityLogModule, EmailModule],
   controllers: [OrganizationController, OrganizationMemberController],
   providers: [
     OrganizationService,

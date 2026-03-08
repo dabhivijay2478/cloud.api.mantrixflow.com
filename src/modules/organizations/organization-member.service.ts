@@ -15,6 +15,8 @@ import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
 import type { OrganizationMember } from '../../database/schemas/organizations';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
+import { EmailService } from '../email/email.service';
+import { UserRepository } from '../users/repositories/user.repository';
 import { ENTITY_TYPES, USER_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import type { InviteMemberDto, UpdateMemberDto } from './dto/invite-member.dto';
 import { OrganizationRepository } from './repositories/organization.repository';
@@ -32,6 +34,8 @@ export class OrganizationMemberService {
     private readonly configService: ConfigService,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
+    private readonly emailService: EmailService,
+    private readonly userRepository: UserRepository,
   ) {
     // Initialize Supabase admin client for sending invite emails
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
@@ -324,6 +328,28 @@ export class OrganizationMemberService {
       // Don't fail removal if logging fails
       this.logger.error(
         'Failed to log user removal activity',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    // Send member_removed email to the removed user
+    try {
+      const organization = await this.organizationRepository.findById(member.organizationId);
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
+      const dashboardUrl = `${frontendUrl}/workspace`;
+      const removedUser = member.userId
+        ? await this.userRepository.findById(member.userId)
+        : null;
+      await this.emailService.sendMemberRemoved({
+        recipientEmail: member.email,
+        firstName: removedUser?.firstName ?? null,
+        orgName: organization?.name ?? 'the organization',
+        dashboardUrl,
+        userId: member.userId ?? '',
+      });
+    } catch (error) {
+      this.logger.error(
+        'Failed to send member removed email',
         error instanceof Error ? error.stack : String(error),
       );
     }

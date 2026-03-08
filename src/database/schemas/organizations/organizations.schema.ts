@@ -1,4 +1,13 @@
-import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { users } from '../users/users.schema';
 
 /**
@@ -20,6 +29,11 @@ export const organizations = pgTable('organizations', {
   settings: jsonb('settings'), // Organization settings
   // Status
   isActive: boolean('is_active').notNull().default(true),
+  // Billing
+  trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
+  subscriptionStatus: varchar('subscription_status', { length: 50 }),
+  planName: varchar('plan_name', { length: 100 }),
+  planRunLimit: integer('plan_run_limit'),
   // Timestamps
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
