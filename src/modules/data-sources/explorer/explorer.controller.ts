@@ -1,13 +1,17 @@
 /**
  * Explorer Controller
- * Streams table data for SQLRooms in-browser DuckDB loading
+ * Streams table data for SQLRooms in-browser DuckDB loading.
+ * Also supports executing arbitrary SQL against the remote database (JOINs, etc.).
  */
 
 import {
+  BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
+  Post,
   Query,
   Request,
   Res,
@@ -95,6 +99,60 @@ export class ExplorerController {
       if (!res.writableEnded) {
         res.end();
       }
+    }
+  }
+
+  /**
+   * Execute arbitrary SQL against the remote database.
+   * Supports JOINs, subqueries, etc. - like Snowflake/Redshift SQL editors.
+   */
+  @Post(':sourceId/explorer/execute-query')
+  @ApiOperation({
+    summary: 'Execute SQL query',
+    description:
+      'Execute arbitrary SQL against the remote database. Supports JOINs, subqueries, and full SQL. Runs on the server.',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Query results' })
+  async executeQuery(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: { query: string; maxRows?: number; timeoutMs?: number },
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      return { error: 'User not authenticated' };
+    }
+
+    const query = body?.query;
+    if (!query || typeof query !== 'string') {
+      return { error: 'query is required' };
+    }
+
+    const maxRows = Math.min(
+      Math.max(Number(body?.maxRows) || 10000, 1),
+      100000,
+    );
+    const timeoutMs = Math.min(
+      Math.max(Number(body?.timeoutMs) || 60000, 5000),
+      300000,
+    );
+
+    try {
+      const result = await this.explorerDataService.executeQuery(
+        organizationId,
+        sourceId,
+        query,
+        userId,
+        maxRows,
+        timeoutMs,
+      );
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new BadRequestException(message);
     }
   }
 }

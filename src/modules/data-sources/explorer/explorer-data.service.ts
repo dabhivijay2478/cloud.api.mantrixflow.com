@@ -9,7 +9,10 @@ import { resolveSourceConnectorType } from '../../connectors/utils/connector-res
 import { ConnectionService } from '../connection.service';
 import { DataSourceService } from '../data-source.service';
 import { ExplorerAdapterRegistry } from './explorer-adapter.registry';
-import type { IExplorerDbAdapter } from './adapters/explorer-db.adapter.interface';
+import type {
+  ExecuteQueryResult,
+  IExplorerDbAdapter,
+} from './adapters/explorer-db.adapter.interface';
 
 const DEFAULT_LIMIT = 10_000;
 const MAX_LIMIT = 100_000;
@@ -83,6 +86,56 @@ export class ExplorerDataService {
         limit: effectiveLimit,
       },
     };
+  }
+
+  /**
+   * Execute arbitrary SQL against the remote database (JOINs, subqueries, etc.).
+   * Like Snowflake/Redshift SQL editors - runs on the server.
+   */
+  async executeQuery(
+    organizationId: string,
+    sourceId: string,
+    query: string,
+    userId: string,
+    maxRows = 10000,
+    timeoutMs = 60000,
+  ): Promise<ExecuteQueryResult> {
+    if (!query?.trim()) {
+      throw new BadRequestException('query is required');
+    }
+
+    const dataSource = await this.dataSourceService.getDataSourceById(
+      organizationId,
+      sourceId,
+      userId,
+    );
+
+    const connectionType = resolveSourceConnectorType(dataSource.sourceType)
+      .registryType;
+
+    const adapter = this.adapterRegistry.getAdapter(connectionType);
+
+    if (!adapter.executeQuery) {
+      throw new BadRequestException(
+        `Remote SQL execution is not supported for ${connectionType}. ` +
+          'Use single-table load for this data source.',
+      );
+    }
+
+    const config = await this.connectionService.getDecryptedConnection(
+      organizationId,
+      sourceId,
+      userId,
+    );
+
+    this.logger.log(`Executing remote query (maxRows=${maxRows})`);
+
+    return adapter.executeQuery({
+      config,
+      query: query.trim(),
+      maxRows,
+      timeoutMs,
+    });
   }
 
   /**
