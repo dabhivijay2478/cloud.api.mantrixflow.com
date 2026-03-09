@@ -1013,6 +1013,61 @@ export class ConnectionService implements OnModuleInit {
   }
 
   /**
+   * Update connection status (disconnect/reconnect)
+   * AUTHORIZATION: Only ADMIN, OWNER, or EDITOR can update connection status
+   */
+  async updateConnectionStatus(
+    organizationId: string,
+    dataSourceId: string,
+    userId: string,
+    status: 'active' | 'inactive',
+  ): Promise<DataSourceConnection> {
+    const dataSource = await this.dataSourceRepository.findById(dataSourceId);
+    if (!dataSource) {
+      throw new NotFoundException(`Data source with ID "${dataSourceId}" not found`);
+    }
+    if (dataSource.organizationId !== organizationId) {
+      throw new ForbiddenException('Data source does not belong to this organization');
+    }
+
+    const canManage = await this.roleService.canManageDataSources(userId, organizationId);
+    if (!canManage) {
+      throw new ForbiddenException('Only OWNER, ADMIN, and EDITOR can update connection status');
+    }
+
+    const connection = await this.connectionRepository.findByDataSourceId(dataSourceId);
+    if (!connection) {
+      throw new NotFoundException('Connection not configured for this data source');
+    }
+
+    const updated = await this.connectionRepository.updateByDataSourceId(dataSourceId, {
+      status,
+    });
+
+    // Sync data source isActive so list views reflect connection status
+    await this.dataSourceRepository.update(dataSourceId, {
+      isActive: status === 'active',
+    });
+
+    try {
+      await this.activityLogService.logConnectionAction(
+        organizationId,
+        userId,
+        status === 'inactive' ? CONNECTION_ACTIONS.UPDATED : CONNECTION_ACTIONS.UPDATED,
+        updated.id,
+        dataSource.name,
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to log connection status update activity',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    return updated;
+  }
+
+  /**
    * Get connection for a data source
    * Returns masked config for display (sensitive fields hidden)
    */
@@ -1322,6 +1377,11 @@ export class ConnectionService implements OnModuleInit {
         lastConnectedAt: testResult.success ? new Date() : undefined,
         lastError: testResult.success ? null : testResult.message,
         testResult: testResult as any,
+      });
+
+      // Sync data source isActive so list views reflect connection status
+      await this.dataSourceRepository.update(dataSourceId, {
+        isActive: testResult.success,
       });
 
       // Log activity

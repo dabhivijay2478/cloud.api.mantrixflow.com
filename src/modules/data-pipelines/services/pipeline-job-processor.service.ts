@@ -157,6 +157,25 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
         throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
       }
 
+      // Fail fast if source or destination is disconnected
+      const [sourceConn, destConn] = await Promise.all([
+        this.connectionRepository.findByDataSourceId(sourceSchema.dataSourceId),
+        this.connectionRepository.findByDataSourceId(destinationSchema.dataSourceId),
+      ]);
+      if (sourceConn?.status !== 'active' || destConn?.status !== 'active') {
+        const errMsg =
+          'Source or destination data source is disconnected. Reconnect and run again.';
+        this.logger.warn(`[FULL-SYNC] Pipeline ${pipelineId}: ${errMsg}`);
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'failed',
+          jobState: 'failed',
+          errorMessage: errMsg,
+          completedAt: new Date(),
+        });
+        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.PIPELINE_JOBS, msg.msg_id);
+        return;
+      }
+
       const [
         sourceConnectionConfig,
         destConnectionConfig,
@@ -333,6 +352,25 @@ export class PipelineJobProcessor implements OnModuleInit, OnModuleDestroy {
 
       if (!sourceSchema.dataSourceId || !destinationSchema.dataSourceId) {
         throw new Error(`Pipeline ${pipelineId} missing source or destination data source`);
+      }
+
+      // Fail fast if source or destination is disconnected
+      const [sourceConn, destConn] = await Promise.all([
+        this.connectionRepository.findByDataSourceId(sourceSchema.dataSourceId),
+        this.connectionRepository.findByDataSourceId(destinationSchema.dataSourceId),
+      ]);
+      if (sourceConn?.status !== 'active' || destConn?.status !== 'active') {
+        const errMsg =
+          'Source or destination data source is disconnected. Reconnect and run again.';
+        this.logger.warn(`[LOG_BASED] Pipeline ${pipelineId}: ${errMsg}`);
+        await this.pipelineRepository.updateRun(runId, {
+          status: 'failed',
+          jobState: 'failed',
+          errorMessage: errMsg,
+          completedAt: new Date(),
+        });
+        await this.queueService.archiveMessage(PGMQ_QUEUE_NAMES.INCREMENTAL_SYNC, msg.msg_id);
+        return;
       }
 
       const [

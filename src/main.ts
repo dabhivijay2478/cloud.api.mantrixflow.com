@@ -20,6 +20,8 @@ async function bootstrap() {
     logger.log(`🚀 Application listening on port ${port} (set APP_URL in .env for full URL)`);
     logger.log(`📚 Swagger: /api/docs`);
   }
+  // Temporary: verify connection routes are registered
+  logger.log('Registered routes include POST .../connection/status for connection status updates');
 }
 
 bootstrap();

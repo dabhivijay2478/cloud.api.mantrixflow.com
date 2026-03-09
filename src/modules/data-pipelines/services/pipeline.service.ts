@@ -441,6 +441,22 @@ export class PipelineService {
       }
     }
 
+    // Connection status guard: block run if source or destination is disconnected
+    const { sourceSchema, destinationSchema } = pipelineWithSchemas;
+    const [sourceConnection, destConnection] = await Promise.all([
+      sourceSchema.dataSourceId
+        ? this.connectionRepository.findByDataSourceId(sourceSchema.dataSourceId)
+        : null,
+      destinationSchema.dataSourceId
+        ? this.connectionRepository.findByDataSourceId(destinationSchema.dataSourceId)
+        : null,
+    ]);
+    if (sourceConnection?.status !== 'active' || destConnection?.status !== 'active') {
+      throw new BadRequestException(
+        'Cannot run pipeline: source or destination data source is disconnected. Reconnect the data source and try again.',
+      );
+    }
+
     // Create run record (pending — ETL callback will update it)
     const run = await this.pipelineRepository.createRun({
       pipelineId,
