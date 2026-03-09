@@ -168,6 +168,9 @@ export const pipelines = pgTable('pipelines', {
   /** Timestamp when pipeline was paused (for delta calculation on resume) */
   pauseTimestamp: timestamp('pause_timestamp'),
 
+  /** Last time a failure email was sent (cooldown for pipeline_run_failed) */
+  lastFailureEmailSentAt: timestamp('last_failure_email_sent_at', { withTimezone: true }),
+
   // ============================================================================
   // SINGER ETL FIELDS
   // ============================================================================

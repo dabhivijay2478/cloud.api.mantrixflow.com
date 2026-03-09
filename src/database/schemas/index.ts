@@ -12,6 +12,8 @@
 
 // Activity Logs Schemas
 export * from './activity-logs';
+// Email Schemas
+export * from './email';
 // Data Pipelines Schemas
 export * from './data-pipelines';
 // Data Sources Schemas

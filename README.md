@@ -1,6 +1,6 @@
 # API (NestJS)
 
-Backend API for MANTrixFlow: data sources, pipelines, WebSockets, Supabase.
+Backend API for MantrixFlow: data sources, pipelines, WebSockets, Supabase.
 
 ## Setup
 

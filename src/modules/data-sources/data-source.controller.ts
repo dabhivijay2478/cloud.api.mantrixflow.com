@@ -30,6 +30,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Request,
@@ -60,6 +61,7 @@ import {
   type CreateDataSourceWithConnectionDto,
 } from './connection.service';
 import { type CreateDataSourceDto, DataSourceService } from './data-source.service';
+import { UpdateConnectionStatusDto } from './dto/update-connection-status.dto';
 
 type ExpressRequestType = ExpressRequest;
 
@@ -305,6 +307,41 @@ export class DataSourceController {
       config as Record<string, any>,
     );
     return createSuccessResponse(result);
+  }
+
+  /**
+   * Update connection status (disconnect/reconnect)
+   * POST .../connection/status - primary endpoint (PATCH returns 404 in some environments).
+   * Declared before POST :sourceId/connection for correct route matching.
+   */
+  @Post(':sourceId/connection/status')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Update connection status',
+    description: 'Set connection status to active or inactive (disconnect)',
+  })
+  @ApiParam({ name: 'organizationId', type: 'string', description: 'Organization ID' })
+  @ApiParam({ name: 'sourceId', type: 'string', description: 'Data source ID' })
+  @ApiResponse({ status: 200, description: 'Connection status updated successfully' })
+  async updateConnectionStatus(
+    @Param('organizationId', ParseUUIDPipe) organizationId: string,
+    @Param('sourceId', ParseUUIDPipe) sourceId: string,
+    @Request() req: ExpressRequestType,
+    @Body() body: UpdateConnectionStatusDto,
+  ) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    const connection = await this.connectionService.updateConnectionStatus(
+      organizationId,
+      sourceId,
+      userId,
+      body.status,
+    );
+
+    return createSuccessResponse(connection, 'Connection status updated successfully');
   }
 
   /**

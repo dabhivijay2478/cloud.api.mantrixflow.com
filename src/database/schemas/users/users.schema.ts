@@ -37,6 +37,8 @@ export const users = pgTable('users', {
   // Onboarding
   onboardingCompleted: boolean('onboarding_completed').notNull().default(false),
   onboardingStep: varchar('onboarding_step', { length: 50 }),
+  onboardingNudge1SentAt: timestamp('onboarding_nudge_1_sent_at', { withTimezone: true }),
+  onboardingNudge2SentAt: timestamp('onboarding_nudge_2_sent_at', { withTimezone: true }),
   // Timestamps
   lastLoginAt: timestamp('last_login_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),

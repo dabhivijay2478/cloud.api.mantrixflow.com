@@ -14,6 +14,7 @@
  */
 
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { DataSourceConnectionRepository } from '../../data-sources/repositories/data-source-connection.repository';
 import { PipelineRepository } from '../repositories/pipeline.repository';
 import { PipelineSchedulerService } from './pipeline-scheduler.service';
 import { PgmqQueueService } from '../../queue';
@@ -70,6 +71,7 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
     private readonly pipelineRepository: PipelineRepository,
     readonly _schedulerService: PipelineSchedulerService,
     private readonly pipelineQueueService: PgmqQueueService,
+    private readonly connectionRepository: DataSourceConnectionRepository,
   ) {}
 
   /**
@@ -208,11 +210,31 @@ export class ScheduledPipelineWorkerService implements OnModuleInit, OnModuleDes
 
       this.logger.log(`[SCHEDULER] Found ${duePipelines.length} pipeline(s) due to run`);
 
-      // Enqueue each pipeline as a pgmq job
+      // Enqueue each pipeline as a pgmq job (skip if source/destination disconnected)
       for (const pipeline of duePipelines) {
         if (!this.pipelineQueueService.isReady()) {
           this.logger.warn('[SCHEDULER] pgmq not ready, cannot enqueue job');
           continue;
+        }
+
+        // Skip pipelines whose source or destination connection is not active
+        const pipelineWithSchemas = await this.pipelineRepository.findByIdWithSchemas(pipeline.id);
+        if (pipelineWithSchemas) {
+          const { sourceSchema, destinationSchema } = pipelineWithSchemas;
+          const [sourceConn, destConn] = await Promise.all([
+            sourceSchema.dataSourceId
+              ? this.connectionRepository.findByDataSourceId(sourceSchema.dataSourceId)
+              : null,
+            destinationSchema.dataSourceId
+              ? this.connectionRepository.findByDataSourceId(destinationSchema.dataSourceId)
+              : null,
+          ]);
+          if (sourceConn?.status !== 'active' || destConn?.status !== 'active') {
+            this.logger.debug(
+              `[SCHEDULER] Skipping pipeline ${pipeline.name} (${pipeline.id}) — source/destination disconnected`,
+            );
+            continue;
+          }
         }
 
         try {

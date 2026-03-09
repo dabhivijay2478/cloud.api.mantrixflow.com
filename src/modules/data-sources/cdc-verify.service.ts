@@ -12,7 +12,9 @@ import { firstValueFrom } from 'rxjs';
 import { normalizeEtlBaseUrl } from '../../common/utils/etl-url';
 import { ConnectorMetadataService } from '../connectors/connector-metadata.service';
 import { resolveSourceConnectorType } from '../connectors/utils/connector-resolver';
+import { EmailService } from '../email/email.service';
 import { OrganizationRoleService } from '../organizations/services/organization-role.service';
+import { UserRepository } from '../users/repositories/user.repository';
 import { ConnectionService } from './connection.service';
 import { DataSourceRepository } from './repositories/data-source.repository';
 import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
@@ -42,6 +44,8 @@ export class CdcVerifyService {
     private readonly connectionRepository: DataSourceConnectionRepository,
     private readonly dataSourceRepository: DataSourceRepository,
     private readonly roleService: OrganizationRoleService,
+    private readonly emailService: EmailService,
+    private readonly userRepository: UserRepository,
   ) {
     const raw =
       this.configService.get<string>('ETL_PYTHON_SERVICE_URL') ??
@@ -281,6 +285,27 @@ export class CdcVerifyService {
     await this.connectionRepository.updateByDataSourceId(dataSourceId, {
       cdcPrerequisitesStatus: status as object,
     });
+
+    // Send log_based_setup_complete email when verification succeeds
+    if (ok && status.overall === 'verified') {
+      try {
+        const user = await this.userRepository.findById(userId);
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
+        const createPipelineUrl = `${frontendUrl}/workspace/data-pipelines/new`;
+        const connectionName = dataSource.name ?? 'PostgreSQL connection';
+        if (user?.email) {
+          await this.emailService.sendLogBasedSetupComplete({
+            recipientEmail: user.email,
+            connectionName,
+            createPipelineUrl,
+            orgId: organizationId,
+            userId,
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to send log_based_setup_complete email: ${err}`);
+      }
+    }
 
     return {
       ok,

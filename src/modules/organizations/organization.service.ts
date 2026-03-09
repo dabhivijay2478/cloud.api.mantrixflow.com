@@ -11,8 +11,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Organization } from '../../database/schemas/organizations';
 import { ActivityLogService } from '../activity-logs/activity-log.service';
+import { EmailService } from '../email/email.service';
 import { ENTITY_TYPES, ORG_ACTIONS } from '../activity-logs/constants/activity-log-types';
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -30,6 +32,8 @@ export class OrganizationService {
     private readonly userRepository: UserRepository,
     private readonly activityLogService: ActivityLogService,
     private readonly roleService: OrganizationRoleService,
+    private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -106,12 +110,16 @@ export class OrganizationService {
     }
 
     // Create organization with owner_user_id set to the creator
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 14);
     const organization = await this.organizationRepository.create({
       name: dto.name,
       slug,
       description: dto.description,
       ownerUserId: userId, // Set the creator as the owner
       isActive: true,
+      trialEndsAt,
+      subscriptionStatus: 'trial',
     });
 
     // Add the user as member with OWNER role
@@ -159,6 +167,31 @@ export class OrganizationService {
       // Don't fail organization creation if logging fails
       this.activityLogService.logger.error(
         'Failed to log organization creation activity',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    // Send trial_started email to org owner
+    try {
+      const user = await this.userRepository.findById(userId);
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
+      const pricingUrl = `${frontendUrl}/pricing`;
+      const dashboardUrl = `${frontendUrl}/workspace`;
+      if (user?.email) {
+        await this.emailService.sendTrialStarted({
+          recipientEmail: user.email,
+          firstName: user.firstName ?? null,
+          orgName: organization.name,
+          trialEndDate: trialEndsAt.toISOString().split('T')[0],
+          pricingUrl,
+          dashboardUrl,
+          orgId: organization.id,
+          userId,
+        });
+      }
+    } catch (error) {
+      this.activityLogService.logger.error(
+        'Failed to send trial started email',
         error instanceof Error ? error.stack : String(error),
       );
     }

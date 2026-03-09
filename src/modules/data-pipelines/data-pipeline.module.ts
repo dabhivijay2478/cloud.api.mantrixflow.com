@@ -26,7 +26,9 @@ import { Module, forwardRef } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { ActivityLogModule } from '../activity-logs/activity-log.module';
 import { DataSourceModule } from '../data-sources/data-source.module';
+import { EmailModule } from '../email/email.module';
 import { OrganizationModule } from '../organizations/organization.module';
+import { UserModule } from '../users/user.module';
 
 // Controllers
 import { PipelineController } from './pipeline.controller';
@@ -64,6 +66,12 @@ import { PipelineDestinationSchemaRepository } from './repositories/pipeline-des
 
     // Import organization module for role-based authorization
     forwardRef(() => OrganizationModule),
+
+    // Import user module for pipeline creator email lookup
+    forwardRef(() => UserModule),
+
+    // Import email module for pipeline failure/success notifications
+    EmailModule,
 
     // Import activity log module for logging pipeline activities
     ActivityLogModule,
