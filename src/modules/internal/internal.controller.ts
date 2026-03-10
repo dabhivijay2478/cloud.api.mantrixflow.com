@@ -17,7 +17,11 @@ import {
 } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { pipelineRuns, pipelines } from '../../database/schemas';
+import {
+  pipelineDestinationSchemas,
+  pipelineRuns,
+  pipelines,
+} from '../../database/schemas';
 import {
   resolveDestinationConnectorType,
   resolveSourceConnectorType,
@@ -173,6 +177,23 @@ export class InternalController {
           .update(pipelines)
           .set(updates as any)
           .where(eq(pipelines.id, run.pipelineId));
+
+        // Update destination schema last_synced_at when sync completes successfully
+        if (pipeline.destinationSchemaId) {
+          try {
+            await this.db
+              .update(pipelineDestinationSchemas)
+              .set({
+                lastSyncedAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(pipelineDestinationSchemas.id, pipeline.destinationSchemaId));
+          } catch (e) {
+            this.logger.warn(
+              `Failed to update destination schema ${pipeline.destinationSchemaId}: ${e}`,
+            );
+          }
+        }
       }
     }
 
