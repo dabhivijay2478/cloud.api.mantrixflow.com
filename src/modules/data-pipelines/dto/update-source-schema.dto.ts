@@ -4,8 +4,32 @@
  */
 
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, MaxLength, IsObject, IsBoolean } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  MaxLength,
+  IsObject,
+  IsBoolean,
+  IsArray,
+  IsNumber,
+} from 'class-validator';
 import { SourceConfigDto } from './create-source-schema.dto';
+
+export class DiscoveredColumnDto {
+  @ApiPropertyOptional({ description: 'Column name' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({ description: 'Column data type' })
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @ApiPropertyOptional({ description: 'Whether column is nullable' })
+  @IsOptional()
+  nullable?: boolean;
+}
 
 export class UpdateSourceSchemaDto {
   @ApiPropertyOptional({
@@ -61,4 +85,30 @@ export class UpdateSourceSchemaDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Discovered columns from schema discovery',
+    type: [DiscoveredColumnDto],
+  })
+  @IsOptional()
+  @IsArray()
+  discoveredColumns?: DiscoveredColumnDto[];
+
+  @ApiPropertyOptional({
+    description: 'Primary key column names',
+    type: [String],
+    example: ['id'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  primaryKeys?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Estimated row count from discovery',
+    example: 1000,
+  })
+  @IsOptional()
+  @IsNumber()
+  estimatedRowCount?: number;
 }

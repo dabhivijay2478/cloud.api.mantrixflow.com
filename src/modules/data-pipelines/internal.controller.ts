@@ -196,6 +196,19 @@ export class InternalEtlController {
       this.logger.error(`Failed to update pipeline ${pipelineId}: ${err}`);
     }
 
+    // Update destination schema last_synced_at when sync completes successfully
+    if (status === 'completed' && pipeline.destinationSchemaId) {
+      try {
+        await this.pipelineDestinationSchemaRepository.update(pipeline.destinationSchemaId, {
+          lastSyncedAt: new Date(),
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to update destination schema ${pipeline.destinationSchemaId}: ${err}`,
+        );
+      }
+    }
+
     // Publish Socket.io status update
     if (this.pipelineQueueService.isReady()) {
       await this.pipelineQueueService.publishStatusUpdate({

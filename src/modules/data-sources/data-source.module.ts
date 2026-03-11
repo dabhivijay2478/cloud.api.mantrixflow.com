@@ -17,6 +17,9 @@ import { DataSourceService } from './data-source.service';
 import { DataSourceConnectionRepository } from './repositories/data-source-connection.repository';
 import { DataSourceRepository } from './repositories/data-source.repository';
 import { EncryptionService } from '../../common/encryption/encryption.service';
+import { ExplorerController } from './explorer/explorer.controller';
+import { ExplorerDataService } from './explorer/explorer-data.service';
+import { ExplorerAdapterRegistry } from './explorer/explorer-adapter.registry';
 
 @Module({
   imports: [
@@ -30,12 +33,14 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
       maxRedirects: 5,
     }),
   ],
-  controllers: [DataSourceController],
+  controllers: [DataSourceController, ExplorerController],
   providers: [
     // Services
     DataSourceService,
     ConnectionService,
     CdcVerifyService,
+    ExplorerDataService,
+    ExplorerAdapterRegistry,
     // Repositories
     DataSourceRepository,
     DataSourceConnectionRepository,

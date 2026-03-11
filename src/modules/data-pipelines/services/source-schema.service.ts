@@ -185,10 +185,29 @@ export class SourceSchemaService {
     // AUTHORIZATION
     await this.checkManagePermission(userId, schema.organizationId);
 
-    const updated = await this.sourceSchemaRepository.update(id, {
-      ...updates,
-      updatedAt: new Date(),
-    });
+    const { discoveredColumns, primaryKeys, estimatedRowCount, ...rest } = updates;
+    const repoUpdates: Record<string, unknown> = { ...rest, updatedAt: new Date() };
+
+    if (discoveredColumns !== undefined) {
+      repoUpdates.discoveredColumns = discoveredColumns.map((c) => ({
+        name: c.name ?? '',
+        dataType: c.type ?? 'string',
+        nullable: c.nullable ?? true,
+      }));
+    }
+    if (primaryKeys !== undefined) {
+      repoUpdates.primaryKeys = primaryKeys;
+    }
+    if (estimatedRowCount !== undefined) {
+      repoUpdates.estimatedRowCount = estimatedRowCount;
+    }
+
+    // Set lastDiscoveredAt when discovered data is provided
+    if (discoveredColumns !== undefined || primaryKeys !== undefined || estimatedRowCount !== undefined) {
+      repoUpdates.lastDiscoveredAt = new Date();
+    }
+
+    const updated = await this.sourceSchemaRepository.update(id, repoUpdates as any);
 
     // Log activity
     await this.activityLogService.logActivity({
